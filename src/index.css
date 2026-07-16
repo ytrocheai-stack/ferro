@@ -1,0 +1,127 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-bg: #0b0b0f;
+  --color-surface: #16161c;
+  --color-surface-2: #1f1f27;
+  --color-border: #2a2a33;
+  --color-primary: #3d8bfd;
+  --color-primary-strong: #2f6fe0;
+  --color-text: #f2f2f5;
+  --color-muted: #8f8f9b;
+  --color-success: #33c076;
+  --color-danger: #f4504f;
+  --color-warning: #f2a33c;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+}
+
+html {
+  background: var(--color-bg);
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* sin flechas en inputs numéricos */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+@layer components {
+  .card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 1rem;
+  }
+  .btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0.75rem;
+    font-weight: 600;
+    padding: 0.7rem 1rem;
+    user-select: none;
+    transition: opacity 0.15s;
+  }
+  .btn:active {
+    opacity: 0.7;
+  }
+  .btn-primary {
+    background: var(--color-primary);
+    color: #fff;
+  }
+  .btn-surface {
+    background: var(--color-surface-2);
+    color: var(--color-text);
+  }
+  .btn-danger {
+    background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+    color: var(--color-danger);
+  }
+  .input {
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 0.6rem;
+    padding: 0.55rem 0.75rem;
+    width: 100%;
+    outline: none;
+    min-width: 0;
+  }
+  .input:focus {
+    border-color: var(--color-primary);
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    border-radius: 999px;
+    padding: 0.35rem 0.8rem;
+    font-size: 0.82rem;
+    font-weight: 500;
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    white-space: nowrap;
+    user-select: none;
+  }
+  .chip-active {
+    background: color-mix(in srgb, var(--color-primary) 22%, transparent);
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.sheet-in {
+  animation: sheet-in 0.22s ease-out;
+}
+

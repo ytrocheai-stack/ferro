@@ -1,0 +1,12 @@
+node_modules
+dist
+dev-dist
+.cache
+
+# Assets generados por scripts/fetch-dataset.mjs (se regeneran en CI)
+public/data
+public/images
+public/videos
+
+*.local
+*.log
