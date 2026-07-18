@@ -122,6 +122,110 @@ input[type='number'] {
   }
 }
 .sheet-in {
-  animation: sheet-in 0.22s ease-out;
+  animation: sheet-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+/* Transición de entrada de página (continuidad espacial sutil) */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.page-enter {
+  animation: page-in 0.18s ease-out;
+}
+
+/* Shimmer para skeletons */
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-surface) 25%,
+    var(--color-surface-2) 40%,
+    var(--color-surface) 55%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+/* Feedback de presión en elementos táctiles */
+.pressable {
+  transition: transform 0.12s ease-out;
+}
+.pressable:active {
+  transform: scale(0.96);
+}
+.btn {
+  transition:
+    transform 0.12s ease-out,
+    opacity 0.15s;
+}
+.btn:active {
+  transform: scale(0.97);
+}
+
+/* Pop al completar una serie */
+@keyframes check-pop {
+  0% {
+    transform: scale(0.7);
+  }
+  55% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.check-pop {
+  animation: check-pop 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.4);
+}
+
+/* Pulso del temporizador en los últimos segundos */
+@keyframes timer-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.timer-pulse {
+  animation: timer-pulse 1s ease-in-out infinite;
+}
+
+/* Números tabulares en cifras y cronómetros */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Accesibilidad: anillo de foco visible para teclado */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Respeto de reduced-motion: desactiva animaciones decorativas */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 

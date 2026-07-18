@@ -1,6 +1,9 @@
-import { useEffect } from 'react'
-import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Suspense, useEffect } from 'react'
+import { Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router-dom'
 import { TabBar } from './components/TabBar'
+import { Toasts } from './components/Toasts'
+import { GymKeypadBar } from './components/GymKeypad'
+import { PageFallback } from './components/Skeleton'
 import { useActive } from './stores/activeWorkout'
 import { useSettings } from './stores/settings'
 import { ensurePersistentStorage } from './db/db'
@@ -19,11 +22,18 @@ export default function App() {
 
   return (
     <div className="mx-auto min-h-dvh w-full max-w-md">
-      <Outlet />
+      <div key={pathname} className="page-enter">
+        <Suspense fallback={<PageFallback />}>
+          <Outlet />
+        </Suspense>
+      </div>
       <div className="h-44" />
+      <ScrollRestoration />
       <RestTimerOverlay hideTabs={hideTabs} />
       <ActiveBanner hideTabs={hideTabs} />
       {!hideTabs && <TabBar />}
+      <Toasts hideTabs={hideTabs} />
+      <GymKeypadBar />
     </div>
   )
 }
@@ -44,7 +54,7 @@ function ActiveBanner({ hideTabs }: { hideTabs: boolean }) {
     <div className="fixed inset-x-0 z-40" style={{ bottom }}>
       <button
         onClick={() => navigate('/entreno')}
-        className="mx-auto flex w-[calc(100%-1.5rem)] max-w-md items-center gap-3 rounded-2xl bg-primary px-4 py-3 text-white shadow-lg shadow-black/40"
+        className="pressable mx-auto flex w-[calc(100%-1.5rem)] max-w-md items-center gap-3 rounded-2xl bg-primary px-4 py-3 text-white shadow-lg shadow-black/40"
       >
         <IconPlay size={18} />
         <span className="min-w-0 flex-1 truncate text-left font-semibold">
@@ -93,6 +103,7 @@ function RestTimerOverlay({ hideTabs }: { hideTabs: boolean }) {
 
   const remaining = Math.max(0, (rest.endsAt - now) / 1000)
   const pct = Math.max(0, Math.min(100, (remaining / rest.totalSec) * 100))
+  const urgent = remaining <= 10
   const onSession = pathname.startsWith('/entreno')
   const bannerVisible = !!session && !onSession
   const base = hideTabs && !onSession ? 8 : onSession ? 8 : 68
@@ -106,7 +117,7 @@ function RestTimerOverlay({ hideTabs }: { hideTabs: boolean }) {
       <div className="mx-auto w-[calc(100%-1.5rem)] max-w-md overflow-hidden rounded-2xl border border-border bg-surface-2 shadow-lg shadow-black/40">
         <div className="flex items-center gap-2 px-3 py-2.5">
           <button
-            className="rounded-lg bg-surface px-2.5 py-1.5 text-xs font-bold text-muted"
+            className="pressable rounded-lg bg-surface px-2.5 py-1.5 text-xs font-bold text-muted"
             onClick={() => adjustRest(-15)}
           >
             <span className="flex items-center gap-0.5">
@@ -115,12 +126,16 @@ function RestTimerOverlay({ hideTabs }: { hideTabs: boolean }) {
             </span>
           </button>
           <div className="flex-1 text-center">
-            <div className="font-mono text-2xl font-bold tabular-nums text-primary">
+            <div
+              className={`font-mono text-2xl font-bold tabular-nums text-primary ${
+                urgent ? 'timer-pulse' : ''
+              }`}
+            >
               {clock(Math.ceil(remaining))}
             </div>
           </div>
           <button
-            className="rounded-lg bg-surface px-2.5 py-1.5 text-xs font-bold text-muted"
+            className="pressable rounded-lg bg-surface px-2.5 py-1.5 text-xs font-bold text-muted"
             onClick={() => adjustRest(15)}
           >
             <span className="flex items-center gap-0.5">
@@ -129,7 +144,7 @@ function RestTimerOverlay({ hideTabs }: { hideTabs: boolean }) {
             </span>
           </button>
           <button
-            className="ml-1 rounded-lg bg-surface px-2.5 py-1.5 text-xs font-bold text-muted"
+            className="pressable ml-1 rounded-lg bg-surface px-2.5 py-1.5 text-xs font-bold text-muted"
             onClick={skipRest}
             aria-label="Saltar descanso"
           >

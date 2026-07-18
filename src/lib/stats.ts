@@ -1,4 +1,5 @@
 import type { LoggedSet, PR, Workout, WorkoutExercise } from '../db/types'
+import { groupFromTarget, type MuscleGroup } from '../data/muscleGroups'
 
 /** 1RM estimado con fórmula de Epley */
 export function epley1RM(weightKg: number, reps: number): number {
@@ -89,6 +90,39 @@ export interface ExercisePoint {
   maxWeight: number
   e1rm: number
   volume: number
+}
+
+/** Series efectivas (no-warmup, completadas) por grupo muscular en una ventana de días. */
+export function weeklySetsByGroup(
+  history: Workout[],
+  targetById: Map<string, string>,
+  days = 7,
+): Record<MuscleGroup, number> {
+  const since = Date.now() - days * 86400000
+  const counts = {} as Record<MuscleGroup, number>
+  for (const w of history) {
+    if (w.startedAt < since) continue
+    for (const ex of w.exercises) {
+      const target = targetById.get(ex.exerciseId)
+      if (!target) continue
+      const group = groupFromTarget(target)
+      if (!group) continue
+      const n = workingSets(ex.sets).length
+      counts[group] = (counts[group] ?? 0) + n
+    }
+  }
+  return counts
+}
+
+/** Media móvil exponencial (suaviza el ruido diario del peso corporal). */
+export function ema(points: { date: number; value: number }[], alpha = 0.25): number[] {
+  const out: number[] = []
+  let prev: number | null = null
+  for (const p of points) {
+    prev = prev === null ? p.value : alpha * p.value + (1 - alpha) * prev
+    out.push(Math.round(prev * 100) / 100)
+  }
+  return out
 }
 
 export function exerciseSeries(history: Workout[], exerciseId: string): ExercisePoint[] {

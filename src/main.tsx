@@ -1,16 +1,21 @@
-import { StrictMode } from 'react'
+import { lazy, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
 import './index.css'
 import App from './App'
-import Home from './pages/Home'
-import RoutineEditor from './pages/RoutineEditor'
-import ActiveWorkoutPage from './pages/ActiveWorkoutPage'
-import History from './pages/History'
-import WorkoutDetail from './pages/WorkoutDetail'
-import Exercises from './pages/Exercises'
-import ExerciseDetail from './pages/ExerciseDetail'
-import Profile from './pages/Profile'
+
+// Code-splitting por página: recharts y las vistas pesadas salen del bundle inicial
+const Home = lazy(() => import('./pages/Home'))
+const RoutineEditor = lazy(() => import('./pages/RoutineEditor'))
+const ActiveWorkoutPage = lazy(() => import('./pages/ActiveWorkoutPage'))
+const History = lazy(() => import('./pages/History'))
+const WorkoutDetail = lazy(() => import('./pages/WorkoutDetail'))
+const Exercises = lazy(() => import('./pages/Exercises'))
+const ExerciseDetail = lazy(() => import('./pages/ExerciseDetail'))
+const Profile = lazy(() => import('./pages/Profile'))
+const Nutrition = lazy(() => import('./pages/Nutrition'))
+const Measurements = lazy(() => import('./pages/Measurements'))
+const Analysis = lazy(() => import('./pages/Analysis'))
 
 const router = createBrowserRouter(
   [
@@ -24,6 +29,9 @@ const router = createBrowserRouter(
         { path: '/historial/:id', element: <WorkoutDetail /> },
         { path: '/ejercicios', element: <Exercises /> },
         { path: '/ejercicios/:id', element: <ExerciseDetail /> },
+        { path: '/nutricion', element: <Nutrition /> },
+        { path: '/medidas', element: <Measurements /> },
+        { path: '/analisis', element: <Analysis /> },
         { path: '/perfil', element: <Profile /> },
         { path: '*', element: <Navigate to="/" replace /> },
       ],

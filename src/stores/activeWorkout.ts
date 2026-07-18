@@ -11,11 +11,18 @@ export interface ActiveSet {
   weightKg: number | null
   reps: number | null
   completed: boolean
+  rpe?: number
+  /** cardio */
+  durationSec?: number | null
+  distanceM?: number | null
 }
 
 export interface PrevSet {
   weightKg: number
   reps: number
+  type?: SetType
+  durationSec?: number
+  distanceM?: number
 }
 
 export interface ActiveExercise {
@@ -24,13 +31,19 @@ export interface ActiveExercise {
   restSec: number
   notes: string
   sets: ActiveSet[]
-  /** sets del último entreno con este ejercicio, para placeholders */
+  /** sets del último entreno con este ejercicio, para placeholders y progresión */
   prev: PrevSet[]
+  /** ejercicios con el mismo número forman una superserie */
+  supersetGroup?: number
+  /** rango de reps objetivo (doble progresión) */
+  repRangeMin?: number
+  repRangeMax?: number
 }
 
 export interface ActiveSession {
   startedAt: number
   name: string
+  notes: string
   routineId?: string
   /** si está definido, estamos editando un entreno pasado */
   editingWorkoutId?: string
@@ -45,17 +58,26 @@ interface ActiveState {
   startEmpty: () => void
   startFromRoutine: (routine: Routine) => Promise<void>
   startEditing: (workout: Workout) => Promise<void>
+  /** repite un entreno pasado como sesión nueva (pesos anteriores de referencia) */
+  repeatWorkout: (workout: Workout) => Promise<void>
   addExercises: (ids: string[], defaultRestSec: number) => Promise<void>
   removeExercise: (exUid: string) => void
   moveExercise: (exUid: string, delta: number) => void
   setName: (name: string) => void
+  setWorkoutNotes: (notes: string) => void
   setExerciseRest: (exUid: string, sec: number) => void
   setExerciseNotes: (exUid: string, notes: string) => void
+  /** agrupa el ejercicio con el siguiente en superserie, o deshace su grupo */
+  toggleSuperset: (exUid: string) => void
   addSet: (exUid: string) => void
   removeSet: (exUid: string, index: number) => void
   updateSet: (exUid: string, index: number, patch: Partial<ActiveSet>) => void
   setSetType: (exUid: string, index: number, type: SetType) => void
   toggleSet: (exUid: string, index: number) => void
+  /** inserta series de calentamiento al inicio del ejercicio */
+  addWarmup: (exUid: string, sets: { weightKg: number; reps: number }[]) => void
+  /** aplica un peso sugerido a las series normales aún vacías */
+  applySuggestedWeight: (exUid: string, weightKg: number) => void
   startRest: (sec: number) => void
   adjustRest: (deltaSec: number) => void
   skipRest: () => void
@@ -81,7 +103,14 @@ async function prevSetsFor(exerciseId: string, before?: number, excludeId?: stri
     const ex = w.exercises.find((e) => e.exerciseId === exerciseId)
     if (ex) {
       const sets = ex.sets.filter((s) => s.completed)
-      if (sets.length) return sets.map((s) => ({ weightKg: s.weightKg, reps: s.reps }))
+      if (sets.length)
+        return sets.map((s) => ({
+          weightKg: s.weightKg,
+          reps: s.reps,
+          type: s.type,
+          durationSec: s.durationSec,
+          distanceM: s.distanceM,
+        }))
     }
   }
   return []
@@ -95,6 +124,8 @@ export function placeholderFor(ex: ActiveExercise, i: number): PrevSet {
   return {
     weightKg: ex.prev[i]?.weightKg ?? above?.weightKg ?? 0,
     reps: ex.prev[i]?.reps ?? above?.reps ?? 0,
+    durationSec: ex.prev[i]?.durationSec ?? above?.durationSec ?? 0,
+    distanceM: ex.prev[i]?.distanceM ?? above?.distanceM ?? 0,
   }
 }
 
@@ -106,6 +137,18 @@ function mapExercise(
   return { ...session, exercises: session.exercises.map((e) => (e.uid === exUid ? fn(e) : e)) }
 }
 
+/** ¿Es el último ejercicio de su superserie (o no está agrupado)? */
+function isLastOfSupersetGroup(session: ActiveSession, exUid: string): boolean {
+  const list = session.exercises
+  const i = list.findIndex((e) => e.uid === exUid)
+  const g = list[i]?.supersetGroup
+  if (g === undefined) return true
+  for (let j = i + 1; j < list.length; j++) {
+    if (list[j].supersetGroup === g) return false
+  }
+  return true
+}
+
 export const useActive = create<ActiveState>()(
   persist(
     (set, get) => ({
@@ -114,7 +157,7 @@ export const useActive = create<ActiveState>()(
 
       startEmpty: () => {
         set({
-          session: { startedAt: Date.now(), name: defaultWorkoutName(), exercises: [] },
+          session: { startedAt: Date.now(), name: defaultWorkoutName(), notes: '', exercises: [] },
           rest: null,
         })
       },
@@ -128,10 +171,19 @@ export const useActive = create<ActiveState>()(
             notes: re.notes ?? '',
             sets: Array.from({ length: Math.max(1, re.plannedSets) }, emptySet),
             prev: await prevSetsFor(re.exerciseId),
+            supersetGroup: re.supersetGroup,
+            repRangeMin: re.repRangeMin,
+            repRangeMax: re.repRangeMax,
           })),
         )
         set({
-          session: { startedAt: Date.now(), name: routine.name, routineId: routine.id, exercises },
+          session: {
+            startedAt: Date.now(),
+            name: routine.name,
+            notes: '',
+            routineId: routine.id,
+            exercises,
+          },
           rest: null,
         })
       },
@@ -148,19 +200,48 @@ export const useActive = create<ActiveState>()(
               weightKg: s.weightKg,
               reps: s.reps,
               completed: s.completed,
+              rpe: s.rpe,
+              durationSec: s.durationSec ?? null,
+              distanceM: s.distanceM ?? null,
             })),
             prev: await prevSetsFor(we.exerciseId, workout.startedAt, workout.id),
+            supersetGroup: we.supersetGroup,
           })),
         )
         set({
           session: {
             startedAt: Date.now(),
             name: workout.name,
+            notes: workout.notes ?? '',
             editingWorkoutId: workout.id,
             originalStartedAt: workout.startedAt,
             originalEndedAt: workout.endedAt,
             exercises,
           },
+          rest: null,
+        })
+      },
+
+      repeatWorkout: async (workout) => {
+        const exercises: ActiveExercise[] = workout.exercises.map((we) => ({
+          uid: uid(),
+          exerciseId: we.exerciseId,
+          restSec: we.restSec,
+          notes: we.notes ?? '',
+          sets: Array.from({ length: Math.max(1, we.sets.length) }, emptySet),
+          prev: we.sets
+            .filter((s) => s.completed)
+            .map((s) => ({
+              weightKg: s.weightKg,
+              reps: s.reps,
+              type: s.type,
+              durationSec: s.durationSec,
+              distanceM: s.distanceM,
+            })),
+          supersetGroup: we.supersetGroup,
+        }))
+        set({
+          session: { startedAt: Date.now(), name: workout.name, notes: '', exercises },
           rest: null,
         })
       },
@@ -203,6 +284,11 @@ export const useActive = create<ActiveState>()(
         if (s) set({ session: { ...s, name } })
       },
 
+      setWorkoutNotes: (notes) => {
+        const s = get().session
+        if (s) set({ session: { ...s, notes } })
+      },
+
       setExerciseRest: (exUid, sec) => {
         const s = get().session
         if (s) set({ session: mapExercise(s, exUid, (e) => ({ ...e, restSec: sec })) })
@@ -211,6 +297,36 @@ export const useActive = create<ActiveState>()(
       setExerciseNotes: (exUid, notes) => {
         const s = get().session
         if (s) set({ session: mapExercise(s, exUid, (e) => ({ ...e, notes })) })
+      },
+
+      toggleSuperset: (exUid) => {
+        const s = get().session
+        if (!s) return
+        const list = s.exercises
+        const i = list.findIndex((e) => e.uid === exUid)
+        if (i < 0) return
+        const current = list[i].supersetGroup
+        let exercises: ActiveExercise[]
+        if (current !== undefined) {
+          // deshacer el grupo entero
+          exercises = list.map((e) =>
+            e.supersetGroup === current ? { ...e, supersetGroup: undefined } : e,
+          )
+        } else {
+          if (i + 1 >= list.length) return
+          const next = list[i + 1]
+          const used = new Set(list.map((e) => e.supersetGroup).filter((g) => g !== undefined))
+          let group = 0
+          while (used.has(group)) group++
+          exercises = list.map((e) => {
+            if (e.uid === exUid) return { ...e, supersetGroup: group }
+            // si el siguiente ya pertenece a un grupo, se une todo su grupo
+            if (e.uid === next.uid || (next.supersetGroup !== undefined && e.supersetGroup === next.supersetGroup))
+              return { ...e, supersetGroup: group }
+            return e
+          })
+        }
+        set({ session: { ...s, exercises } })
       },
 
       addSet: (exUid) => {
@@ -262,6 +378,8 @@ export const useActive = create<ActiveState>()(
                 ...st,
                 weightKg: st.weightKg ?? ph.weightKg,
                 reps: st.reps ?? ph.reps,
+                durationSec: st.durationSec ?? (ph.durationSec || null),
+                distanceM: st.distanceM ?? (ph.distanceM || null),
                 completed: true,
               }
             }),
@@ -270,8 +388,44 @@ export const useActive = create<ActiveState>()(
         set({ session })
         if (justCompleted) {
           vibrate(15)
-          if (!s.editingWorkoutId && restSec > 0) get().startRest(restSec)
+          // en superserie, el descanso llega al completar el último ejercicio del grupo
+          if (!s.editingWorkoutId && restSec > 0 && isLastOfSupersetGroup(session, exUid)) {
+            get().startRest(restSec)
+          }
         }
+      },
+
+      addWarmup: (exUid, warmups) => {
+        const s = get().session
+        if (!s || !warmups.length) return
+        set({
+          session: mapExercise(s, exUid, (e) => {
+            const existing = e.sets.filter((st) => st.type === 'warmup').length
+            if (existing > 0) return e
+            const w: ActiveSet[] = warmups.map((x) => ({
+              type: 'warmup',
+              weightKg: x.weightKg,
+              reps: x.reps,
+              completed: false,
+            }))
+            return { ...e, sets: [...w, ...e.sets] }
+          }),
+        })
+      },
+
+      applySuggestedWeight: (exUid, weightKg) => {
+        const s = get().session
+        if (!s) return
+        set({
+          session: mapExercise(s, exUid, (e) => ({
+            ...e,
+            sets: e.sets.map((st) =>
+              st.type !== 'warmup' && !st.completed && st.weightKg === null
+                ? { ...st, weightKg }
+                : st,
+            ),
+          })),
+        })
       },
 
       startRest: (sec) => {
@@ -299,6 +453,7 @@ export const useActive = create<ActiveState>()(
             exerciseId: e.exerciseId,
             notes: e.notes.trim() || undefined,
             restSec: e.restSec,
+            supersetGroup: e.supersetGroup,
             sets: e.sets
               .filter((st) => st.completed)
               .map((st) => ({
@@ -306,6 +461,9 @@ export const useActive = create<ActiveState>()(
                 weightKg: st.weightKg ?? 0,
                 reps: st.reps ?? 0,
                 completed: true,
+                rpe: st.rpe,
+                durationSec: st.durationSec || undefined,
+                distanceM: st.distanceM || undefined,
               })),
           }))
           .filter((e) => e.sets.length > 0)
@@ -325,6 +483,7 @@ export const useActive = create<ActiveState>()(
           volumeKg: Math.round(workoutVolume(exercises) * 10) / 10,
           totalSets: completedSetCount(exercises),
           prs: detectPRs(exercises, history),
+          notes: s.notes.trim() || undefined,
         }
         await db.workouts.put(workout)
         set({ session: null, rest: null })

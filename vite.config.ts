@@ -45,6 +45,18 @@ export default defineConfig(({ command, isPreview }) => ({
               cacheableResponse: { statuses: [0, 200] },
             },
           },
+          {
+            // Búsqueda de alimentos (Open Food Facts): red primero, caché como
+            // respaldo si no hay conexión (los resultados también se guardan en Dexie).
+            urlPattern: /^https:\/\/es\.openfoodfacts\.org\//,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'openfoodfacts',
+              networkTimeoutSeconds: 6,
+              expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 3600 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
         ],
       },
     }),

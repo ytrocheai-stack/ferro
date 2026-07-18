@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
-import type { PRKind, Workout } from '../db/types'
+import type { LoggedSet, PRKind, Workout } from '../db/types'
 import { useCatalog } from '../data/exercises'
 import { useActive } from '../stores/activeWorkout'
 import { useSettings } from '../stores/settings'
+import { toastUndo } from '../stores/toasts'
 import {
   formatDay,
   formatDuration,
@@ -14,6 +15,7 @@ import {
   formatWeight,
   kgToDisplay,
 } from '../lib/format'
+import { fireConfetti } from '../lib/confetti'
 import { ExerciseThumb } from '../components/ExerciseThumb'
 import { ActionSheet, Confirm } from '../components/Sheet'
 import {
@@ -21,6 +23,7 @@ import {
   IconDots,
   IconDumbbell,
   IconPencil,
+  IconRepeat,
   IconTimer,
   IconTrash,
   IconTrophy,
@@ -30,6 +33,18 @@ const PR_LABEL: Record<PRKind, string> = {
   weight: 'Peso máximo',
   e1rm: '1RM estimado',
   setVolume: 'Volumen en una serie',
+}
+
+const SUPERSET_COLORS = ['#3d8bfd', '#a78bfa', '#f2a33c', '#33c076']
+
+function setLine(s: LoggedSet, units: 'kg' | 'lb'): string {
+  if (s.durationSec || s.distanceM) {
+    const parts = []
+    if (s.durationSec) parts.push(`${Math.round(s.durationSec / 60)} min`)
+    if (s.distanceM) parts.push(`${(s.distanceM / 1000).toFixed(2)} km`)
+    return parts.join(' · ')
+  }
+  return `${kgToDisplay(s.weightKg, units)} ${units} × ${s.reps}`
 }
 
 export default function WorkoutDetail() {
@@ -47,7 +62,12 @@ export default function WorkoutDetail() {
   const units = useSettings((s) => s.units)
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [confirmEdit, setConfirmEdit] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<'edit' | 'repeat' | null>(null)
+
+  const hasPRs = !!workout && workout.prs.length > 0
+  useEffect(() => {
+    if (celebrate && hasPRs) fireConfetti()
+  }, [celebrate, hasPRs])
 
   if (workout === undefined) return null
   if (workout === null)
@@ -64,6 +84,22 @@ export default function WorkoutDetail() {
     await useActive.getState().startEditing(workout)
     navigate('/entreno')
   }
+  const startRepeat = async () => {
+    await useActive.getState().repeatWorkout(workout)
+    navigate('/entreno')
+  }
+  const runAction = (action: 'edit' | 'repeat') => {
+    if (session) setConfirmAction(action)
+    else void (action === 'edit' ? startEdit() : startRepeat())
+  }
+
+  const deleteWorkout = () => {
+    const snapshot = workout
+    void db.workouts.delete(workout.id).then(() => {
+      navigate('/historial', { replace: true })
+      toastUndo('Entreno eliminado', () => void db.workouts.put(snapshot))
+    })
+  }
 
   const prValue = (kind: PRKind, value: number) =>
     kind === 'setVolume' ? formatVolume(value, units) : formatWeight(value, units)
@@ -72,14 +108,14 @@ export default function WorkoutDetail() {
     <div className="px-4 pt-4">
       <header className="flex items-center justify-between pb-3">
         <button
-          className="-ml-2 rounded-lg p-1.5 text-muted active:bg-surface-2"
+          className="pressable -ml-2 rounded-lg p-1.5 text-muted"
           onClick={() => navigate(-1)}
           aria-label="Volver"
         >
           <IconChevronLeft size={22} />
         </button>
         <button
-          className="rounded-lg p-1.5 text-muted active:bg-surface-2"
+          className="pressable rounded-lg p-1.5 text-muted"
           onClick={() => setMenuOpen(true)}
           aria-label="Opciones"
         >
@@ -103,6 +139,7 @@ export default function WorkoutDetail() {
       <p className="pt-1 text-sm text-muted">
         {formatDay(workout.startedAt)} · {formatTime(workout.startedAt)}
       </p>
+      {workout.notes && <p className="pt-2 text-sm italic text-muted">“{workout.notes}”</p>}
 
       <div className="grid grid-cols-3 gap-2 pt-4">
         <Stat
@@ -144,8 +181,24 @@ export default function WorkoutDetail() {
         {workout.exercises.map((ex, i) => {
           const info = byId.get(ex.exerciseId)
           let setNumber = 0
+          const ssColor =
+            ex.supersetGroup !== undefined
+              ? SUPERSET_COLORS[ex.supersetGroup % SUPERSET_COLORS.length]
+              : null
           return (
-            <div key={`${ex.exerciseId}-${i}`} className="card px-4 py-3">
+            <div
+              key={`${ex.exerciseId}-${i}`}
+              className="card px-4 py-3"
+              style={ssColor ? { borderLeft: `3px solid ${ssColor}` } : undefined}
+            >
+              {ssColor && (
+                <div
+                  className="pb-1 text-[10px] font-bold uppercase tracking-wide"
+                  style={{ color: ssColor }}
+                >
+                  Superserie {String.fromCharCode(65 + (ex.supersetGroup! % 26))}
+                </div>
+              )}
               <Link to={`/ejercicios/${ex.exerciseId}`} className="flex items-center gap-3">
                 <ExerciseThumb exercise={info} size={42} />
                 <div className="min-w-0 flex-1 text-sm font-bold text-primary">
@@ -177,9 +230,8 @@ export default function WorkoutDetail() {
                               ? 'D'
                               : setNumber}
                       </span>
-                      <span className="font-semibold">
-                        {kgToDisplay(s.weightKg, units)} {units} × {s.reps}
-                      </span>
+                      <span className="font-semibold tabular-nums">{setLine(s, units)}</span>
+                      {s.rpe && <span className="text-xs text-warning">RPE {s.rpe}</span>}
                     </div>
                   )
                 })}
@@ -195,9 +247,14 @@ export default function WorkoutDetail() {
         title={workout.name}
         actions={[
           {
+            label: 'Repetir entreno',
+            icon: <IconRepeat size={18} />,
+            onClick: () => runAction('repeat'),
+          },
+          {
             label: 'Editar entreno',
             icon: <IconPencil size={18} />,
-            onClick: () => (session ? setConfirmEdit(true) : void startEdit()),
+            onClick: () => runAction('edit'),
           },
           {
             label: 'Eliminar entreno',
@@ -212,24 +269,23 @@ export default function WorkoutDetail() {
         open={confirmDelete}
         onClose={() => setConfirmDelete(false)}
         title="¿Eliminar este entreno?"
-        message="Se borrará del historial y de las estadísticas. Esta acción no se puede deshacer."
+        message="Se borrará del historial y de las estadísticas."
         confirmLabel="Eliminar"
         danger
-        onConfirm={() => {
-          void db.workouts.delete(workout.id).then(() => navigate('/historial', { replace: true }))
-        }}
+        onConfirm={deleteWorkout}
       />
 
       <Confirm
-        open={confirmEdit}
-        onClose={() => setConfirmEdit(false)}
+        open={confirmAction !== null}
+        onClose={() => setConfirmAction(null)}
         title="Entreno en curso"
-        message="Tienes un entreno en curso. Para editar este, el entreno en curso se descartará."
-        confirmLabel="Descartar y editar"
+        message="Tienes un entreno en curso que se descartará para continuar."
+        confirmLabel="Descartar y continuar"
         danger
         onConfirm={() => {
+          const action = confirmAction
           useActive.getState().discard()
-          void startEdit()
+          void (action === 'edit' ? startEdit() : startRepeat())
         }}
       />
     </div>
@@ -243,7 +299,7 @@ function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; va
         {icon}
         {label}
       </div>
-      <div className="pt-1 text-sm font-bold">{value}</div>
+      <div className="pt-1 text-sm font-bold tabular-nums">{value}</div>
     </div>
   )
 }

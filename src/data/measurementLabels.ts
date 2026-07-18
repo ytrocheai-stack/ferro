@@ -1,0 +1,55 @@
+import type { MeasurementKind } from '../db/types'
+
+export const MEASUREMENT_LABELS: Record<MeasurementKind, string> = {
+  weight: 'Peso',
+  bodyfat: '% Grasa corporal',
+  neck: 'Cuello',
+  shoulders: 'Hombros',
+  chest: 'Pecho',
+  arm_l: 'Brazo izq.',
+  arm_r: 'Brazo der.',
+  forearm_l: 'Antebrazo izq.',
+  forearm_r: 'Antebrazo der.',
+  waist: 'Cintura',
+  hips: 'Cadera',
+  thigh_l: 'Muslo izq.',
+  thigh_r: 'Muslo der.',
+  calf_l: 'Gemelo izq.',
+  calf_r: 'Gemelo der.',
+}
+
+export const MEASUREMENT_UNIT: Record<MeasurementKind, string> = {
+  weight: 'kg',
+  bodyfat: '%',
+  neck: 'cm',
+  shoulders: 'cm',
+  chest: 'cm',
+  arm_l: 'cm',
+  arm_r: 'cm',
+  forearm_l: 'cm',
+  forearm_r: 'cm',
+  waist: 'cm',
+  hips: 'cm',
+  thigh_l: 'cm',
+  thigh_r: 'cm',
+  calf_l: 'cm',
+  calf_r: 'cm',
+}
+
+export const MEASUREMENT_ORDER: MeasurementKind[] = [
+  'weight',
+  'bodyfat',
+  'neck',
+  'shoulders',
+  'chest',
+  'arm_l',
+  'arm_r',
+  'forearm_l',
+  'forearm_r',
+  'waist',
+  'hips',
+  'thigh_l',
+  'thigh_r',
+  'calf_l',
+  'calf_r',
+]

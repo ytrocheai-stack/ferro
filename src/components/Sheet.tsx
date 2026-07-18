@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useRef, type ReactNode, type TouchEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { IconX } from './icons'
 
@@ -11,25 +11,63 @@ interface SheetProps {
   full?: boolean
 }
 
+/** Hoja inferior con handle y gesto de arrastre hacia abajo para cerrar. */
 export function Sheet({ open, onClose, title, children, full = false }: SheetProps) {
+  const panelRef = useRef<HTMLDivElement>(null)
+  const drag = useRef<{ startY: number; dy: number } | null>(null)
+
   if (!open) return null
+
+  const onTouchStart = (e: TouchEvent) => {
+    drag.current = { startY: e.touches[0].clientY, dy: 0 }
+    if (panelRef.current) panelRef.current.style.transition = 'none'
+  }
+  const onTouchMove = (e: TouchEvent) => {
+    if (!drag.current || !panelRef.current) return
+    const dy = Math.max(0, e.touches[0].clientY - drag.current.startY)
+    drag.current.dy = dy
+    panelRef.current.style.transform = `translateY(${dy}px)`
+  }
+  const onTouchEnd = () => {
+    const panel = panelRef.current
+    const dy = drag.current?.dy ?? 0
+    drag.current = null
+    if (!panel) return
+    panel.style.transition = 'transform 0.2s ease-out'
+    if (dy > 80) {
+      panel.style.transform = 'translateY(105%)'
+      setTimeout(onClose, 180)
+    } else {
+      panel.style.transform = ''
+    }
+  }
+
   return createPortal(
     <div className="fixed inset-0 z-50 flex flex-col justify-end">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div
+        ref={panelRef}
         className={`sheet-in relative mx-auto flex w-full max-w-md flex-col rounded-t-2xl border-t border-border bg-surface ${
           full ? 'h-[92dvh]' : 'max-h-[85dvh]'
         }`}
       >
-        <header className="flex items-center justify-between px-4 pb-2 pt-3">
-          <h2 className="text-base font-bold">{title}</h2>
-          <button
-            onClick={onClose}
-            className="rounded-full bg-surface-2 p-2 text-muted"
-            aria-label="Cerrar"
-          >
-            <IconX size={16} />
-          </button>
+        <header
+          className="touch-none select-none"
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
+        >
+          <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-border" aria-hidden="true" />
+          <div className="flex min-h-11 items-center justify-between px-4 pb-1 pt-1.5">
+            <h2 className="text-base font-bold">{title}</h2>
+            <button
+              onClick={onClose}
+              className="pressable -mr-1 rounded-full bg-surface-2 p-2 text-muted"
+              aria-label="Cerrar"
+            >
+              <IconX size={16} />
+            </button>
+          </div>
         </header>
         <div className="flex-1 overflow-y-auto px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           {children}
@@ -69,7 +107,7 @@ export function ActionSheet({
               onClose()
               a.onClick()
             }}
-            className={`flex items-center gap-3 rounded-xl px-3 py-3.5 text-left font-medium active:bg-surface-2 ${
+            className={`flex min-h-12 items-center gap-3 rounded-xl px-3 py-3 text-left font-medium active:bg-surface-2 ${
               a.danger ? 'text-danger' : ''
             }`}
           >

@@ -5,6 +5,7 @@ import { t } from '../data/translations'
 import { ExerciseFilterBar } from '../components/ExercisePicker'
 import { ExerciseThumb } from '../components/ExerciseThumb'
 import { CustomExerciseSheet } from '../components/CustomExerciseSheet'
+import { SkeletonList } from '../components/Skeleton'
 import { IconChevronRight, IconPlus } from '../components/icons'
 
 export default function Exercises() {
@@ -54,6 +55,8 @@ export default function Exercises() {
           Error al cargar la biblioteca: {error}
         </div>
       )}
+
+      {!ready && !error && <SkeletonList rows={9} />}
 
       <div>
         {results.map((e) => (

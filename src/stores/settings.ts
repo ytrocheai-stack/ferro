@@ -8,6 +8,13 @@ export interface SettingsValues {
   vibration: boolean
   restNotification: boolean
   keepAwake: boolean
+  /** registrar RPE por serie */
+  trackRpe: boolean
+  /** entrenos objetivo por semana */
+  weeklyGoal: number
+  /** calculadora de discos */
+  barWeightKg: number
+  platesKg: number[]
 }
 
 interface SettingsState extends SettingsValues {
@@ -23,6 +30,10 @@ export const useSettings = create<SettingsState>()(
       vibration: true,
       restNotification: true,
       keepAwake: true,
+      trackRpe: false,
+      weeklyGoal: 4,
+      barWeightKg: 20,
+      platesKg: [25, 20, 15, 10, 5, 2.5, 1.25],
       update: (patch) => set(patch),
     }),
     { name: 'ferro-settings' },

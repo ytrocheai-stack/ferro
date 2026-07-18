@@ -168,3 +168,82 @@ export const IconMinus = (p: IconProps) => (
     <path d="M5 12h14" />
   </svg>
 )
+
+export const IconFood = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M7 3v7a2 2 0 0 0 2 2v9" />
+    <path d="M5 3v4M9 3v4" />
+    <path d="M17 3c-1.7 0-3 2-3 5s1.3 4 3 4v9" />
+  </svg>
+)
+
+export const IconCalendar = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="3" y="5" width="18" height="16" rx="2" />
+    <path d="M8 3v4M16 3v4M3 10h18" />
+  </svg>
+)
+
+export const IconFolder = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+  </svg>
+)
+
+export const IconCamera = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4 8h2.5L9 5h6l2.5 3H20a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" />
+    <circle cx="12" cy="13.5" r="3.5" />
+  </svg>
+)
+
+export const IconRuler = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2.5" y="8.5" width="19" height="7" rx="1.5" transform="rotate(-20 12 12)" />
+    <path d="M8 13.5l1-2.7M12 12l1-2.7M16 10.5l1-2.7" />
+  </svg>
+)
+
+export const IconScale = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4 9h16" />
+    <path d="M4 9v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9" />
+    <rect x="8" y="5" width="2.5" height="8" rx="1" />
+    <rect x="13.5" y="5" width="2.5" height="8" rx="1" />
+  </svg>
+)
+
+export const IconFlame = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M12 3c1 3-4 5-4 10a4 4 0 0 0 8 0c0-2-1-3.5-2-4.5 0 1.5-1 2-2 2 1.5-2.5-1-5 0-7.5Z" />
+  </svg>
+)
+
+export const IconRepeat = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4 9a5 5 0 0 1 5-5h8" />
+    <path d="M14 1l3 3-3 3" />
+    <path d="M20 15a5 5 0 0 1-5 5H7" />
+    <path d="M10 23l-3-3 3-3" />
+  </svg>
+)
+
+export const IconBarcode = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4 7v10M8 7v10M11 7v10M14 7v6M17 7v10M20 7v10" />
+  </svg>
+)
+
+export const IconStar = (p: IconProps) => (
+  <svg {...base(p)} fill="currentColor" stroke="none">
+    <path d="M12 2.5l2.9 6.3 6.9.7-5.2 4.7 1.5 6.8L12 17.6l-6.1 3.4 1.5-6.8-5.2-4.7 6.9-.7Z" />
+  </svg>
+)
+
+export const IconTarget = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="9" />
+    <circle cx="12" cy="12" r="5" />
+    <circle cx="12" cy="12" r="1" />
+  </svg>
+)

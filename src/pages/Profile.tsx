@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { format, startOfWeek, subWeeks } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -7,12 +8,13 @@ import { db } from '../db/db'
 import type { Workout } from '../db/types'
 import { useSettings } from '../stores/settings'
 import { useCatalog } from '../data/exercises'
-import { exportBackup, importBackup } from '../lib/backup'
+import { exportBackup, exportPhotosBackup, importBackup, importPhotosBackup } from '../lib/backup'
+import { exportWorkoutsCsv } from '../lib/csv'
 import { cachedGifCount, downloadAllGifs } from '../lib/gifs'
 import { ensureNotifyPermission } from '../lib/notify'
 import { formatDuration, formatVolume } from '../lib/format'
 import { Confirm } from '../components/Sheet'
-import { IconDownload, IconUpload } from '../components/icons'
+import { IconDownload, IconFlame, IconRuler, IconUpload } from '../components/icons'
 import { APP_VERSION, DATASET_URL, REST_OPTIONS, restLabel } from '../lib/constants'
 
 const weekKey = (d: Date | number) => format(startOfWeek(d, { weekStartsOn: 1 }), 'yyyy-MM-dd')
@@ -86,6 +88,23 @@ export default function Profile() {
         </ResponsiveContainer>
       </div>
 
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <Link to="/medidas" className="card pressable flex items-center gap-3 px-4 py-3.5">
+          <IconRuler size={20} className="text-primary" />
+          <div>
+            <div className="text-sm font-bold">Medidas</div>
+            <div className="text-[11px] text-muted">Peso, fotos, cm</div>
+          </div>
+        </Link>
+        <Link to="/analisis" className="card pressable flex items-center gap-3 px-4 py-3.5">
+          <IconFlame size={20} className="text-primary" />
+          <div>
+            <div className="text-sm font-bold">Análisis</div>
+            <div className="text-[11px] text-muted">Volumen muscular</div>
+          </div>
+        </Link>
+      </div>
+
       <SettingsCard />
       <DataCard workoutsCount={workouts.length} />
 
@@ -155,6 +174,58 @@ function SettingsCard() {
           ))}
         </select>
       </Row>
+      <Row label="Registrar RPE por serie">
+        <Toggle checked={s.trackRpe} onChange={(v) => s.update({ trackRpe: v })} />
+      </Row>
+      <Row label="Objetivo semanal de entrenos">
+        <select
+          className="input w-20"
+          value={s.weeklyGoal}
+          onChange={(e) => s.update({ weeklyGoal: Number(e.target.value) })}
+        >
+          {[1, 2, 3, 4, 5, 6, 7].map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Peso de la barra">
+        <select
+          className="input w-24"
+          value={s.barWeightKg}
+          onChange={(e) => s.update({ barWeightKg: Number(e.target.value) })}
+        >
+          {[10, 15, 20].map((n) => (
+            <option key={n} value={n}>
+              {n} kg
+            </option>
+          ))}
+        </select>
+      </Row>
+      <div className="border-b border-border/50 py-2 text-sm">
+        <div className="pb-2">Discos disponibles (kg)</div>
+        <div className="flex flex-wrap gap-1.5">
+          {[25, 20, 15, 10, 5, 2.5, 1.25, 0.5].map((p) => {
+            const on = s.platesKg.includes(p)
+            return (
+              <button
+                key={p}
+                className={`chip ${on ? 'chip-active' : ''}`}
+                onClick={() =>
+                  s.update({
+                    platesKg: on
+                      ? s.platesKg.filter((x) => x !== p)
+                      : [...s.platesKg, p].sort((a, b) => b - a),
+                  })
+                }
+              >
+                {p}
+              </button>
+            )
+          })}
+        </div>
+      </div>
       <Row label="Sonido al fin del descanso">
         <Toggle checked={s.sound} onChange={(v) => s.update({ sound: v })} />
       </Row>
@@ -255,6 +326,20 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
     }
   }
 
+  const photosFileRef = useRef<HTMLInputElement>(null)
+  const [photosMsg, setPhotosMsg] = useState<string | null>(null)
+  const onImportPhotos = async (f: File | undefined) => {
+    if (!f) return
+    try {
+      const n = await importPhotosBackup(f)
+      setPhotosMsg(`${n} fotos añadidas.`)
+    } catch (e) {
+      setPhotosMsg(e instanceof Error ? e.message : 'No se pudo importar el archivo')
+    } finally {
+      if (photosFileRef.current) photosFileRef.current.value = ''
+    }
+  }
+
   return (
     <div className="card mt-4 px-4 py-3">
       <h2 className="pb-2 text-sm font-bold">Datos</h2>
@@ -277,6 +362,36 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
         />
       </div>
       {msg && <p className="pt-2 text-xs text-success">{msg}</p>}
+
+      <div className="flex gap-2 border-b border-border/50 pb-3 pt-3">
+        <button
+          className="btn btn-surface flex-1 text-sm"
+          onClick={() => void exportPhotosBackup().then((n) => setPhotosMsg(`${n} fotos exportadas.`))}
+        >
+          <IconDownload size={16} />
+          Backup de fotos
+        </button>
+        <button className="btn btn-surface flex-1 text-sm" onClick={() => photosFileRef.current?.click()}>
+          <IconUpload size={16} />
+          Importar fotos
+        </button>
+        <input
+          ref={photosFileRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(e) => void onImportPhotos(e.target.files?.[0])}
+        />
+      </div>
+      {photosMsg && <p className="border-b border-border/50 pb-3 pt-2 text-xs text-success">{photosMsg}</p>}
+
+      <button
+        className="btn btn-surface my-3 w-full text-sm"
+        onClick={() => void exportWorkoutsCsv()}
+      >
+        <IconDownload size={16} />
+        Exportar series a CSV
+      </button>
 
       <div className="border-b border-border/50 pb-3 pt-3">
         <div className="flex items-center justify-between text-sm">

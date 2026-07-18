@@ -4,6 +4,7 @@ import { equipmentOptions, searchExercises, useCatalog } from '../data/exercises
 import { BODY_PARTS, t } from '../data/translations'
 import { Sheet } from './Sheet'
 import { ExerciseThumb } from './ExerciseThumb'
+import { SkeletonList } from './Skeleton'
 import { IconCheck, IconChevronDown, IconSearch } from './icons'
 
 /** Barra de búsqueda + filtros por grupo muscular y equipo. Reutilizada por la
@@ -161,7 +162,7 @@ export function ExercisePicker({
           {...{ query, setQuery, bodyPart, setBodyPart, equipment, setEquipment, all }}
         />
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {!ready && <p className="py-8 text-center text-muted">Cargando biblioteca…</p>}
+          {!ready && <SkeletonList rows={7} />}
           {ready && results.length === 0 && (
             <p className="py-8 text-center text-muted">Sin resultados</p>
           )}
