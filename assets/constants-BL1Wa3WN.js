@@ -1,1 +1,0 @@
-import{x as t}from"./index-B7atJUqO.js";const o=[0,15,30,45,60,90,120,150,180,240,300];function e(s){return s===0?"Sin descanso":t(s)}const n="1.0.0",r="https://github.com/hasaneyldrm/exercises-dataset";export{n as A,r as D,o as R,e as r};
