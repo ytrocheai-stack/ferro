@@ -14,8 +14,8 @@ export default defineConfig(({ command, isPreview }) => ({
       injectRegister: 'auto',
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
-        name: 'Ferro — Registro de entrenos',
-        short_name: 'Ferro',
+        name: 'NextRep — Registro de entrenos',
+        short_name: 'NextRep',
         description: 'Registro de entrenamientos de gimnasio, 100% offline',
         lang: 'es',
         display: 'standalone',

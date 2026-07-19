@@ -333,7 +333,7 @@ function RepRangeEditor({
     <div className="flex flex-col gap-4 pb-4">
       <p className="text-xs text-muted">
         Se usa para sugerir cuándo subir peso (doble progresión): al completar todas las series al
-        tope del rango, Ferro sugiere +2.5 kg.
+        tope del rango, NextRep sugiere +2.5 kg.
       </p>
       <div className="flex items-center gap-3">
         <Select

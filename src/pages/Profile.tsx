@@ -113,7 +113,7 @@ export default function Profile() {
 
       <div className="card mt-4 px-4 py-3 text-xs leading-relaxed text-muted">
         <div className="pb-1 text-sm font-bold text-text">Acerca de</div>
-        Ferro v{APP_VERSION} — registro de entrenos 100% offline.
+        NextRep v{APP_VERSION} — registro de entrenos 100% offline.
         <br />
         Ejercicios, imágenes y GIFs:{' '}
         <a className="text-primary underline" href={DATASET_URL} target="_blank" rel="noreferrer">
@@ -133,7 +133,7 @@ function InstallCard() {
     <div className="card mt-4 flex items-start gap-3 px-4 py-3.5">
       <IconShare size={20} className="mt-0.5 shrink-0 text-primary" />
       <div className="text-sm">
-        <div className="font-bold">Instala Ferro en tu iPhone</div>
+        <div className="font-bold">Instala NextRep en tu iPhone</div>
         <div className="pt-0.5 text-xs text-muted">
           Toca <span className="font-semibold text-text">Compartir</span> en Safari y luego{' '}
           <span className="font-semibold text-text">«Añadir a pantalla de inicio»</span> para

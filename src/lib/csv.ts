@@ -48,5 +48,5 @@ export async function exportWorkoutsCsv(): Promise<void> {
   }
 
   const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
-  await shareOrDownloadFile(blob, `ferro-series-${format(new Date(), 'yyyy-MM-dd')}.csv`, 'text/csv')
+  await shareOrDownloadFile(blob, `nextrep-series-${format(new Date(), 'yyyy-MM-dd')}.csv`, 'text/csv')
 }

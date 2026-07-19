@@ -66,7 +66,7 @@ export async function notify(title: string, body: string) {
   try {
     const reg = await navigator.serviceWorker?.getRegistration()
     if (reg) {
-      await reg.showNotification(title, { body, tag: 'ferro-rest', silent: false })
+      await reg.showNotification(title, { body, tag: 'nextrep-rest', silent: false })
       return
     }
   } catch {

@@ -2,10 +2,10 @@
  *  Respeta prefers-reduced-motion (no hace nada). */
 export function fireConfetti() {
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
-  if (document.getElementById('ferro-confetti')) return
+  if (document.getElementById('nextrep-confetti')) return
 
   const canvas = document.createElement('canvas')
-  canvas.id = 'ferro-confetti'
+  canvas.id = 'nextrep-confetti'
   canvas.style.cssText = 'position:fixed;inset:0;z-index:100;pointer-events:none'
   canvas.width = window.innerWidth
   canvas.height = window.innerHeight

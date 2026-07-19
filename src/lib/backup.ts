@@ -58,7 +58,7 @@ export async function exportBackup(): Promise<void> {
     dishes,
     foodLog,
   }
-  await downloadJson(payload, `ferro-backup-${format(new Date(), 'yyyy-MM-dd')}.json`)
+  await downloadJson(payload, `nextrep-backup-${format(new Date(), 'yyyy-MM-dd')}.json`)
 }
 
 async function downloadJson(payload: unknown, filename: string) {
@@ -76,7 +76,7 @@ export interface ImportResult {
 export async function importBackup(file: File): Promise<ImportResult> {
   const data = JSON.parse(await file.text()) as Partial<BackupFile>
   if (data?.app !== 'ferro' || !Array.isArray(data.workouts)) {
-    throw new Error('El archivo no es un backup válido de Ferro')
+    throw new Error('El archivo no es un backup válido de NextRep')
   }
   await db.transaction(
     'rw',
@@ -146,7 +146,7 @@ export async function exportPhotosBackup(): Promise<number> {
       photos.map(async (p) => ({ id: p.id, date: p.date, note: p.note, dataUrl: await blobToDataUrl(p.blob) })),
     ),
   }
-  await downloadJson(payload, `ferro-fotos-${format(new Date(), 'yyyy-MM-dd')}.json`)
+  await downloadJson(payload, `nextrep-fotos-${format(new Date(), 'yyyy-MM-dd')}.json`)
   return photos.length
 }
 
@@ -154,7 +154,7 @@ export async function exportPhotosBackup(): Promise<number> {
 export async function importPhotosBackup(file: File): Promise<number> {
   const data = JSON.parse(await file.text()) as Partial<PhotosBackupFile>
   if (data?.app !== 'ferro-photos' || !Array.isArray(data.photos)) {
-    throw new Error('El archivo no es un backup de fotos válido de Ferro')
+    throw new Error('El archivo no es un backup de fotos válido de NextRep')
   }
   const items: ProgressPhoto[] = await Promise.all(
     data.photos.map(async (p) => ({

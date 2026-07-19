@@ -1,4 +1,4 @@
-# Ferro 🏋️
+# NextRep 🏋️
 
 Registro de entrenamientos de gimnasio estilo [Hevy](https://www.hevyapp.com/), para uso personal.
 **PWA 100% offline**: se instala desde Chrome en Android y funciona sin conexión.
