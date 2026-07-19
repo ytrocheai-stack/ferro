@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import { IconCheck } from './icons'
 
@@ -22,8 +23,35 @@ export const useKeypad = create<KeypadState>()((set) => ({
   unregister: () => set({ target: null }),
 }))
 
+/**
+ * Desplazamiento (px) que hay que subir un elemento `fixed bottom-0` para que no quede tapado
+ * por el teclado en iOS: allí el teclado encoge `visualViewport` pero no el layout viewport, así
+ * que un elemento fijo sigue anclado al fondo de la pantalla completa, bajo el teclado. En
+ * Android/desktop `visualViewport` ya sigue al teclado y el offset resultante es 0.
+ */
+function useVisualViewportOffset(): number {
+  const [offset, setOffset] = useState(0)
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const update = () => {
+      const covered = window.innerHeight - (vv.height + vv.offsetTop)
+      setOffset(Math.max(0, Math.round(covered)))
+    }
+    update()
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => {
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+    }
+  }, [])
+  return offset
+}
+
 export function GymKeypadBar() {
   const target = useKeypad((s) => s.target)
+  const keyboardOffset = useVisualViewportOffset()
   if (!target) return null
 
   const deltas = target.kind === 'weight' ? [-2.5, 2.5, 5] : [-1, 1]
@@ -31,7 +59,10 @@ export function GymKeypadBar() {
   return (
     <div
       className="fixed inset-x-0 bottom-0 z-[70]"
-      style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+      style={{
+        paddingBottom: 'env(safe-area-inset-bottom)',
+        transform: keyboardOffset ? `translateY(-${keyboardOffset}px)` : undefined,
+      }}
     >
       <div className="mx-auto flex max-w-md items-center gap-2 border-t border-border bg-surface-2/98 px-3 py-2 backdrop-blur">
         {deltas.map((d) => (

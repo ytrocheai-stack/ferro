@@ -4,6 +4,7 @@ import type { CustomExercise } from '../db/types'
 import { targetOptions, useCatalog } from '../data/exercises'
 import { BODY_PARTS, t } from '../data/translations'
 import { uid } from '../lib/format'
+import { Select } from './Select'
 import { Sheet } from './Sheet'
 
 /** Crear o editar un ejercicio personalizado. */
@@ -67,33 +68,30 @@ export function CustomExerciseSheet({
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-xs font-semibold text-muted">Grupo muscular</span>
-          <select className="input" value={bodyPart} onChange={(e) => setBodyPart(e.target.value)}>
-            {BODY_PARTS.map((b) => (
-              <option key={b} value={b}>
-                {t(b)}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={bodyPart}
+            onChange={setBodyPart}
+            options={BODY_PARTS.map((b) => ({ value: b, label: t(b) }))}
+            sheetTitle="Grupo muscular"
+          />
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-xs font-semibold text-muted">Músculo principal</span>
-          <select className="input" value={target} onChange={(e) => setTarget(e.target.value)}>
-            {targets.map((x) => (
-              <option key={x} value={x}>
-                {t(x)}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={target}
+            onChange={setTarget}
+            options={targets.map((x) => ({ value: x, label: t(x) }))}
+            sheetTitle="Músculo principal"
+          />
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-xs font-semibold text-muted">Equipo</span>
-          <select className="input" value={equipment} onChange={(e) => setEquipment(e.target.value)}>
-            {equipments.map((x) => (
-              <option key={x} value={x}>
-                {t(x)}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={equipment}
+            onChange={setEquipment}
+            options={equipments.map((x) => ({ value: x, label: t(x) }))}
+            sheetTitle="Equipo"
+          />
         </label>
         <button className="btn btn-primary mt-1" onClick={() => void save()} disabled={!name.trim()}>
           Guardar

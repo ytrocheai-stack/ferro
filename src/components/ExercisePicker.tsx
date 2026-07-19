@@ -1,32 +1,38 @@
 import { useMemo, useState } from 'react'
-import type { Exercise } from '../data/exercises'
+import type { Exercise, ExerciseGroup } from '../data/exercises'
 import { equipmentOptions, searchExercises, useCatalog } from '../data/exercises'
-import { BODY_PARTS, t } from '../data/translations'
+import { MUSCLE_GROUP_LABELS, MUSCLE_GROUP_ORDER } from '../data/muscleGroups'
+import { t } from '../data/translations'
 import { Sheet } from './Sheet'
 import { ExerciseThumb } from './ExerciseThumb'
 import { SkeletonList } from './Skeleton'
 import { IconCheck, IconChevronDown, IconSearch } from './icons'
+
+const GROUP_CHIPS: { value: ExerciseGroup; label: string }[] = [
+  ...MUSCLE_GROUP_ORDER.map((g) => ({ value: g, label: MUSCLE_GROUP_LABELS[g] })),
+  { value: 'cardio', label: 'Cardio' },
+]
 
 /** Barra de búsqueda + filtros por grupo muscular y equipo. Reutilizada por la
  *  página Ejercicios y por el selector. */
 export function ExerciseFilterBar({
   query,
   setQuery,
-  bodyPart,
-  setBodyPart,
+  group,
+  setGroup,
   equipment,
   setEquipment,
   all,
 }: {
   query: string
   setQuery: (v: string) => void
-  bodyPart: string | null
-  setBodyPart: (v: string | null) => void
+  group: ExerciseGroup | null
+  setGroup: (v: ExerciseGroup | null) => void
   equipment: string | null
   setEquipment: (v: string | null) => void
   all: Exercise[]
 }) {
-  const [openFilter, setOpenFilter] = useState<'body' | 'equip' | null>(null)
+  const [equipOpen, setEquipOpen] = useState(false)
   const equipments = useMemo(() => equipmentOptions(all), [all])
 
   return (
@@ -41,24 +47,34 @@ export function ExerciseFilterBar({
           type="search"
         />
       </div>
+
+      <div className="flex gap-2 overflow-x-auto pb-0.5">
+        <button className={`chip shrink-0 ${group === null ? 'chip-active' : ''}`} onClick={() => setGroup(null)}>
+          Todos
+        </button>
+        {GROUP_CHIPS.map((g) => (
+          <button
+            key={g.value}
+            className={`chip shrink-0 ${group === g.value ? 'chip-active' : ''}`}
+            onClick={() => setGroup(group === g.value ? null : g.value)}
+          >
+            {g.label}
+          </button>
+        ))}
+      </div>
+
       <div className="flex gap-2 overflow-x-auto pb-0.5">
         <button
-          className={`chip ${bodyPart ? 'chip-active' : ''}`}
-          onClick={() => setOpenFilter('body')}
-        >
-          {bodyPart ? t(bodyPart) : 'Grupo muscular'} <IconChevronDown size={13} />
-        </button>
-        <button
-          className={`chip ${equipment ? 'chip-active' : ''}`}
-          onClick={() => setOpenFilter('equip')}
+          className={`chip shrink-0 ${equipment ? 'chip-active' : ''}`}
+          onClick={() => setEquipOpen(true)}
         >
           {equipment ? t(equipment) : 'Equipo'} <IconChevronDown size={13} />
         </button>
-        {(bodyPart || equipment) && (
+        {(group || equipment) && (
           <button
-            className="chip text-muted"
+            className="chip shrink-0 text-muted"
             onClick={() => {
-              setBodyPart(null)
+              setGroup(null)
               setEquipment(null)
             }}
           >
@@ -67,27 +83,13 @@ export function ExerciseFilterBar({
         )}
       </div>
 
-      <Sheet
-        open={openFilter === 'body'}
-        onClose={() => setOpenFilter(null)}
-        title="Grupo muscular"
-      >
-        <OptionList
-          options={BODY_PARTS}
-          selected={bodyPart}
-          onSelect={(v) => {
-            setBodyPart(v)
-            setOpenFilter(null)
-          }}
-        />
-      </Sheet>
-      <Sheet open={openFilter === 'equip'} onClose={() => setOpenFilter(null)} title="Equipo">
+      <Sheet open={equipOpen} onClose={() => setEquipOpen(false)} title="Equipo">
         <OptionList
           options={equipments}
           selected={equipment}
           onSelect={(v) => {
             setEquipment(v)
-            setOpenFilter(null)
+            setEquipOpen(false)
           }}
         />
       </Sheet>
@@ -107,18 +109,20 @@ function OptionList({
   return (
     <div className="flex flex-col pb-2">
       <button
-        className={`rounded-xl px-3 py-3 text-left ${selected === null ? 'font-bold text-primary' : ''}`}
+        className="flex min-h-11 items-center justify-between rounded-xl px-3 py-2.5 text-left active:bg-surface-2"
         onClick={() => onSelect(null)}
       >
-        Todos
+        <span className={selected === null ? 'font-semibold text-primary' : ''}>Todos</span>
+        {selected === null && <IconCheck size={17} className="text-primary" />}
       </button>
       {options.map((o) => (
         <button
           key={o}
-          className={`rounded-xl px-3 py-3 text-left ${selected === o ? 'font-bold text-primary' : ''}`}
+          className="flex min-h-11 items-center justify-between rounded-xl px-3 py-2.5 text-left active:bg-surface-2"
           onClick={() => onSelect(o)}
         >
-          {t(o)}
+          <span className={selected === o ? 'font-semibold text-primary' : ''}>{t(o)}</span>
+          {selected === o && <IconCheck size={17} className="text-primary" />}
         </button>
       ))}
     </div>
@@ -137,13 +141,13 @@ export function ExercisePicker({
 }) {
   const { all, ready } = useCatalog()
   const [query, setQuery] = useState('')
-  const [bodyPart, setBodyPart] = useState<string | null>(null)
+  const [group, setGroup] = useState<ExerciseGroup | null>(null)
   const [equipment, setEquipment] = useState<string | null>(null)
   const [selected, setSelected] = useState<string[]>([])
 
   const results = useMemo(
-    () => searchExercises(all, { query, bodyPart, equipment, onlyCustom: false }),
-    [all, query, bodyPart, equipment],
+    () => searchExercises(all, { query, group, equipment, onlyCustom: false }),
+    [all, query, group, equipment],
   )
 
   const toggle = (id: string) =>
@@ -159,7 +163,7 @@ export function ExercisePicker({
     <Sheet open={open} onClose={close} title="Añadir ejercicios" full>
       <div className="flex h-full flex-col gap-3">
         <ExerciseFilterBar
-          {...{ query, setQuery, bodyPart, setBodyPart, equipment, setEquipment, all }}
+          {...{ query, setQuery, group, setGroup, equipment, setEquipment, all }}
         />
         <div className="min-h-0 flex-1 overflow-y-auto">
           {!ready && <SkeletonList rows={7} />}

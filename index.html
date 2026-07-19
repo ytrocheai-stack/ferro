@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#0b0b0f" />
     <meta name="description" content="Registro de entrenamientos de gimnasio, 100% offline" />
+    <!-- iOS < 16.4 ignora el manifest.webmanifest para el modo standalone: sin esto, "Añadir a
+         pantalla de inicio" abre con la barra de Safari en vez de a pantalla completa. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Ferro" />
     <title>Ferro — Registro de entrenos</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />

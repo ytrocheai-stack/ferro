@@ -13,7 +13,7 @@ import type {
 } from '../db/types'
 import { useSettings, type SettingsValues } from '../stores/settings'
 import { useNutrition, type NutritionGoals } from '../stores/nutrition'
-import { uid } from './format'
+import { shareOrDownloadFile, uid } from './format'
 
 interface BackupFile {
   app: 'ferro'
@@ -58,19 +58,12 @@ export async function exportBackup(): Promise<void> {
     dishes,
     foodLog,
   }
-  downloadJson(payload, `ferro-backup-${format(new Date(), 'yyyy-MM-dd')}.json`)
+  await downloadJson(payload, `ferro-backup-${format(new Date(), 'yyyy-MM-dd')}.json`)
 }
 
-function downloadJson(payload: unknown, filename: string) {
+async function downloadJson(payload: unknown, filename: string) {
   const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  await shareOrDownloadFile(blob, filename, 'application/json')
 }
 
 export interface ImportResult {
@@ -153,7 +146,7 @@ export async function exportPhotosBackup(): Promise<number> {
       photos.map(async (p) => ({ id: p.id, date: p.date, note: p.note, dataUrl: await blobToDataUrl(p.blob) })),
     ),
   }
-  downloadJson(payload, `ferro-fotos-${format(new Date(), 'yyyy-MM-dd')}.json`)
+  await downloadJson(payload, `ferro-fotos-${format(new Date(), 'yyyy-MM-dd')}.json`)
   return photos.length
 }
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { addDays, format, isToday, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -8,7 +8,7 @@ import type { FoodLogEntry, MealKey } from '../db/types'
 import { useNutrition } from '../stores/nutrition'
 import { ema } from '../lib/stats'
 import { suggestCalorieAdjustment, weeklyChangePct } from '../lib/nutrition'
-import { uid } from '../lib/format'
+import { parseDec, uid } from '../lib/format'
 import { toastUndo } from '../stores/toasts'
 import { FoodPickerSheet } from '../components/FoodPicker'
 import { NutritionGoalsWizard } from '../components/NutritionGoalsWizard'
@@ -84,7 +84,12 @@ export default function Nutrition() {
             </button>
           )}
         </div>
-        <button className="pressable rounded-lg p-2 text-muted" onClick={() => setDay((d) => addDays(d, 1))} aria-label="Día siguiente">
+        <button
+          className="pressable rounded-lg p-2 text-muted disabled:opacity-30"
+          onClick={() => setDay((d) => addDays(d, 1))}
+          disabled={isToday(day)}
+          aria-label="Día siguiente"
+        >
           <IconChevronRight size={20} />
         </button>
       </div>
@@ -194,6 +199,7 @@ function MealSection({
 }) {
   const kcal = entries.reduce((a, e) => a + e.kcal, 0)
   const [menuFor, setMenuFor] = useState<FoodLogEntry | null>(null)
+  const [editFor, setEditFor] = useState<FoodLogEntry | null>(null)
 
   const duplicate = (e: FoodLogEntry) => {
     void db.foodLog.put({ ...e, id: uid() })
@@ -238,11 +244,59 @@ function MealSection({
         onClose={() => setMenuFor(null)}
         title={menuFor?.name}
         actions={[
+          { label: 'Editar cantidad', onClick: () => setEditFor(menuFor) },
           { label: 'Duplicar', onClick: () => duplicate(menuFor!) },
           { label: 'Eliminar', danger: true, onClick: () => remove(menuFor!) },
         ]}
       />
+      <EditGramsSheet entry={editFor} onClose={() => setEditFor(null)} />
     </div>
+  )
+}
+
+/** Ajusta la cantidad (g) de una entrada ya registrada, recalculando sus macros proporcionalmente. */
+function EditGramsSheet({ entry, onClose }: { entry: FoodLogEntry | null; onClose: () => void }) {
+  const [grams, setGrams] = useState('')
+
+  useEffect(() => {
+    if (entry) setGrams(String(entry.grams))
+  }, [entry])
+
+  const save = async () => {
+    if (!entry) return
+    const g = parseDec(grams)
+    if (g <= 0) return
+    const ratio = g / entry.grams
+    await db.foodLog.put({
+      ...entry,
+      grams: g,
+      kcal: Math.round(entry.kcal * ratio),
+      p: Math.round(entry.p * ratio * 10) / 10,
+      c: Math.round(entry.c * ratio * 10) / 10,
+      f: Math.round(entry.f * ratio * 10) / 10,
+    })
+    onClose()
+  }
+
+  return (
+    <Sheet open={!!entry} onClose={onClose} title={entry?.name}>
+      <div className="flex flex-col gap-4 pb-2">
+        <label className="flex flex-col gap-1.5">
+          <span className="text-xs font-semibold text-muted">Cantidad (g)</span>
+          <input
+            autoFocus
+            className="input text-center text-lg font-bold"
+            inputMode="decimal"
+            value={grams}
+            onChange={(e) => setGrams(e.target.value)}
+            onFocus={(e) => e.target.select()}
+          />
+        </label>
+        <button className="btn btn-primary" disabled={parseDec(grams) <= 0} onClick={() => void save()}>
+          Guardar
+        </button>
+      </div>
+    </Sheet>
   )
 }
 
@@ -262,7 +316,7 @@ function WeightTrendCard({ goal }: { goal: 'bulk' | 'maintain' | 'cut' }) {
     return last30.map((m, i) => ({ date: m.date, real: m.value, trend: smoothed[i] }))
   }, [measurements])
 
-  const pct = useMemo(() => weeklyChangePct(points.map((p) => p.trend)), [points])
+  const pct = useMemo(() => weeklyChangePct(points), [points])
   const suggestion = suggestCalorieAdjustment(goal, pct)
 
   const save = async () => {
@@ -337,7 +391,12 @@ function WeightTrendCard({ goal }: { goal: 'bulk' | 'maintain' | 'cut' }) {
 
 function WeeklySummaryCard({ goals }: { goals: { kcal: number; proteinG: number } }) {
   const since = dateKey(subDays(new Date(), 6))
-  const entries = useLiveQuery(() => db.foodLog.where('date').aboveOrEqual(since).toArray(), [since], undefined)
+  const today = dateKey(new Date())
+  const entries = useLiveQuery(
+    () => db.foodLog.where('date').between(since, today, true, true).toArray(),
+    [since, today],
+    undefined,
+  )
 
   const byDay = useMemo(() => {
     const m = new Map<string, { kcal: number; p: number }>()

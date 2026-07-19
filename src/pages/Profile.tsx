@@ -13,8 +13,10 @@ import { exportWorkoutsCsv } from '../lib/csv'
 import { cachedGifCount, downloadAllGifs } from '../lib/gifs'
 import { ensureNotifyPermission } from '../lib/notify'
 import { formatDuration, formatVolume } from '../lib/format'
+import { isIOS, isStandalone } from '../lib/platform'
+import { Select } from '../components/Select'
 import { Confirm } from '../components/Sheet'
-import { IconDownload, IconFlame, IconRuler, IconUpload } from '../components/icons'
+import { IconDownload, IconFlame, IconRuler, IconShare, IconUpload } from '../components/icons'
 import { APP_VERSION, DATASET_URL, REST_OPTIONS, restLabel } from '../lib/constants'
 
 const weekKey = (d: Date | number) => format(startOfWeek(d, { weekStartsOn: 1 }), 'yyyy-MM-dd')
@@ -105,6 +107,7 @@ export default function Profile() {
         </Link>
       </div>
 
+      <InstallCard />
       <SettingsCard />
       <DataCard workoutsCount={workouts.length} />
 
@@ -117,6 +120,25 @@ export default function Profile() {
           exercises-dataset
         </a>{' '}
         (hasaneyldrm) · Media © Gym visual.
+      </div>
+    </div>
+  )
+}
+
+/** Guía de instalación para iOS: ahí no existe `beforeinstallprompt`, así que sin este aviso el
+ *  usuario no tiene forma de saber que puede instalar la app desde el menú Compartir de Safari. */
+function InstallCard() {
+  if (!isIOS() || isStandalone()) return null
+  return (
+    <div className="card mt-4 flex items-start gap-3 px-4 py-3.5">
+      <IconShare size={20} className="mt-0.5 shrink-0 text-primary" />
+      <div className="text-sm">
+        <div className="font-bold">Instala Ferro en tu iPhone</div>
+        <div className="pt-0.5 text-xs text-muted">
+          Toca <span className="font-semibold text-text">Compartir</span> en Safari y luego{' '}
+          <span className="font-semibold text-text">«Añadir a pantalla de inicio»</span> para
+          usarla como app, con acceso sin conexión.
+        </div>
       </div>
     </div>
   )
@@ -162,46 +184,34 @@ function SettingsCard() {
         </div>
       </Row>
       <Row label="Descanso por defecto">
-        <select
-          className="input w-28"
+        <Select
+          className="w-28"
           value={s.defaultRestSec}
-          onChange={(e) => s.update({ defaultRestSec: Number(e.target.value) })}
-        >
-          {REST_OPTIONS.map((o) => (
-            <option key={o} value={o}>
-              {restLabel(o)}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => s.update({ defaultRestSec: v })}
+          options={REST_OPTIONS.map((o) => ({ value: o, label: restLabel(o) }))}
+          sheetTitle="Descanso por defecto"
+        />
       </Row>
       <Row label="Registrar RPE por serie">
         <Toggle checked={s.trackRpe} onChange={(v) => s.update({ trackRpe: v })} />
       </Row>
       <Row label="Objetivo semanal de entrenos">
-        <select
-          className="input w-20"
+        <Select
+          className="w-20"
           value={s.weeklyGoal}
-          onChange={(e) => s.update({ weeklyGoal: Number(e.target.value) })}
-        >
-          {[1, 2, 3, 4, 5, 6, 7].map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => s.update({ weeklyGoal: v })}
+          options={[1, 2, 3, 4, 5, 6, 7].map((n) => ({ value: n, label: String(n) }))}
+          sheetTitle="Objetivo semanal de entrenos"
+        />
       </Row>
       <Row label="Peso de la barra">
-        <select
-          className="input w-24"
+        <Select
+          className="w-24"
           value={s.barWeightKg}
-          onChange={(e) => s.update({ barWeightKg: Number(e.target.value) })}
-        >
-          {[10, 15, 20].map((n) => (
-            <option key={n} value={n}>
-              {n} kg
-            </option>
-          ))}
-        </select>
+          onChange={(v) => s.update({ barWeightKg: v })}
+          options={[10, 15, 20].map((n) => ({ value: n, label: `${n} kg` }))}
+          sheetTitle="Peso de la barra"
+        />
       </Row>
       <div className="border-b border-border/50 py-2 text-sm">
         <div className="pb-2">Discos disponibles (kg)</div>
@@ -229,9 +239,11 @@ function SettingsCard() {
       <Row label="Sonido al fin del descanso">
         <Toggle checked={s.sound} onChange={(v) => s.update({ sound: v })} />
       </Row>
-      <Row label="Vibración">
-        <Toggle checked={s.vibration} onChange={(v) => s.update({ vibration: v })} />
-      </Row>
+      {!isIOS() && (
+        <Row label="Vibración">
+          <Toggle checked={s.vibration} onChange={(v) => s.update({ vibration: v })} />
+        </Row>
+      )}
       <Row label="Notificación de descanso">
         <Toggle checked={s.restNotification} onChange={(v) => void toggleNotification(v)} />
       </Row>
@@ -431,7 +443,11 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
       {storage && (
         <p className="pt-2.5 text-xs text-muted">
           Almacenamiento usado: {storage.usageMB.toFixed(1)} MB ·{' '}
-          {storage.persisted ? 'protegido contra borrado ✓' : 'no persistente aún'}
+          {storage.persisted
+            ? 'protegido contra borrado ✓'
+            : isIOS()
+              ? 'iOS podría liberar este espacio si el dispositivo anda muy justo de memoria'
+              : 'no persistente aún'}
         </p>
       )}
 

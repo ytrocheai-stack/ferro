@@ -125,6 +125,42 @@ input[type='number'] {
   animation: sheet-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
+@keyframes sheet-out {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+.sheet-out {
+  animation: sheet-out 0.16s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.scrim-in {
+  animation: scrim-in 0.22s ease-out;
+}
+
+@keyframes scrim-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.scrim-out {
+  animation: scrim-out 0.16s ease-in forwards;
+}
+
 /* Transición de entrada de página (continuidad espacial sutil) */
 @keyframes page-in {
   from {

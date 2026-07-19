@@ -69,7 +69,7 @@ export default function ActiveWorkoutPage() {
 
   return (
     <div className="px-4">
-      <header className="sticky top-0 z-30 -mx-4 flex items-center justify-between gap-2 border-b border-border bg-bg/95 px-4 py-2 backdrop-blur">
+      <header className="sticky top-[env(safe-area-inset-top)] z-30 -mx-4 flex items-center justify-between gap-2 border-b border-border bg-bg/95 px-4 py-2 backdrop-blur">
         <button
           onClick={() => navigate('/')}
           className="pressable -ml-1.5 rounded-lg p-1.5 text-muted"

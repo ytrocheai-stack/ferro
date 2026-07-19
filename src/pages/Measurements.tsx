@@ -17,7 +17,8 @@ import type { Measurement, MeasurementKind, ProgressPhoto } from '../db/types'
 import { MEASUREMENT_LABELS, MEASUREMENT_ORDER, MEASUREMENT_UNIT } from '../data/measurementLabels'
 import { resizeImageToBlob, blobUrl } from '../lib/photos'
 import { formatShortDate, uid } from '../lib/format'
-import { toastUndo } from '../stores/toasts'
+import { toastUndo, useToasts } from '../stores/toasts'
+import { Select } from '../components/Select'
 import { Confirm, Sheet } from '../components/Sheet'
 import { SkeletonChart } from '../components/Skeleton'
 import { IconCamera, IconChevronLeft, IconPlus, IconRuler, IconTrash } from '../components/icons'
@@ -130,13 +131,12 @@ function AddMeasurementSheet({ open, onClose }: { open: boolean; onClose: () => 
       <div className="flex flex-col gap-3 pb-2">
         <label className="flex flex-col gap-1.5">
           <span className="text-xs font-semibold text-muted">Tipo</span>
-          <select className="input" value={kind} onChange={(e) => setKind(e.target.value as MeasurementKind)}>
-            {MEASUREMENT_ORDER.map((k) => (
-              <option key={k} value={k}>
-                {MEASUREMENT_LABELS[k]}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={kind}
+            onChange={setKind}
+            options={MEASUREMENT_ORDER.map((k) => ({ value: k, label: MEASUREMENT_LABELS[k] }))}
+            sheetTitle="Tipo de medida"
+          />
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-xs font-semibold text-muted">Valor ({MEASUREMENT_UNIT[kind]})</span>
@@ -264,6 +264,8 @@ function PhotosTab() {
     try {
       const blob = await resizeImageToBlob(file)
       await db.photos.put({ id: uid(), date: Date.now(), blob })
+    } catch {
+      useToasts.getState().show('No se pudo procesar la foto. Prueba con otra imagen.')
     } finally {
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ''

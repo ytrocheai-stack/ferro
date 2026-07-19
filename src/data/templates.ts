@@ -133,4 +133,46 @@ export const PROGRAM_TEMPLATES: ProgramTemplate[] = [
       },
     ],
   },
+  {
+    id: 'arnold',
+    name: 'Arnold Split',
+    daysPerWeek: 6,
+    description: 'Pecho/espalda, hombro/brazo y pierna, cada uno 2 veces por semana — alto volumen al estilo Arnold Schwarzenegger.',
+    routines: [
+      {
+        name: 'Pecho y Espalda',
+        exercises: [
+          ex('0025', 4, 6, 10),
+          ex('0027', 4, 6, 10),
+          ex('0314', 3, 8, 12),
+          ex('0652', 3, 6, 10),
+          ex('0308', 3, 10, 15),
+          ex('0180', 3, 10, 12),
+        ],
+      },
+      {
+        name: 'Hombro y Brazo',
+        exercises: [
+          ex('0091', 4, 6, 10),
+          ex('0334', 3, 12, 15),
+          ex('0203', 3, 12, 15),
+          ex('0031', 3, 8, 10),
+          ex('0297', 3, 10, 12),
+          ex('0030', 3, 8, 10),
+          ex('0241', 2, 12, 15),
+        ],
+      },
+      {
+        name: 'Pierna',
+        exercises: [
+          ex('0026', 4, 6, 10),
+          ex('0085', 3, 8, 10),
+          ex('0585', 3, 12, 15),
+          ex('0586', 3, 10, 12),
+          ex('0088', 4, 12, 15),
+          ex('0212', 3, 12, 15),
+        ],
+      },
+    ],
+  },
 ]

@@ -1,4 +1,4 @@
-import { useRef, type ReactNode, type TouchEvent } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { IconX } from './icons'
 
@@ -11,12 +11,49 @@ interface SheetProps {
   full?: boolean
 }
 
+const EXIT_MS = 160
+
 /** Hoja inferior con handle y gesto de arrastre hacia abajo para cerrar. */
 export function Sheet({ open, onClose, title, children, full = false }: SheetProps) {
   const panelRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ startY: number; dy: number } | null>(null)
+  // El cierre por arrastre ya anima el panel a mano (ver onTouchEnd); evita que la
+  // animación de salida por clase se reinicie encima y produzca un salto visual.
+  const draggedClosed = useRef(false)
+  const wasOpen = useRef(open)
+  const [rendered, setRendered] = useState(open)
+  const [closing, setClosing] = useState(false)
 
-  if (!open) return null
+  useEffect(() => {
+    if (open) {
+      wasOpen.current = true
+      draggedClosed.current = false
+      setClosing(false)
+      setRendered(true)
+      return
+    }
+    if (!wasOpen.current) return
+    wasOpen.current = false
+    if (draggedClosed.current) {
+      draggedClosed.current = false
+      setRendered(false)
+      return
+    }
+    setClosing(true)
+    const t = setTimeout(() => setRendered(false), EXIT_MS)
+    return () => clearTimeout(t)
+  }, [open])
+
+  useEffect(() => {
+    if (!rendered) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [rendered, onClose])
+
+  if (!rendered) return null
 
   const onTouchStart = (e: TouchEvent) => {
     drag.current = { startY: e.touches[0].clientY, dy: 0 }
@@ -35,6 +72,7 @@ export function Sheet({ open, onClose, title, children, full = false }: SheetPro
     if (!panel) return
     panel.style.transition = 'transform 0.2s ease-out'
     if (dy > 80) {
+      draggedClosed.current = true
       panel.style.transform = 'translateY(105%)'
       setTimeout(onClose, 180)
     } else {
@@ -44,12 +82,15 @@ export function Sheet({ open, onClose, title, children, full = false }: SheetPro
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex flex-col justify-end">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div
+        className={`absolute inset-0 bg-black/50 ${closing ? 'scrim-out' : 'scrim-in'}`}
+        onClick={onClose}
+      />
       <div
         ref={panelRef}
-        className={`sheet-in relative mx-auto flex w-full max-w-md flex-col rounded-t-2xl border-t border-border bg-surface ${
-          full ? 'h-[92dvh]' : 'max-h-[85dvh]'
-        }`}
+        className={`relative mx-auto flex w-full max-w-md flex-col rounded-t-2xl border-t border-border bg-surface ${
+          closing ? 'sheet-out' : 'sheet-in'
+        } ${full ? 'h-[92dvh]' : 'max-h-[85dvh]'}`}
       >
         <header
           className="touch-none select-none"

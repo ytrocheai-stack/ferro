@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import type { CustomExercise } from '../db/types'
 import { normalize } from '../lib/format'
+import { groupFromTarget, type MuscleGroup } from './muscleGroups'
 import { t } from './translations'
 
 export interface Exercise {
@@ -91,9 +92,17 @@ export function useCatalog() {
   }, [base, customs, error])
 }
 
+/** Grupo muscular efectivo para filtros y secciones ('cardio' para ejercicios cardiovasculares). */
+export type ExerciseGroup = MuscleGroup | 'cardio'
+
+export function exerciseGroup(e: Exercise): ExerciseGroup | null {
+  if (e.target === 'cardiovascular system') return 'cardio'
+  return groupFromTarget(e.target)
+}
+
 export interface ExerciseFilters {
   query: string
-  bodyPart: string | null
+  group: ExerciseGroup | null
   equipment: string | null
   onlyCustom: boolean
 }
@@ -102,7 +111,7 @@ export function searchExercises(all: Exercise[], f: ExerciseFilters): Exercise[]
   const q = normalize(f.query.trim())
   return all.filter((e) => {
     if (f.onlyCustom && !e.custom) return false
-    if (f.bodyPart && e.bodyPart !== f.bodyPart) return false
+    if (f.group && exerciseGroup(e) !== f.group) return false
     if (f.equipment && e.equipment !== f.equipment) return false
     if (q) {
       const hay = normalize(

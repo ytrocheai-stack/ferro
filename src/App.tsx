@@ -9,7 +9,7 @@ import { useSettings } from './stores/settings'
 import { ensurePersistentStorage } from './db/db'
 import { useNow } from './lib/useNow'
 import { clock } from './lib/format'
-import { beep, notify, vibrate } from './lib/notify'
+import { beep, notify, unlockAudio, vibrate } from './lib/notify'
 import { IconMinus, IconPlay, IconPlus, IconX } from './components/icons'
 
 export default function App() {
@@ -18,10 +18,13 @@ export default function App() {
 
   useEffect(() => {
     void ensurePersistentStorage()
+    // Primer toque del usuario: desbloquea WebAudio para que el bip del descanso suene en iOS.
+    window.addEventListener('pointerdown', unlockAudio, { once: true })
+    return () => window.removeEventListener('pointerdown', unlockAudio)
   }, [])
 
   return (
-    <div className="mx-auto min-h-dvh w-full max-w-md">
+    <div className="mx-auto min-h-dvh w-full max-w-md pt-[env(safe-area-inset-top)]">
       <div key={pathname} className="page-enter">
         <Suspense fallback={<PageFallback />}>
           <Outlet />
@@ -83,7 +86,10 @@ function RestTimerOverlay({ hideTabs }: { hideTabs: boolean }) {
   // aviso exacto al terminar (por timestamp, no por ticks)
   useEffect(() => {
     if (!rest) return
+    let fired = false
     const fire = () => {
+      if (fired) return
+      fired = true
       const { sound, vibration, restNotification } = useSettings.getState()
       if (vibration) vibrate([300, 120, 300])
       if (sound) beep()
@@ -96,7 +102,17 @@ function RestTimerOverlay({ hideTabs }: { hideTabs: boolean }) {
       return
     }
     const t = setTimeout(fire, ms)
-    return () => clearTimeout(t)
+    // iOS congela los timers en segundo plano: al volver a primer plano, comprobar por
+    // timestamp si el descanso ya venció y avisar de inmediato en vez de esperar a que el
+    // `setTimeout`, ya vencido, se reprograme.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && Date.now() >= rest.endsAt) fire()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearTimeout(t)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [rest])
 
   if (!rest) return null

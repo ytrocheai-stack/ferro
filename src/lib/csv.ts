@@ -1,6 +1,7 @@
 import { format } from 'date-fns'
 import { db } from '../db/db'
 import type { Exercise } from '../data/exercises'
+import { shareOrDownloadFile } from './format'
 
 function csvEscape(v: string | number): string {
   const s = String(v)
@@ -47,12 +48,5 @@ export async function exportWorkoutsCsv(): Promise<void> {
   }
 
   const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `ferro-series-${format(new Date(), 'yyyy-MM-dd')}.csv`
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  await shareOrDownloadFile(blob, `ferro-series-${format(new Date(), 'yyyy-MM-dd')}.csv`, 'text/csv')
 }

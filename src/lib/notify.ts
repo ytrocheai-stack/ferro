@@ -10,6 +10,20 @@ export function vibrate(pattern: number | number[] = [250, 120, 250]) {
 
 let audioCtx: AudioContext | null = null
 
+/**
+ * iOS solo permite crear/reanudar el `AudioContext` dentro de un gesto de usuario; el bip del
+ * temporizador se dispara desde un `setTimeout` (sin gesto), así que sin este "desbloqueo" previo
+ * el contexto queda `suspended` y no suena nunca. Llamar una vez con el primer toque de la app.
+ */
+export function unlockAudio() {
+  try {
+    audioCtx ??= new AudioContext()
+    if (audioCtx.state === 'suspended') void audioCtx.resume()
+  } catch {
+    /* sin audio */
+  }
+}
+
 /** Doble bip corto con WebAudio (no requiere assets). */
 export function beep() {
   try {

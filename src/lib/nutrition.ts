@@ -30,15 +30,25 @@ export function computeTargets(tdeeValue: number, weightKg: number, goal: Goal):
   return { kcal, proteinG, carbsG, fatG }
 }
 
-/** Tasa de cambio semanal (%): (últimoEMA - primerEMA) / primerEMA / semanas * 100. */
-export function weeklyChangePct(emaValues: number[], daysPerPoint = 1): number | null {
-  if (emaValues.length < 7) return null
-  const first = emaValues[0]
-  const last = emaValues[emaValues.length - 1]
-  if (first <= 0) return null
-  const weeks = ((emaValues.length - 1) * daysPerPoint) / 7
-  if (weeks <= 0) return null
-  return ((last - first) / first / weeks) * 100
+export interface WeightTrendPoint {
+  date: number
+  trend: number
+}
+
+/**
+ * Tasa de cambio semanal (%): (últimoEMA - primerEMA) / primerEMA / semanas * 100, usando el
+ * intervalo real entre fechas (no el número de pesajes, que puede no ser uno por día).
+ * Exige al menos 14 días de historial para no extrapolar a partir de poco margen.
+ */
+export function weeklyChangePct(points: WeightTrendPoint[]): number | null {
+  if (points.length < 2) return null
+  const first = points[0]
+  const last = points[points.length - 1]
+  if (first.trend <= 0) return null
+  const days = (last.date - first.date) / 86_400_000
+  if (days < 14) return null
+  const weeks = days / 7
+  return ((last.trend - first.trend) / first.trend / weeks) * 100
 }
 
 /** Sugerencia adaptativa simple estilo MacroFactor. null si no aplica. */

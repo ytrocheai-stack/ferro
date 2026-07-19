@@ -1,16 +1,22 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import { ACTIVITY_LABELS, GOAL_LABELS, useNutrition, type ActivityLevel, type Goal, type Sex } from '../stores/nutrition'
 import { bmr, computeTargets, tdee } from '../lib/nutrition'
-import { uid } from '../lib/format'
+import { parseDec, uid } from '../lib/format'
+import { Select } from './Select'
 import { Sheet } from './Sheet'
 
 export function NutritionGoalsWizard({ open, onClose }: { open: boolean; onClose: () => void }) {
   const goals = useNutrition((s) => s.goals)
   const setGoals = useNutrition((s) => s.setGoals)
+  // Último pesaje por FECHA real, no por orden de inserción (`.last()` ordenaría por el índice
+  // `kind`, cuyo desempate es la clave primaria aleatoria — devolvía un peso al azar).
   const lastWeight = useLiveQuery(
-    () => db.measurements.where('kind').equals('weight').last(),
+    async () => {
+      const list = await db.measurements.where('kind').equals('weight').sortBy('date')
+      return list.at(-1)
+    },
     [],
     undefined,
   )
@@ -18,13 +24,25 @@ export function NutritionGoalsWizard({ open, onClose }: { open: boolean; onClose
   const [sex, setSex] = useState<Sex>(goals.sex)
   const [age, setAge] = useState(String(goals.age))
   const [heightCm, setHeightCm] = useState(String(goals.heightCm))
-  const [weightKg, setWeightKg] = useState(String(lastWeight?.value ?? 75))
+  const [weightKg, setWeightKg] = useState('')
+  const [weightTouched, setWeightTouched] = useState(false)
   const [activity, setActivity] = useState<ActivityLevel>(goals.activity)
   const [goal, setGoal] = useState<Goal>(goals.goal)
 
+  // Al abrir la hoja, permite que el peso vuelva a precargarse desde el último pesaje real.
+  useEffect(() => {
+    if (open) setWeightTouched(false)
+  }, [open])
+
+  // `useLiveQuery` resuelve de forma asíncrona: sincroniza en cuanto llega el dato, mientras
+  // el usuario no haya escrito nada él mismo.
+  useEffect(() => {
+    if (!weightTouched && lastWeight) setWeightKg(String(lastWeight.value))
+  }, [lastWeight, weightTouched])
+
   const preview = useMemo(() => {
-    const w = parseFloat(weightKg) || 0
-    const h = parseFloat(heightCm) || 0
+    const w = parseDec(weightKg)
+    const h = parseDec(heightCm)
     const a = parseInt(age) || 0
     if (!w || !h || !a) return null
     const b = bmr(sex, w, h, a)
@@ -34,17 +52,17 @@ export function NutritionGoalsWizard({ open, onClose }: { open: boolean; onClose
 
   const save = async () => {
     if (!preview) return
-    const w = parseFloat(weightKg) || 0
+    const w = parseDec(weightKg)
     setGoals({
       configured: true,
       sex,
       age: parseInt(age) || 25,
-      heightCm: parseFloat(heightCm) || 175,
+      heightCm: parseDec(heightCm) || 175,
       activity,
       goal,
       ...preview,
     })
-    if (!lastWeight || lastWeight.value !== w) {
+    if (!lastWeight || Math.abs(lastWeight.value - w) > 0.001) {
       await db.measurements.put({ id: uid(), date: Date.now(), kind: 'weight', value: w })
     }
     onClose()
@@ -68,29 +86,42 @@ export function NutritionGoalsWizard({ open, onClose }: { open: boolean; onClose
         <div className="grid grid-cols-3 gap-2">
           <Field label="Edad" value={age} onChange={setAge} suffix="años" />
           <Field label="Altura" value={heightCm} onChange={setHeightCm} suffix="cm" />
-          <Field label="Peso" value={weightKg} onChange={setWeightKg} suffix="kg" />
+          <Field
+            label="Peso"
+            value={weightKg}
+            onChange={(v) => {
+              setWeightTouched(true)
+              setWeightKg(v)
+            }}
+            suffix="kg"
+            placeholder="80"
+          />
         </div>
 
         <label className="flex flex-col gap-1.5">
           <span className="text-xs font-semibold text-muted">Nivel de actividad</span>
-          <select className="input" value={activity} onChange={(e) => setActivity(e.target.value as ActivityLevel)}>
-            {Object.entries(ACTIVITY_LABELS).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={activity}
+            onChange={setActivity}
+            options={(Object.entries(ACTIVITY_LABELS) as [ActivityLevel, string][]).map(([k, v]) => ({
+              value: k,
+              label: v,
+            }))}
+            sheetTitle="Nivel de actividad"
+          />
         </label>
 
         <label className="flex flex-col gap-1.5">
           <span className="text-xs font-semibold text-muted">Objetivo</span>
-          <select className="input" value={goal} onChange={(e) => setGoal(e.target.value as Goal)}>
-            {Object.entries(GOAL_LABELS).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={goal}
+            onChange={setGoal}
+            options={(Object.entries(GOAL_LABELS) as [Goal, string][]).map(([k, v]) => ({
+              value: k,
+              label: v,
+            }))}
+            sheetTitle="Objetivo"
+          />
         </label>
 
         {preview && (
@@ -132,11 +163,13 @@ function Field({
   value,
   onChange,
   suffix,
+  placeholder,
 }: {
   label: string
   value: string
   onChange: (v: string) => void
   suffix: string
+  placeholder?: string
 }) {
   return (
     <label className="flex flex-col gap-1.5">
@@ -146,6 +179,7 @@ function Field({
           className="input pr-9 text-center"
           inputMode="decimal"
           value={value}
+          placeholder={placeholder}
           onChange={(e) => onChange(e.target.value)}
         />
         <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-muted">

@@ -3,7 +3,7 @@ import { db } from '../db/db'
 import type { MealKey } from '../db/types'
 import { macrosForGrams, markFoodUsed, saveCustomFood, searchFoods, useFoodCatalog, useOnline, type LocalFood } from '../data/foods'
 import { lookupBarcode, searchOpenFoodFacts } from '../lib/openFoodFacts'
-import { uid } from '../lib/format'
+import { parseDec, uid } from '../lib/format'
 import { Sheet } from './Sheet'
 import { BarcodeScanner } from './BarcodeScanner'
 import { SkeletonList } from './Skeleton'
@@ -276,7 +276,7 @@ function GramsForm({
   onConfirm: (grams: number) => void
 }) {
   const [grams, setGrams] = useState(String(food.servingG || 100))
-  const g = parseFloat(grams.replace(',', '.')) || 0
+  const g = parseDec(grams)
   const m = macrosForGrams(food, g)
 
   return (
@@ -336,23 +336,9 @@ function CreateFoodSheet({
 
   const save = async () => {
     if (!name.trim()) return
-    const id = await saveCustomFood({
-      name: name.trim(),
-      kcal100: parseFloat(kcal) || 0,
-      p100: parseFloat(p) || 0,
-      c100: parseFloat(c) || 0,
-      f100: parseFloat(f) || 0,
-    })
-    onCreated({
-      id,
-      name: name.trim(),
-      kcal100: parseFloat(kcal) || 0,
-      p100: parseFloat(p) || 0,
-      c100: parseFloat(c) || 0,
-      f100: parseFloat(f) || 0,
-      servingG: 100,
-      source: 'custom',
-    })
+    const values = { kcal100: parseDec(kcal), p100: parseDec(p), c100: parseDec(c), f100: parseDec(f) }
+    const id = await saveCustomFood({ name: name.trim(), ...values })
+    onCreated({ id, name: name.trim(), ...values, servingG: 100, source: 'custom' })
     onClose()
   }
 

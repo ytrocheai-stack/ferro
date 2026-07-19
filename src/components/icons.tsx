@@ -247,3 +247,10 @@ export const IconTarget = (p: IconProps) => (
     <circle cx="12" cy="12" r="1" />
   </svg>
 )
+
+export const IconShare = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M12 15V3M7.5 7.5 12 3l4.5 4.5" />
+    <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" />
+  </svg>
+)

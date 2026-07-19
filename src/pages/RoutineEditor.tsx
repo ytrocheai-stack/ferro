@@ -7,6 +7,7 @@ import { useCatalog } from '../data/exercises'
 import { useSettings } from '../stores/settings'
 import { ExercisePicker } from '../components/ExercisePicker'
 import { ExerciseThumb } from '../components/ExerciseThumb'
+import { Select } from '../components/Select'
 import { Confirm, Sheet } from '../components/Sheet'
 import {
   IconChevronDown,
@@ -174,17 +175,12 @@ export default function RoutineEditor() {
                 </label>
                 <label className="flex flex-1 flex-col gap-1">
                   <span className="text-[11px] font-semibold uppercase text-muted">Descanso</span>
-                  <select
-                    className="input"
+                  <Select
                     value={re.restSec}
-                    onChange={(e) => update(i, { restSec: Number(e.target.value) })}
-                  >
-                    {REST_OPTIONS.map((s) => (
-                      <option key={s} value={s}>
-                        {restLabel(s)}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(v) => update(i, { restSec: v })}
+                    options={REST_OPTIONS.map((s) => ({ value: s, label: restLabel(s) }))}
+                    sheetTitle="Descanso"
+                  />
                 </label>
                 <button
                   className="pressable flex flex-1 flex-col items-start gap-1"
@@ -340,29 +336,21 @@ function RepRangeEditor({
         tope del rango, Ferro sugiere +2.5 kg.
       </p>
       <div className="flex items-center gap-3">
-        <select
-          className="input"
+        <Select
           value={min}
-          onChange={(e) => onChange(Math.min(Number(e.target.value), max), max)}
-        >
-          {REP_RANGE_STEPS.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => onChange(Math.min(v, max), max)}
+          options={REP_RANGE_STEPS.map((n) => ({ value: n, label: String(n) }))}
+          sheetTitle="Repeticiones mínimas"
+          className="w-20"
+        />
         <span className="text-muted">a</span>
-        <select
-          className="input"
+        <Select
           value={max}
-          onChange={(e) => onChange(min, Math.max(min, Number(e.target.value)))}
-        >
-          {REP_RANGE_STEPS.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => onChange(min, Math.max(min, v))}
+          options={REP_RANGE_STEPS.map((n) => ({ value: n, label: String(n) }))}
+          sheetTitle="Repeticiones máximas"
+          className="w-20"
+        />
         <span className="text-sm text-muted">reps</span>
       </div>
     </div>
