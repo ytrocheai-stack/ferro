@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { format, startOfWeek, subWeeks } from 'date-fns'
+import { addWeeks, format, startOfWeek, subWeeks } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { db } from '../db/db'
@@ -36,8 +36,11 @@ export default function Analysis() {
     if (!workouts) return []
     const buckets: { label: string; volume: number; duration: number; count: number }[] = []
     for (let i = 7; i >= 0; i--) {
-      const start = startOfWeek(subWeeks(new Date(), i), { weekStartsOn: 1 }).getTime()
-      const end = start + 7 * 86400000
+      // addWeeks respeta los cambios de hora (DST): sumar 7×86400000 ms desplazaría el
+      // límite 1 h dos veces al año y contaría entrenos en el bucket equivocado
+      const startD = startOfWeek(subWeeks(new Date(), i), { weekStartsOn: 1 })
+      const start = startD.getTime()
+      const end = addWeeks(startD, 1).getTime()
       const items = workouts.filter((w) => w.startedAt >= start && w.startedAt < end)
       buckets.push({
         label: format(start, 'd MMM', { locale: es }),
@@ -87,7 +90,7 @@ export default function Analysis() {
           </div>
 
           <div className="card mt-3 px-4 py-3">
-            <h2 className="pb-3 text-sm font-bold">Series semanales por grupo muscular</h2>
+            <h2 className="pb-3 text-sm font-bold">Series por grupo muscular (últimos 7 días)</h2>
             <div className="flex flex-col gap-2.5">
               {MUSCLE_GROUP_ORDER.map((g) => {
                 const v = weekly[g] ?? 0

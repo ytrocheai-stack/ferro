@@ -3,6 +3,7 @@ import { Link, Navigate, useNavigate } from 'react-router-dom'
 import type { SetType } from '../db/types'
 import {
   placeholderFor,
+  prevWorkingSetFor,
   useActive,
   type ActiveExercise,
   type ActiveSession,
@@ -416,7 +417,7 @@ function SetRow({
   const st = ex.sets[i]
   if (!st) return null
   const ph = placeholderFor(ex, i)
-  const prev = ex.prev[i]
+  const prev = prevWorkingSetFor(ex, i)
   const meta = SET_TYPE_META[st.type]
   const setNumber = ex.sets.slice(0, i + 1).filter((s) => s.type !== 'warmup').length
 
@@ -468,7 +469,7 @@ function SetRow({
             placeholder={String(Math.round((ph.durationSec ?? 0) / 60) || '')}
             onValue={(v) =>
               useActive.getState().updateSet(ex.uid, i, {
-                durationSec: v === null ? null : Math.round(v * 60),
+                durationSec: v === null ? null : Math.max(0, Math.round(v * 60)),
               })
             }
           />
@@ -478,7 +479,7 @@ function SetRow({
             placeholder={String((ph.distanceM ?? 0) / 1000 || '')}
             onValue={(v) =>
               useActive.getState().updateSet(ex.uid, i, {
-                distanceM: v === null ? null : Math.round(v * 1000),
+                distanceM: v === null ? null : Math.max(0, Math.round(v * 1000)),
               })
             }
           />
@@ -493,7 +494,7 @@ function SetRow({
             onValue={(v) =>
               useActive
                 .getState()
-                .updateSet(ex.uid, i, { weightKg: v === null ? null : displayToKg(v, units) })
+                .updateSet(ex.uid, i, { weightKg: v === null ? null : Math.max(0, displayToKg(v, units)) })
             }
           />
           <NumInput

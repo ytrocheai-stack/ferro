@@ -115,13 +115,14 @@ export interface ProgressPhoto {
 
 // ── Nutrición ─────────────────────────────────────────────────────────
 
-/** Alimento guardado en Dexie: propio del usuario o cacheado de Open Food Facts.
- *  (Los ~250 alimentos base viven en un JSON estático, no en Dexie.) */
+/** Alimento guardado en Dexie: propio del usuario, cacheado de Open Food Facts, o un
+ *  alimento base "materializado" al marcarlo como favorito. (Los ~250 alimentos base
+ *  viven en un JSON estático; solo entran en Dexie si el usuario los marca favoritos.) */
 export interface Food {
   id: string
   name: string
   brand?: string
-  source: 'custom' | 'off'
+  source: 'custom' | 'off' | 'seed'
   /** código de barras (productos OFF) */
   offCode?: string
   kcal100: number

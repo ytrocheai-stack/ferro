@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+
 interface DrawableImage {
   width: number
   height: number
@@ -59,14 +61,18 @@ export async function resizeImageToBlob(file: File | Blob, maxSide = 1080, quali
   }
 }
 
-const urlCache = new WeakMap<Blob, string>()
-
-/** Object URL con caché por Blob (evita recrear en cada render). */
-export function blobUrl(blob: Blob): string {
-  let url = urlCache.get(blob)
-  if (!url) {
-    url = URL.createObjectURL(blob)
-    urlCache.set(blob, url)
-  }
+/** Object URL ligado al ciclo de vida del componente: se revoca al desmontar o al cambiar
+ *  el Blob (URL.createObjectURL sin revoke retiene el Blob en memoria indefinidamente). */
+export function useBlobUrl(blob: Blob | null | undefined): string | undefined {
+  const [url, setUrl] = useState<string>()
+  useEffect(() => {
+    if (!blob) {
+      setUrl(undefined)
+      return
+    }
+    const u = URL.createObjectURL(blob)
+    setUrl(u)
+    return () => URL.revokeObjectURL(u)
+  }, [blob])
   return url
 }

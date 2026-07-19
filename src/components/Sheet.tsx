@@ -13,6 +13,9 @@ interface SheetProps {
 
 const EXIT_MS = 160
 
+// Pila de sheets abiertos: con hojas anidadas, Escape solo debe cerrar la de más arriba.
+const sheetStack: symbol[] = []
+
 /** Hoja inferior con handle y gesto de arrastre hacia abajo para cerrar. */
 export function Sheet({ open, onClose, title, children, full = false }: SheetProps) {
   const panelRef = useRef<HTMLDivElement>(null)
@@ -45,13 +48,19 @@ export function Sheet({ open, onClose, title, children, full = false }: SheetPro
   }, [open])
 
   useEffect(() => {
-    if (!rendered) return
+    if (!open) return
+    const id = Symbol('sheet')
+    sheetStack.push(id)
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape' && sheetStack[sheetStack.length - 1] === id) onClose()
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [rendered, onClose])
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      const idx = sheetStack.indexOf(id)
+      if (idx >= 0) sheetStack.splice(idx, 1)
+    }
+  }, [open, onClose])
 
   if (!rendered) return null
 

@@ -5,6 +5,7 @@ import { es } from 'date-fns/locale'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { db } from '../db/db'
 import type { FoodLogEntry, MealKey } from '../db/types'
+import { macrosForGrams } from '../data/foods'
 import { useNutrition } from '../stores/nutrition'
 import { ema } from '../lib/stats'
 import { suggestCalorieAdjustment, weeklyChangePct } from '../lib/nutrition'
@@ -254,7 +255,9 @@ function MealSection({
   )
 }
 
-/** Ajusta la cantidad (g) de una entrada ya registrada, recalculando sus macros proporcionalmente. */
+/** Ajusta la cantidad (g) de una entrada ya registrada. Si el alimento origen sigue en Dexie,
+ *  recalcula exacto desde sus valores por 100 g; si no (base local, plato, borrado), escala
+ *  proporcionalmente (los redondeos previos pueden acumular una deriva mínima). */
 function EditGramsSheet({ entry, onClose }: { entry: FoodLogEntry | null; onClose: () => void }) {
   const [grams, setGrams] = useState('')
 
@@ -266,15 +269,17 @@ function EditGramsSheet({ entry, onClose }: { entry: FoodLogEntry | null; onClos
     if (!entry) return
     const g = parseDec(grams)
     if (g <= 0) return
+    const food = entry.foodId ? await db.foods.get(entry.foodId) : undefined
     const ratio = g / entry.grams
-    await db.foodLog.put({
-      ...entry,
-      grams: g,
-      kcal: Math.round(entry.kcal * ratio),
-      p: Math.round(entry.p * ratio * 10) / 10,
-      c: Math.round(entry.c * ratio * 10) / 10,
-      f: Math.round(entry.f * ratio * 10) / 10,
-    })
+    const macros = food
+      ? macrosForGrams(food, g)
+      : {
+          kcal: Math.round(entry.kcal * ratio),
+          p: Math.round(entry.p * ratio * 10) / 10,
+          c: Math.round(entry.c * ratio * 10) / 10,
+          f: Math.round(entry.f * ratio * 10) / 10,
+        }
+    await db.foodLog.put({ ...entry, grams: g, ...macros })
     onClose()
   }
 
@@ -311,17 +316,21 @@ function WeightTrendCard({ goal }: { goal: 'bulk' | 'maintain' | 'cut' }) {
 
   const points = useMemo(() => {
     if (!measurements) return []
-    const last30 = measurements.slice(-30)
-    const smoothed = ema(last30.map((m) => ({ date: m.date, value: m.value })))
-    return last30.map((m, i) => ({ date: m.date, real: m.value, trend: smoothed[i] }))
+    // EMA sobre TODA la serie y luego recortar: si se suaviza solo la ventana visible,
+    // el primer punto de tendencia es el peso crudo y el %/semana sale sesgado
+    const smoothed = ema(measurements.map((m) => ({ date: m.date, value: m.value })))
+    const start = Math.max(0, measurements.length - 30)
+    return measurements
+      .slice(start)
+      .map((m, i) => ({ date: m.date, real: m.value, trend: smoothed[start + i] }))
   }, [measurements])
 
   const pct = useMemo(() => weeklyChangePct(points), [points])
   const suggestion = suggestCalorieAdjustment(goal, pct)
 
   const save = async () => {
-    const n = parseFloat(value.replace(',', '.'))
-    if (!Number.isFinite(n) || n <= 0) return
+    const n = parseDec(value)
+    if (n <= 0) return
     await db.measurements.put({ id: uid(), date: Date.now(), kind: 'weight', value: n })
     setValue('')
     setLogOpen(false)

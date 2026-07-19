@@ -47,6 +47,7 @@ export async function exportWorkoutsCsv(): Promise<void> {
     }
   }
 
-  const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
+  // BOM UTF-8: sin él, Excel en Windows interpreta el CSV como ANSI y rompe acentos/ñ
+  const blob = new Blob(['\uFEFF' + rows.join('\n')], { type: 'text/csv;charset=utf-8' })
   await shareOrDownloadFile(blob, `nextrep-series-${format(new Date(), 'yyyy-MM-dd')}.csv`, 'text/csv')
 }

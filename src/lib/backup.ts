@@ -72,11 +72,40 @@ export interface ImportResult {
   customExercises: number
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null
+}
+
+/** Validación mínima por registro: un backup truncado o editado a mano no debe poder
+ *  reemplazar los datos buenos con registros que luego rompen las páginas al leerlos. */
+function validateBackup(data: Partial<BackupFile>): string | null {
+  const badWorkout = (w: unknown) =>
+    !isRecord(w) ||
+    typeof w.id !== 'string' ||
+    typeof w.startedAt !== 'number' ||
+    !Array.isArray(w.exercises)
+  if (data.workouts!.some(badWorkout)) return 'entrenos incompletos'
+  const badRoutine = (r: unknown) =>
+    !isRecord(r) || typeof r.id !== 'string' || !Array.isArray(r.exercises)
+  if ((data.routines ?? []).some(badRoutine)) return 'rutinas incompletas'
+  const badMeasurement = (m: unknown) =>
+    !isRecord(m) || typeof m.id !== 'string' || typeof m.date !== 'number'
+  if ((data.measurements ?? []).some(badMeasurement)) return 'medidas incompletas'
+  const badEntry = (e: unknown) =>
+    !isRecord(e) || typeof e.id !== 'string' || typeof e.date !== 'string'
+  if ((data.foodLog ?? []).some(badEntry)) return 'registro de comidas incompleto'
+  return null
+}
+
 /** Reemplaza todos los datos locales (excepto fotos) por los del archivo. */
 export async function importBackup(file: File): Promise<ImportResult> {
   const data = JSON.parse(await file.text()) as Partial<BackupFile>
   if (data?.app !== 'ferro' || !Array.isArray(data.workouts)) {
     throw new Error('El archivo no es un backup válido de NextRep')
+  }
+  const problem = validateBackup(data)
+  if (problem) {
+    throw new Error(`El backup está dañado (${problem}); no se ha modificado nada`)
   }
   await db.transaction(
     'rw',

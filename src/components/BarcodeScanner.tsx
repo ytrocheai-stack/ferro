@@ -17,6 +17,9 @@ export function BarcodeScanner({ onDetect }: { onDetect: (code: string) => void 
   const [error, setError] = useState<string | null>(null)
   const [manual, setManual] = useState('')
   const supported = typeof window !== 'undefined' && 'BarcodeDetector' in window
+  // ref para no reiniciar la cámara cuando el padre re-renderiza con un callback nuevo
+  const onDetectRef = useRef(onDetect)
+  onDetectRef.current = onDetect
 
   useEffect(() => {
     if (!supported) return
@@ -43,7 +46,7 @@ export function BarcodeScanner({ onDetect }: { onDetect: (code: string) => void 
           try {
             const codes = await detector.detect(videoRef.current)
             if (codes[0]) {
-              onDetect(codes[0].rawValue)
+              onDetectRef.current(codes[0].rawValue)
               return
             }
           } catch {
@@ -62,7 +65,7 @@ export function BarcodeScanner({ onDetect }: { onDetect: (code: string) => void 
       cancelAnimationFrame(raf)
       stream?.getTracks().forEach((t) => t.stop())
     }
-  }, [supported, onDetect])
+  }, [supported])
 
   if (!supported || error) {
     return (

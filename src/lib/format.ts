@@ -84,7 +84,7 @@ export function uid(): string {
 
 /** Convierte un input numérico de texto aceptando coma decimal española ("12,5" -> 12.5). */
 export function parseDec(s: string): number {
-  const n = parseFloat(s.trim().replace(',', '.'))
+  const n = parseFloat(s.trim().replace(/,/g, '.'))
   return Number.isFinite(n) ? n : 0
 }
 

@@ -10,6 +10,15 @@ export function vibrate(pattern: number | number[] = [250, 120, 250]) {
 
 let audioCtx: AudioContext | null = null
 
+/** Safari antiguo solo expone `webkitAudioContext`. */
+function audioContextCtor(): typeof AudioContext | null {
+  return (
+    window.AudioContext ??
+    (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext ??
+    null
+  )
+}
+
 /**
  * iOS solo permite crear/reanudar el `AudioContext` dentro de un gesto de usuario; el bip del
  * temporizador se dispara desde un `setTimeout` (sin gesto), así que sin este "desbloqueo" previo
@@ -17,7 +26,9 @@ let audioCtx: AudioContext | null = null
  */
 export function unlockAudio() {
   try {
-    audioCtx ??= new AudioContext()
+    const Ctor = audioContextCtor()
+    if (!Ctor) return
+    audioCtx ??= new Ctor()
     if (audioCtx.state === 'suspended') void audioCtx.resume()
   } catch {
     /* sin audio */
@@ -27,7 +38,9 @@ export function unlockAudio() {
 /** Doble bip corto con WebAudio (no requiere assets). */
 export function beep() {
   try {
-    audioCtx ??= new AudioContext()
+    const Ctor = audioContextCtor()
+    if (!Ctor) return
+    audioCtx ??= new Ctor()
     const ctx = audioCtx
     if (ctx.state === 'suspended') void ctx.resume()
     const tone = (freq: number, start: number, dur: number) => {

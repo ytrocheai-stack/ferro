@@ -15,8 +15,8 @@ import { es } from 'date-fns/locale'
 import { db } from '../db/db'
 import type { Measurement, MeasurementKind, ProgressPhoto } from '../db/types'
 import { MEASUREMENT_LABELS, MEASUREMENT_ORDER, MEASUREMENT_UNIT } from '../data/measurementLabels'
-import { resizeImageToBlob, blobUrl } from '../lib/photos'
-import { formatShortDate, uid } from '../lib/format'
+import { resizeImageToBlob, useBlobUrl } from '../lib/photos'
+import { formatShortDate, parseDec, uid } from '../lib/format'
 import { toastUndo, useToasts } from '../stores/toasts'
 import { Select } from '../components/Select'
 import { Confirm, Sheet } from '../components/Sheet'
@@ -119,8 +119,8 @@ function AddMeasurementSheet({ open, onClose }: { open: boolean; onClose: () => 
   const [value, setValue] = useState('')
 
   const save = async () => {
-    const n = parseFloat(value.replace(',', '.'))
-    if (!Number.isFinite(n) || n <= 0) return
+    const n = parseDec(value)
+    if (n <= 0) return
     await db.measurements.put({ id: uid(), date: Date.now(), kind, value: n })
     setValue('')
     onClose()
@@ -256,7 +256,7 @@ function PhotosTab() {
   const [uploading, setUploading] = useState(false)
   const [compareMode, setCompareMode] = useState(false)
   const [compareIds, setCompareIds] = useState<string[]>([])
-  const [confirmDelete, setConfirmDelete] = useState<ProgressPhoto | null>(null)
+  const [viewer, setViewer] = useState<ProgressPhoto | null>(null)
 
   const onFile = async (file: File | undefined) => {
     if (!file) return
@@ -280,8 +280,12 @@ function PhotosTab() {
     })
   }
 
-  const compareSelection =
-    compareIds.length === 2 ? compareIds.map((id) => photos?.find((p) => p.id === id)!).filter(Boolean) : null
+  const compareSelection = useMemo(() => {
+    if (compareIds.length !== 2 || !photos) return null
+    const a = photos.find((p) => p.id === compareIds[0])
+    const b = photos.find((p) => p.id === compareIds[1])
+    return a && b ? ([a, b] as const) : null
+  }, [compareIds, photos])
 
   if (photos === undefined) return <SkeletonChart />
 
@@ -319,23 +323,14 @@ function PhotosTab() {
         </div>
       ) : (
         <div className="grid grid-cols-3 gap-1.5">
-          {photos.map((p) => {
-            const picked = compareIds.includes(p.id)
-            return (
-              <button
-                key={p.id}
-                className={`pressable relative aspect-[3/4] overflow-hidden rounded-lg ${
-                  picked ? 'ring-2 ring-primary' : ''
-                }`}
-                onClick={() => (compareMode ? toggleCompare(p.id) : setConfirmDelete(p))}
-              >
-                <img src={blobUrl(p.blob)} className="h-full w-full object-cover" alt={formatShortDate(p.date)} />
-                <span className="absolute inset-x-0 bottom-0 bg-black/60 px-1 py-0.5 text-center text-[9px] font-semibold text-white">
-                  {formatShortDate(p.date)}
-                </span>
-              </button>
-            )
-          })}
+          {photos.map((p) => (
+            <PhotoCell
+              key={p.id}
+              photo={p}
+              picked={compareIds.includes(p.id)}
+              onClick={() => (compareMode ? toggleCompare(p.id) : setViewer(p))}
+            />
+          ))}
         </div>
       )}
 
@@ -351,15 +346,70 @@ function PhotosTab() {
         />
       )}
 
+      <PhotoViewerSheet photo={viewer} onClose={() => setViewer(null)} />
+    </div>
+  )
+}
+
+function PhotoCell({
+  photo,
+  picked,
+  onClick,
+}: {
+  photo: ProgressPhoto
+  picked: boolean
+  onClick: () => void
+}) {
+  const url = useBlobUrl(photo.blob)
+  return (
+    <button
+      className={`pressable relative aspect-[3/4] overflow-hidden rounded-lg bg-surface-2 ${
+        picked ? 'ring-2 ring-primary' : ''
+      }`}
+      onClick={onClick}
+    >
+      {url && <img src={url} className="h-full w-full object-cover" alt={formatShortDate(photo.date)} />}
+      <span className="absolute inset-x-0 bottom-0 bg-black/60 px-1 py-0.5 text-center text-[9px] font-semibold text-white">
+        {formatShortDate(photo.date)}
+      </span>
+    </button>
+  )
+}
+
+/** Visor de una foto a tamaño completo, con la fecha y el borrado (confirmado) dentro. */
+function PhotoViewerSheet({ photo, onClose }: { photo: ProgressPhoto | null; onClose: () => void }) {
+  const url = useBlobUrl(photo?.blob)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  return (
+    <Sheet open={photo !== null} onClose={onClose} title={photo ? formatShortDate(photo.date) : ''}>
+      {photo && (
+        <>
+          <div className="flex items-center justify-center overflow-hidden rounded-2xl bg-surface-2">
+            {url && (
+              <img src={url} className="max-h-[62dvh] w-full object-contain" alt={formatShortDate(photo.date)} />
+            )}
+          </div>
+          <button className="btn btn-danger mb-2 mt-3 w-full" onClick={() => setConfirmDelete(true)}>
+            <IconTrash size={16} />
+            Eliminar foto
+          </button>
+        </>
+      )}
       <Confirm
-        open={!!confirmDelete}
-        onClose={() => setConfirmDelete(null)}
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
         title="¿Eliminar esta foto?"
         confirmLabel="Eliminar"
         danger
-        onConfirm={() => void db.photos.delete(confirmDelete!.id)}
+        onConfirm={() => {
+          const snap = photo
+          if (!snap) return
+          void db.photos.delete(snap.id)
+          toastUndo('Foto eliminada', () => void db.photos.put(snap))
+          onClose()
+        }}
       />
-    </div>
+    </Sheet>
   )
 }
 
@@ -378,18 +428,24 @@ function CompareSheet({
   const [orderedBA, setOrderedBA] = useState(before.date <= after.date)
   const left = orderedBA ? before : after
   const right = orderedBA ? after : before
+  const leftUrl = useBlobUrl(left.blob)
+  const rightUrl = useBlobUrl(right.blob)
 
   return (
     <Sheet open={open} onClose={onClose} title="Comparar">
       <div className="relative aspect-[3/4] w-full overflow-hidden rounded-2xl bg-surface-2">
-        <img src={blobUrl(right.blob)} className="absolute inset-0 h-full w-full object-cover" alt="después" />
+        {rightUrl && (
+          <img src={rightUrl} className="absolute inset-0 h-full w-full object-cover" alt="después" />
+        )}
         <div className="absolute inset-0 overflow-hidden" style={{ width: `${pos}%` }}>
-          <img
-            src={blobUrl(left.blob)}
-            className="h-full object-cover"
-            style={{ width: `${(100 / pos) * 100}%`, maxWidth: 'none' }}
-            alt="antes"
-          />
+          {leftUrl && (
+            <img
+              src={leftUrl}
+              className="h-full object-cover"
+              style={{ width: `${(100 / pos) * 100}%`, maxWidth: 'none' }}
+              alt="antes"
+            />
+          )}
         </div>
         <div className="absolute inset-y-0 w-0.5 bg-white" style={{ left: `${pos}%` }} />
         <span className="absolute left-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white">

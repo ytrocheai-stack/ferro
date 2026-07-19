@@ -1,15 +1,16 @@
 import { useState } from 'react'
 import { db } from '../db/db'
 import type { MealKey } from '../db/types'
-import { macrosForGrams, markFoodUsed, saveCustomFood, searchFoods, useFoodCatalog, useOnline, type LocalFood } from '../data/foods'
+import { macrosForGrams, markFoodUsed, saveCustomFood, searchFoods, toggleFavoriteFood, useFoodCatalog, useOnline, type LocalFood } from '../data/foods'
 import { lookupBarcode, searchOpenFoodFacts } from '../lib/openFoodFacts'
 import { parseDec, uid } from '../lib/format'
 import { Sheet } from './Sheet'
 import { BarcodeScanner } from './BarcodeScanner'
+import { DishesTab } from './DishPicker'
 import { SkeletonList } from './Skeleton'
-import { IconBarcode, IconPlus, IconSearch, IconStar } from './icons'
+import { IconBarcode, IconFood, IconPlus, IconSearch, IconStar } from './icons'
 
-type Tab = 'local' | 'online' | 'scan'
+type Tab = 'local' | 'dishes' | 'online' | 'scan'
 
 export function FoodPickerSheet({
   open,
@@ -57,9 +58,13 @@ export function FoodPickerSheet({
 
   return (
     <Sheet open={open} onClose={close} title="Añadir alimento" full>
-      <div className="flex gap-2 pb-3">
+      <div className="flex gap-2 overflow-x-auto pb-3">
         <button className={`chip ${tab === 'local' ? 'chip-active' : ''}`} onClick={() => setTab('local')}>
           Local
+        </button>
+        <button className={`chip ${tab === 'dishes' ? 'chip-active' : ''}`} onClick={() => setTab('dishes')}>
+          <IconFood size={13} />
+          Platos
         </button>
         <button className={`chip ${tab === 'online' ? 'chip-active' : ''}`} onClick={() => setTab('online')}>
           Buscar online
@@ -71,6 +76,7 @@ export function FoodPickerSheet({
       </div>
 
       {tab === 'local' && <LocalTab onPick={setPicked} />}
+      {tab === 'dishes' && <DishesTab date={date} meal={meal} onLogged={close} />}
       {tab === 'online' && <OnlineTab online={online} onPick={setPicked} />}
       {tab === 'scan' && <ScanTab online={online} onPick={setPicked} />}
     </Sheet>
@@ -104,7 +110,7 @@ function LocalTab({ onPick }: { onPick: (f: LocalFood) => void }) {
       </button>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {results.map((f) => (
-          <FoodRow key={f.id} food={f} onClick={() => onPick(f)} />
+          <FoodRow key={f.id} food={f} onClick={() => onPick(f)} onToggleFavorite={(x) => void toggleFavoriteFood(x)} />
         ))}
         {results.length === 0 && <p className="py-8 text-center text-sm text-muted">Sin resultados.</p>}
       </div>
@@ -135,6 +141,7 @@ function OnlineTab({ online, onPick }: { online: boolean; onPick: (f: LocalFood)
           f100: f.f100,
           servingG: f.servingG ?? 100,
           source: 'off',
+          favorite: f.favorite,
         })),
       )
     } catch {
@@ -172,7 +179,16 @@ function OnlineTab({ online, onPick }: { online: boolean; onPick: (f: LocalFood)
       {results && !loading && (
         <div className="min-h-0 flex-1 overflow-y-auto">
           {results.map((f) => (
-            <FoodRow key={f.id} food={f} onClick={() => onPick(f)} />
+            <FoodRow
+              key={f.id}
+              food={f}
+              onClick={() => onPick(f)}
+              onToggleFavorite={(x) => {
+                void toggleFavoriteFood(x)
+                // los resultados online son un snapshot local: reflejar el cambio a mano
+                setResults((rs) => rs?.map((y) => (y.id === x.id ? { ...y, favorite: !y.favorite } : y)) ?? rs)
+              }}
+            />
           ))}
           {results.length === 0 && <p className="py-8 text-center text-sm text-muted">Sin resultados.</p>}
         </div>
@@ -188,10 +204,7 @@ function ScanTab({ online, onPick }: { online: boolean; onPick: (f: LocalFood) =
   const handleDetect = async (raw: string) => {
     if (code) return
     setCode(raw)
-    if (!online) {
-      setState('error')
-      return
-    }
+    // sin conexión también se intenta: lookupBarcode resuelve primero desde la caché Dexie
     setState('loading')
     try {
       const food = await lookupBarcode(raw)
@@ -214,17 +227,13 @@ function ScanTab({ online, onPick }: { online: boolean; onPick: (f: LocalFood) =
     }
   }
 
-  if (!online && !code) {
-    return (
-      <p className="py-8 text-center text-sm text-muted">
-        Sin conexión: el escáner necesita internet para identificar el producto. Usa «Local» mientras
-        tanto.
-      </p>
-    )
-  }
-
   return (
     <div>
+      {!online && !code && (
+        <p className="pb-2 text-center text-xs text-muted">
+          Sin conexión: solo se reconocerán códigos ya escaneados o buscados antes.
+        </p>
+      )}
       {!code && <BarcodeScanner onDetect={(c) => void handleDetect(c)} />}
       {state === 'loading' && <p className="pt-3 text-center text-sm text-muted">Buscando código {code}…</p>}
       {state === 'notfound' && (
@@ -237,7 +246,9 @@ function ScanTab({ online, onPick }: { online: boolean; onPick: (f: LocalFood) =
       )}
       {state === 'error' && (
         <div className="pt-3 text-center text-sm text-danger">
-          No se pudo consultar el producto (sin conexión o error de red).
+          {online
+            ? 'No se pudo consultar el producto (error de red).'
+            : 'Sin conexión y este código no está en la caché local.'}
           <button className="mt-2 block w-full text-primary" onClick={() => setCode(null)}>
             Reintentar
           </button>
@@ -247,22 +258,36 @@ function ScanTab({ online, onPick }: { online: boolean; onPick: (f: LocalFood) =
   )
 }
 
-function FoodRow({ food, onClick }: { food: LocalFood; onClick: () => void }) {
+function FoodRow({
+  food,
+  onClick,
+  onToggleFavorite,
+}: {
+  food: LocalFood
+  onClick: () => void
+  onToggleFavorite?: (f: LocalFood) => void
+}) {
   return (
-    <button
-      onClick={onClick}
-      className="flex w-full items-center justify-between gap-2 border-b border-border/60 py-2.5 text-left"
-    >
-      <div className="min-w-0 flex-1">
+    <div className="flex w-full items-center gap-1 border-b border-border/60">
+      <button onClick={onClick} className="min-w-0 flex-1 py-2.5 text-left">
         <div className="flex items-center gap-1.5">
           <span className="truncate text-sm font-semibold">{food.name}</span>
-          {food.favorite && <IconStar size={12} className="shrink-0 text-warning" />}
+          {food.favorite && !onToggleFavorite && <IconStar size={12} className="shrink-0 text-warning" />}
         </div>
         <div className="text-xs text-muted tabular-nums">
           {food.kcal100} kcal · P{food.p100} C{food.c100} G{food.f100} /100g
         </div>
-      </div>
-    </button>
+      </button>
+      {onToggleFavorite && (
+        <button
+          className="pressable shrink-0 p-2"
+          onClick={() => onToggleFavorite(food)}
+          aria-label={food.favorite ? 'Quitar de favoritos' : 'Marcar como favorito'}
+        >
+          <IconStar size={17} className={food.favorite ? 'text-warning' : 'text-muted/30'} />
+        </button>
+      )}
+    </div>
   )
 }
 

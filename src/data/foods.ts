@@ -43,18 +43,20 @@ function fromDbFood(f: Food): LocalFood {
     c100: f.c100,
     f100: f.f100,
     servingG: f.servingG ?? 100,
-    source: f.source === 'custom' ? 'custom' : 'off',
+    source: f.source,
     favorite: f.favorite,
     usedAt: f.usedAt,
   }
 }
 
-/** Catálogo combinado: seed local + propios/caché de Dexie, en vivo. */
+/** Catálogo combinado: seed local + propios/caché de Dexie, en vivo. Un alimento base
+ *  materializado en Dexie (favorito) sustituye a su copia estática para no duplicarlo. */
 export function useFoodCatalog() {
   const dbFoods = useLiveQuery(() => db.foods.toArray(), [], [] as Food[])
   const all = useMemo(() => {
     const custom = dbFoods.map(fromDbFood)
-    return [...custom, ...seedFoods()]
+    const overridden = new Set(dbFoods.map((f) => f.id))
+    return [...custom, ...seedFoods().filter((s) => !overridden.has(s.id))]
   }, [dbFoods])
   return all
 }
@@ -62,8 +64,9 @@ export function useFoodCatalog() {
 export function searchFoods(all: LocalFood[], query: string, limit = 40): LocalFood[] {
   const q = normalize(query.trim())
   if (!q) {
+    // favoritos fijados arriba; el resto por recencia de uso
     return [...all]
-      .sort((a, b) => (b.usedAt ?? 0) - (a.usedAt ?? 0) || (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0))
+      .sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0) || (b.usedAt ?? 0) - (a.usedAt ?? 0))
       .slice(0, limit)
   }
   const tokens = q.split(/\s+/)
@@ -75,7 +78,10 @@ export function searchFoods(all: LocalFood[], query: string, limit = 40): LocalF
     .slice(0, limit)
 }
 
-export function macrosForGrams(f: LocalFood, grams: number) {
+export function macrosForGrams(
+  f: { kcal100: number; p100: number; c100: number; f100: number },
+  grams: number,
+) {
   const ratio = grams / 100
   return {
     kcal: Math.round(f.kcal100 * ratio),
@@ -92,9 +98,31 @@ export async function markFoodUsed(foodId: string) {
 }
 
 export async function toggleFavoriteFood(food: LocalFood) {
-  if (food.source === 'seed') return // los de la base local no se marcan (no están en Dexie)
   const existing = await db.foods.get(food.id)
-  if (existing) await db.foods.put({ ...existing, favorite: !existing.favorite })
+  if (existing) {
+    if (food.source === 'seed' && existing.favorite) {
+      // desmarcar un alimento base: se borra la copia y vuelve a valer el registro estático
+      await db.foods.delete(food.id)
+    } else {
+      await db.foods.put({ ...existing, favorite: !existing.favorite })
+    }
+    return
+  }
+  if (food.source === 'seed') {
+    // materializar el alimento base en Dexie para poder recordar el favorito
+    await db.foods.put({
+      id: food.id,
+      name: food.name,
+      source: 'seed',
+      kcal100: food.kcal100,
+      p100: food.p100,
+      c100: food.c100,
+      f100: food.f100,
+      servingG: food.servingG,
+      favorite: true,
+      usedAt: 0,
+    })
+  }
 }
 
 export async function saveCustomFood(input: {

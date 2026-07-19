@@ -5,6 +5,8 @@ import type { Routine, SetType, Workout, WorkoutExercise } from '../db/types'
 import { completedSetCount, detectPRs, workoutVolume } from '../lib/stats'
 import { uid } from '../lib/format'
 import { vibrate } from '../lib/notify'
+import { useSettings } from './settings'
+import { useToasts } from './toasts'
 
 export interface ActiveSet {
   type: SetType
@@ -94,15 +96,25 @@ export function defaultWorkoutName(): string {
   return 'Entreno de noche'
 }
 
-/** Sets completados del último entreno que incluyó el ejercicio. */
-async function prevSetsFor(exerciseId: string, before?: number, excludeId?: string): Promise<PrevSet[]> {
-  const workouts = await db.workouts.orderBy('startedAt').reverse().toArray()
+/** Historial completo, del más reciente al más antiguo. Cargar UNA vez por lote
+ *  y pasar a `prevSetsIn` (evita releer toda la tabla por cada ejercicio). */
+async function recentWorkouts(): Promise<Workout[]> {
+  return db.workouts.orderBy('startedAt').reverse().toArray()
+}
+
+/** Sets de trabajo (completados, sin calentamientos) del último entreno con el ejercicio. */
+function prevSetsIn(
+  workouts: Workout[],
+  exerciseId: string,
+  before?: number,
+  excludeId?: string,
+): PrevSet[] {
   for (const w of workouts) {
     if (excludeId && w.id === excludeId) continue
     if (before !== undefined && w.startedAt >= before) continue
     const ex = w.exercises.find((e) => e.exerciseId === exerciseId)
     if (ex) {
-      const sets = ex.sets.filter((s) => s.completed)
+      const sets = ex.sets.filter((s) => s.completed && s.type !== 'warmup')
       if (sets.length)
         return sets.map((s) => ({
           weightKg: s.weightKg,
@@ -118,14 +130,24 @@ async function prevSetsFor(exerciseId: string, before?: number, excludeId?: stri
 
 const emptySet = (): ActiveSet => ({ type: 'normal', weightKg: null, reps: null, completed: false })
 
-/** Valor efectivo del placeholder de la fila i (anterior o fila de arriba). */
+/** Serie previa que corresponde a la fila i: las filas de calentamiento de hoy no consumen
+ *  índice y las series previas de calentamiento no cuentan (solo series de trabajo). */
+export function prevWorkingSetFor(ex: ActiveExercise, i: number): PrevSet | undefined {
+  if (ex.sets[i]?.type === 'warmup') return undefined
+  const work = ex.prev.filter((p) => p.type !== 'warmup')
+  const ordinal = ex.sets.slice(0, i).filter((s) => s.type !== 'warmup').length
+  return work[ordinal]
+}
+
+/** Valor efectivo del placeholder de la fila i (serie de trabajo anterior o fila de arriba). */
 export function placeholderFor(ex: ActiveExercise, i: number): PrevSet {
   const above = i > 0 ? ex.sets[i - 1] : null
+  const prev = prevWorkingSetFor(ex, i)
   return {
-    weightKg: ex.prev[i]?.weightKg ?? above?.weightKg ?? 0,
-    reps: ex.prev[i]?.reps ?? above?.reps ?? 0,
-    durationSec: ex.prev[i]?.durationSec ?? above?.durationSec ?? 0,
-    distanceM: ex.prev[i]?.distanceM ?? above?.distanceM ?? 0,
+    weightKg: prev?.weightKg ?? above?.weightKg ?? 0,
+    reps: prev?.reps ?? above?.reps ?? 0,
+    durationSec: prev?.durationSec ?? above?.durationSec ?? 0,
+    distanceM: prev?.distanceM ?? above?.distanceM ?? 0,
   }
 }
 
@@ -137,16 +159,14 @@ function mapExercise(
   return { ...session, exercises: session.exercises.map((e) => (e.uid === exUid ? fn(e) : e)) }
 }
 
-/** ¿Es el último ejercicio de su superserie (o no está agrupado)? */
+/** ¿Es el último ejercicio de su tramo contiguo de superserie (o no está agrupado)?
+ *  Por adyacencia: si reordenar partió el grupo, cada tramo contiguo descansa por su cuenta. */
 function isLastOfSupersetGroup(session: ActiveSession, exUid: string): boolean {
   const list = session.exercises
   const i = list.findIndex((e) => e.uid === exUid)
   const g = list[i]?.supersetGroup
   if (g === undefined) return true
-  for (let j = i + 1; j < list.length; j++) {
-    if (list[j].supersetGroup === g) return false
-  }
-  return true
+  return list[i + 1]?.supersetGroup !== g
 }
 
 export const useActive = create<ActiveState>()(
@@ -163,19 +183,18 @@ export const useActive = create<ActiveState>()(
       },
 
       startFromRoutine: async (routine) => {
-        const exercises: ActiveExercise[] = await Promise.all(
-          routine.exercises.map(async (re) => ({
-            uid: uid(),
-            exerciseId: re.exerciseId,
-            restSec: re.restSec,
-            notes: re.notes ?? '',
-            sets: Array.from({ length: Math.max(1, re.plannedSets) }, emptySet),
-            prev: await prevSetsFor(re.exerciseId),
-            supersetGroup: re.supersetGroup,
-            repRangeMin: re.repRangeMin,
-            repRangeMax: re.repRangeMax,
-          })),
-        )
+        const history = await recentWorkouts()
+        const exercises: ActiveExercise[] = routine.exercises.map((re) => ({
+          uid: uid(),
+          exerciseId: re.exerciseId,
+          restSec: re.restSec,
+          notes: re.notes ?? '',
+          sets: Array.from({ length: Math.max(1, re.plannedSets) }, emptySet),
+          prev: prevSetsIn(history, re.exerciseId),
+          supersetGroup: re.supersetGroup,
+          repRangeMin: re.repRangeMin,
+          repRangeMax: re.repRangeMax,
+        }))
         set({
           session: {
             startedAt: Date.now(),
@@ -189,25 +208,24 @@ export const useActive = create<ActiveState>()(
       },
 
       startEditing: async (workout) => {
-        const exercises: ActiveExercise[] = await Promise.all(
-          workout.exercises.map(async (we) => ({
-            uid: uid(),
-            exerciseId: we.exerciseId,
-            restSec: we.restSec,
-            notes: we.notes ?? '',
-            sets: we.sets.map((s) => ({
-              type: s.type,
-              weightKg: s.weightKg,
-              reps: s.reps,
-              completed: s.completed,
-              rpe: s.rpe,
-              durationSec: s.durationSec ?? null,
-              distanceM: s.distanceM ?? null,
-            })),
-            prev: await prevSetsFor(we.exerciseId, workout.startedAt, workout.id),
-            supersetGroup: we.supersetGroup,
+        const history = await recentWorkouts()
+        const exercises: ActiveExercise[] = workout.exercises.map((we) => ({
+          uid: uid(),
+          exerciseId: we.exerciseId,
+          restSec: we.restSec,
+          notes: we.notes ?? '',
+          sets: we.sets.map((s) => ({
+            type: s.type,
+            weightKg: s.weightKg,
+            reps: s.reps,
+            completed: s.completed,
+            rpe: s.rpe,
+            durationSec: s.durationSec ?? null,
+            distanceM: s.distanceM ?? null,
           })),
-        )
+          prev: prevSetsIn(history, we.exerciseId, workout.startedAt, workout.id),
+          supersetGroup: we.supersetGroup,
+        }))
         set({
           session: {
             startedAt: Date.now(),
@@ -230,7 +248,7 @@ export const useActive = create<ActiveState>()(
           notes: we.notes ?? '',
           sets: Array.from({ length: Math.max(1, we.sets.length) }, emptySet),
           prev: we.sets
-            .filter((s) => s.completed)
+            .filter((s) => s.completed && s.type !== 'warmup')
             .map((s) => ({
               weightKg: s.weightKg,
               reps: s.reps,
@@ -247,16 +265,15 @@ export const useActive = create<ActiveState>()(
       },
 
       addExercises: async (ids, defaultRestSec) => {
-        const added: ActiveExercise[] = await Promise.all(
-          ids.map(async (id) => ({
-            uid: uid(),
-            exerciseId: id,
-            restSec: defaultRestSec,
-            notes: '',
-            sets: [emptySet(), emptySet(), emptySet()],
-            prev: await prevSetsFor(id),
-          })),
-        )
+        const history = await recentWorkouts()
+        const added: ActiveExercise[] = ids.map((id) => ({
+          uid: uid(),
+          exerciseId: id,
+          restSec: defaultRestSec,
+          notes: '',
+          sets: [emptySet(), emptySet(), emptySet()],
+          prev: prevSetsIn(history, id),
+        }))
         const s = get().session
         if (!s) return
         set({ session: { ...s, exercises: [...s.exercises, ...added] } })
@@ -363,35 +380,56 @@ export const useActive = create<ActiveState>()(
       toggleSet: (exUid, index) => {
         const s = get().session
         if (!s) return
-        let justCompleted = false
-        let restSec = 0
-        const session = mapExercise(s, exUid, (e) => {
-          restSec = e.restSec
-          return {
-            ...e,
-            sets: e.sets.map((st, i) => {
-              if (i !== index) return st
-              if (st.completed) return { ...st, completed: false }
-              justCompleted = true
-              const ph = placeholderFor(e, i)
-              return {
-                ...st,
-                weightKg: st.weightKg ?? ph.weightKg,
-                reps: st.reps ?? ph.reps,
-                durationSec: st.durationSec ?? (ph.durationSec || null),
-                distanceM: st.distanceM ?? (ph.distanceM || null),
-                completed: true,
-              }
-            }),
-          }
-        })
+        const target = s.exercises.find((e) => e.uid === exUid)
+        const st = target?.sets[index]
+        if (!target || !st) return
+
+        if (st.completed) {
+          set({
+            session: mapExercise(s, exUid, (e) => ({
+              ...e,
+              sets: e.sets.map((x, i) => (i === index ? { ...x, completed: false } : x)),
+            })),
+          })
+          return
+        }
+
+        // Serie sin datos efectivos (ni escritos ni placeholder): no se puede completar
+        const ph = placeholderFor(target, index)
+        const reps = st.reps ?? ph.reps
+        const durationSec = st.durationSec ?? ph.durationSec ?? 0
+        const distanceM = st.distanceM ?? ph.distanceM ?? 0
+        if (!reps && !durationSec && !distanceM) {
+          useToasts.getState().show('Rellena la serie antes de completarla')
+          return
+        }
+
+        const session = mapExercise(s, exUid, (e) => ({
+          ...e,
+          sets: e.sets.map((x, i) =>
+            i === index
+              ? {
+                  ...x,
+                  weightKg: x.weightKg ?? ph.weightKg,
+                  reps: x.reps ?? ph.reps,
+                  durationSec: x.durationSec ?? (ph.durationSec || null),
+                  distanceM: x.distanceM ?? (ph.distanceM || null),
+                  completed: true,
+                }
+              : x,
+          ),
+        }))
         set({ session })
-        if (justCompleted) {
-          vibrate(15)
-          // en superserie, el descanso llega al completar el último ejercicio del grupo
-          if (!s.editingWorkoutId && restSec > 0 && isLastOfSupersetGroup(session, exUid)) {
-            get().startRest(restSec)
-          }
+        if (useSettings.getState().vibration) vibrate(15)
+        // en superserie, el descanso llega al completar el último ejercicio del grupo;
+        // tras un calentamiento no se descansa
+        if (
+          !s.editingWorkoutId &&
+          target.restSec > 0 &&
+          st.type !== 'warmup' &&
+          isLastOfSupersetGroup(session, exUid)
+        ) {
+          get().startRest(target.restSec)
         }
       },
 
@@ -446,48 +484,14 @@ export const useActive = create<ActiveState>()(
       skipRest: () => set({ rest: null }),
 
       finish: async () => {
-        const s = get().session
-        if (!s) return null
-        const exercises: WorkoutExercise[] = s.exercises
-          .map((e) => ({
-            exerciseId: e.exerciseId,
-            notes: e.notes.trim() || undefined,
-            restSec: e.restSec,
-            supersetGroup: e.supersetGroup,
-            sets: e.sets
-              .filter((st) => st.completed)
-              .map((st) => ({
-                type: st.type,
-                weightKg: st.weightKg ?? 0,
-                reps: st.reps ?? 0,
-                completed: true,
-                rpe: st.rpe,
-                durationSec: st.durationSec || undefined,
-                distanceM: st.distanceM || undefined,
-              })),
-          }))
-          .filter((e) => e.sets.length > 0)
-        if (exercises.length === 0) return null
-
-        const isEdit = !!s.editingWorkoutId
-        const startedAt = isEdit ? (s.originalStartedAt ?? s.startedAt) : s.startedAt
-        const endedAt = isEdit ? (s.originalEndedAt ?? Date.now()) : Date.now()
-        const all = await db.workouts.orderBy('startedAt').toArray()
-        const history = all.filter((w) => w.startedAt < startedAt && w.id !== s.editingWorkoutId)
-        const workout: Workout = {
-          id: s.editingWorkoutId ?? uid(),
-          name: s.name.trim() || defaultWorkoutName(),
-          startedAt,
-          endedAt,
-          exercises,
-          volumeKg: Math.round(workoutVolume(exercises) * 10) / 10,
-          totalSets: completedSetCount(exercises),
-          prs: detectPRs(exercises, history),
-          notes: s.notes.trim() || undefined,
+        // guard de reentrada: un doble toque en "Finalizar" no debe duplicar el entreno
+        if (finishing) return null
+        finishing = true
+        try {
+          return await doFinish(get, set)
+        } finally {
+          finishing = false
         }
-        await db.workouts.put(workout)
-        set({ session: null, rest: null })
-        return workout.id
       },
 
       discard: () => set({ session: null, rest: null }),
@@ -495,6 +499,63 @@ export const useActive = create<ActiveState>()(
     {
       name: 'ferro-active',
       partialize: (s) => ({ session: s.session, rest: s.rest }) as ActiveState,
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<ActiveState>
+        // un descanso que venció mientras la app estaba cerrada se descarta en silencio
+        // (si no, el overlay dispararía vibración/notificación fantasma al reabrir)
+        const rest = p.rest && p.rest.endsAt > Date.now() ? p.rest : null
+        return { ...current, ...p, rest }
+      },
     },
   ),
 )
+
+let finishing = false
+
+type Getter = () => ActiveState
+type Setter = (partial: Partial<ActiveState>) => void
+
+async function doFinish(get: Getter, set: Setter): Promise<string | null> {
+  const s = get().session
+  if (!s) return null
+  const exercises: WorkoutExercise[] = s.exercises
+    .map((e) => ({
+      exerciseId: e.exerciseId,
+      notes: e.notes.trim() || undefined,
+      restSec: e.restSec,
+      supersetGroup: e.supersetGroup,
+      sets: e.sets
+        .filter((st) => st.completed)
+        .map((st) => ({
+          type: st.type,
+          weightKg: st.weightKg ?? 0,
+          reps: st.reps ?? 0,
+          completed: true,
+          rpe: st.rpe,
+          durationSec: st.durationSec || undefined,
+          distanceM: st.distanceM || undefined,
+        })),
+    }))
+    .filter((e) => e.sets.length > 0)
+  if (exercises.length === 0) return null
+
+  const isEdit = !!s.editingWorkoutId
+  const startedAt = isEdit ? (s.originalStartedAt ?? s.startedAt) : s.startedAt
+  const endedAt = isEdit ? (s.originalEndedAt ?? Date.now()) : Date.now()
+  const all = await db.workouts.orderBy('startedAt').toArray()
+  const history = all.filter((w) => w.startedAt < startedAt && w.id !== s.editingWorkoutId)
+  const workout: Workout = {
+    id: s.editingWorkoutId ?? uid(),
+    name: s.name.trim() || defaultWorkoutName(),
+    startedAt,
+    endedAt,
+    exercises,
+    volumeKg: Math.round(workoutVolume(exercises) * 10) / 10,
+    totalSets: completedSetCount(exercises),
+    prs: detectPRs(exercises, history),
+    notes: s.notes.trim() || undefined,
+  }
+  await db.workouts.put(workout)
+  set({ session: null, rest: null })
+  return workout.id
+}
