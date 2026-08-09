@@ -1,0 +1,21 @@
+workout_id,workout_title,start_time,end_time,exercise_template_id,exercise_title,set_type,weight_kg,reps
+w01,Upper A,2026-06-15T18:00:00Z,2026-06-15T19:00:00Z,bench,Bench Press,normal,55,8
+w01,Upper A,2026-06-15T18:00:00Z,2026-06-15T19:00:00Z,row,Barbell Row,normal,50,10
+w02,Lower A,2026-06-20T18:00:00Z,2026-06-20T19:05:00Z,squat,Back Squat,normal,80,8
+w02,Lower A,2026-06-20T18:00:00Z,2026-06-20T19:05:00Z,rdl,Romanian Deadlift,normal,70,10
+w03,Upper B,2026-06-29T18:00:00Z,2026-06-29T19:00:00Z,bench,Bench Press,normal,57.5,8
+w03,Upper B,2026-06-29T18:00:00Z,2026-06-29T19:00:00Z,row,Barbell Row,normal,52.5,10
+w04,Lower B,2026-07-04T18:00:00Z,2026-07-04T19:05:00Z,squat,Back Squat,normal,82.5,8
+w04,Lower B,2026-07-04T18:00:00Z,2026-07-04T19:05:00Z,rdl,Romanian Deadlift,normal,72.5,10
+w05,Upper A,2026-07-13T18:00:00Z,2026-07-13T19:00:00Z,bench,Bench Press,normal,60,8
+w05,Upper A,2026-07-13T18:00:00Z,2026-07-13T19:00:00Z,row,Barbell Row,normal,55,10
+w06,Lower A,2026-07-18T18:00:00Z,2026-07-18T19:05:00Z,squat,Back Squat,normal,85,8
+w06,Lower A,2026-07-18T18:00:00Z,2026-07-18T19:05:00Z,rdl,Romanian Deadlift,normal,75,10
+w07,Upper B,2026-07-27T18:00:00Z,2026-07-27T19:00:00Z,bench,Bench Press,normal,62.5,8
+w07,Upper B,2026-07-27T18:00:00Z,2026-07-27T19:00:00Z,row,Barbell Row,normal,57.5,10
+w08,Lower B,2026-08-01T18:00:00Z,2026-08-01T19:05:00Z,squat,Back Squat,normal,87.5,8
+w08,Lower B,2026-08-01T18:00:00Z,2026-08-01T19:05:00Z,rdl,Romanian Deadlift,normal,77.5,10
+w09,Upper A,2026-08-06T18:00:00Z,2026-08-06T19:00:00Z,bench,Bench Press,normal,65,8
+w09,Upper A,2026-08-06T18:00:00Z,2026-08-06T19:00:00Z,row,Barbell Row,normal,60,10
+w10,Lower A,2026-08-08T18:00:00Z,2026-08-08T19:05:00Z,squat,Back Squat,normal,90,8
+w10,Lower A,2026-08-08T18:00:00Z,2026-08-08T19:05:00Z,rdl,Romanian Deadlift,normal,80,10

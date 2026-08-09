@@ -1,0 +1,47 @@
+{
+  "app": "ferro",
+  "version": 3,
+  "exportedAt": "2026-08-09T12:00:00.000Z",
+  "nutritionGoals": {
+    "configured": true,
+    "sex": "male",
+    "age": 30,
+    "heightCm": 178,
+    "activity": "moderate",
+    "goal": "cut",
+    "kcal": 2100,
+    "proteinG": 160,
+    "carbsG": 220,
+    "fatG": 65
+  },
+  "workouts": [],
+  "routines": [],
+  "customExercises": [],
+  "folders": [],
+  "measurements": [
+    { "id": "weight-1", "date": 1785067200000, "kind": "weight", "value": 80.2 },
+    { "id": "weight-2", "date": 1785412800000, "kind": "weight", "value": 80.0 },
+    { "id": "weight-3", "date": 1785758400000, "kind": "weight", "value": 79.7 },
+    { "id": "weight-4", "date": 1786276800000, "kind": "weight", "value": 79.4 }
+  ],
+  "foods": [],
+  "dishes": [],
+  "foodLog": [
+    { "id": "day-01", "date": "2026-07-27", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 2050, "p": 158, "c": 210, "f": 64 },
+    { "id": "day-02", "date": "2026-07-28", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 2140, "p": 164, "c": 225, "f": 66 },
+    { "id": "day-03", "date": "2026-07-29", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 1980, "p": 151, "c": 198, "f": 65 },
+    { "id": "day-04", "date": "2026-07-30", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 2090, "p": 160, "c": 218, "f": 64 },
+    { "id": "day-05", "date": "2026-07-31", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 2200, "p": 170, "c": 232, "f": 66 },
+    { "id": "day-06", "date": "2026-08-01", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 2040, "p": 157, "c": 208, "f": 64 },
+    { "id": "day-07", "date": "2026-08-02", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 2110, "p": 162, "c": 220, "f": 65 },
+    { "id": "day-08", "date": "2026-08-03", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 1960, "p": 148, "c": 196, "f": 66 },
+    { "id": "day-09", "date": "2026-08-04", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 2075, "p": 159, "c": 214, "f": 65 },
+    { "id": "day-10", "date": "2026-08-05", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 2160, "p": 166, "c": 226, "f": 66 },
+    { "id": "day-11", "date": "2026-08-06", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 2010, "p": 154, "c": 203, "f": 65 },
+    { "id": "day-12", "date": "2026-08-07", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 2085, "p": 160, "c": 216, "f": 64 },
+    { "id": "day-13", "date": "2026-08-08", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 2190, "p": 169, "c": 230, "f": 66 },
+    { "id": "day-14", "date": "2026-08-09", "meal": "dinner", "name": "Día completo", "grams": 1, "kcal": 2030, "p": 156, "c": 206, "f": 65 }
+  ],
+  "importBatches": [],
+  "externalRefs": []
+}

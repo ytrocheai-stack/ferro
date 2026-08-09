@@ -2,20 +2,20 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { addDays, format, isToday, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { db } from '../db/db'
 import type { FoodLogEntry, MealKey } from '../db/types'
 import { macrosForGrams } from '../data/foods'
 import { useNutrition } from '../stores/nutrition'
 import { ema } from '../lib/stats'
-import { suggestCalorieAdjustment, weeklyChangePct } from '../lib/nutrition'
+import { buildNutritionInsights, suggestCalorieAdjustment, weeklyChangePct } from '../lib/nutrition'
 import { parseDec, uid } from '../lib/format'
 import { toastUndo } from '../stores/toasts'
 import { FoodPickerSheet } from '../components/FoodPicker'
 import { NutritionGoalsWizard } from '../components/NutritionGoalsWizard'
 import { ActionSheet, Sheet } from '../components/Sheet'
 import { SkeletonChart } from '../components/Skeleton'
-import { IconChevronLeft, IconChevronRight, IconDots, IconPlus, IconRepeat, IconTarget } from '../components/icons'
+import { IconChart, IconChevronLeft, IconChevronRight, IconDots, IconFlame, IconPlus, IconRepeat, IconTarget } from '../components/icons'
 import { useLocalDateKey } from '../lib/useLocalDateKey'
 
 const MEALS: { key: MealKey; label: string }[] = [
@@ -33,6 +33,7 @@ export default function Nutrition() {
   const goals = useNutrition((s) => s.goals)
   const [wizardOpen, setWizardOpen] = useState(!goals.configured)
   const [pickerFor, setPickerFor] = useState<MealKey | null>(null)
+  const [view, setView] = useState<'diary' | 'trends'>('diary')
 
   const key = dateKey(day)
   useEffect(() => {
@@ -66,10 +67,14 @@ export default function Nutrition() {
 
   return (
     <div className="px-4 pt-6">
-      <div className="flex items-center justify-between pb-4">
-        <h1 className="text-2xl font-extrabold">Nutrición</h1>
+      <div className="flex items-start justify-between pb-4">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Energía y recuperación</p>
+          <h1 className="text-2xl font-extrabold tracking-[-0.03em]">Nutrición</h1>
+          <p className="pt-0.5 text-xs text-muted">Decisiones basadas en tu ingesta y tendencia real.</p>
+        </div>
         <button
-          className="pressable rounded-lg p-1.5 text-muted"
+          className="pressable grid h-11 w-11 place-items-center rounded-2xl border border-border bg-surface/80 text-muted"
           onClick={() => setWizardOpen(true)}
           aria-label="Ajustar objetivos"
         >
@@ -77,6 +82,33 @@ export default function Nutrition() {
         </button>
       </div>
 
+      <div
+        className="mb-4 grid grid-cols-2 gap-1 rounded-2xl border border-border bg-surface/75 p-1"
+        role="tablist"
+        aria-label="Vista de nutrición"
+      >
+        {([
+          ['diary', 'Diario'],
+          ['trends', 'Tendencias'],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={view === key}
+            aria-controls={`nutrition-${key}`}
+            className={`min-h-11 rounded-xl text-xs font-bold transition-[background-color,color,box-shadow] duration-150 ${
+              view === key ? 'bg-surface-2 text-text shadow-sm shadow-black/30' : 'text-muted'
+            }`}
+            onClick={() => setView(key)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === 'diary' ? (
+        <div id="nutrition-diary" role="tabpanel">
       <div className="flex items-center justify-between pb-4">
         <button className="pressable rounded-lg p-2 text-muted" onClick={() => setDay((d) => subDays(d, 1))} aria-label="Día anterior">
           <IconChevronLeft size={20} />
@@ -119,11 +151,182 @@ export default function Nutrition() {
         ))}
       </div>
 
-      <WeightTrendCard goal={goals.goal} />
-      <WeeklySummaryCard goals={goals} />
+        </div>
+      ) : (
+        <div id="nutrition-trends" role="tabpanel">
+          <NutritionIntelligence goals={goals} todayKey={todayKey} />
+          <WeightTrendCard goal={goals.goal} />
+          <WeeklySummaryCard goals={goals} />
+        </div>
+      )}
 
       {pickerFor && <FoodPickerSheet open onClose={() => setPickerFor(null)} date={key} meal={pickerFor} />}
       <NutritionGoalsWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
+    </div>
+  )
+}
+
+function NutritionIntelligence({
+  goals,
+  todayKey,
+}: {
+  goals: { kcal: number; proteinG: number }
+  todayKey: string
+}) {
+  const end = useMemo(() => new Date(`${todayKey}T12:00:00`), [todayKey])
+  const since = dateKey(subDays(end, 13))
+  const entries = useLiveQuery(
+    () => db.foodLog.where('date').between(since, todayKey, true, true).toArray(),
+    [since, todayKey],
+    undefined,
+  )
+  const weights = useLiveQuery(
+    () => db.measurements.where('kind').equals('weight').sortBy('date'),
+    [],
+    undefined,
+  )
+  const insight = useMemo(
+    () => buildNutritionInsights(entries ?? [], weights ?? [], goals, end, 14),
+    [end, entries, goals, weights],
+  )
+
+  if (entries === undefined || weights === undefined) return <SkeletonChart />
+
+  const balance =
+    insight.averageKcal !== null && insight.estimatedExpenditure !== null
+      ? insight.averageKcal - insight.estimatedExpenditure
+      : null
+  const confidenceLabel = {
+    low: 'Confianza baja',
+    medium: 'Confianza media',
+    high: 'Confianza alta',
+  }[insight.expenditureConfidence]
+  const chartData = insight.days.map((day) => ({
+    ...day,
+    label: format(new Date(`${day.date}T12:00:00`), 'd MMM', { locale: es }),
+  }))
+
+  return (
+    <div>
+      <section className="card relative overflow-hidden px-4 py-4">
+        <div className="pointer-events-none absolute -right-20 -top-24 h-52 w-52 rounded-full bg-accent/15 blur-3xl" />
+        <div className="relative flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-primary">Últimos 14 días</p>
+            <h2 className="pt-0.5 text-lg font-extrabold tracking-[-0.025em]">Inteligencia nutricional</h2>
+            <p className="pt-0.5 text-xs text-muted">Tu gasto se aprende de ingesta + cambio de peso.</p>
+          </div>
+          <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${insight.expenditureConfidence === 'low' ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success'}`}>
+            {confidenceLabel}
+          </span>
+        </div>
+
+        <div className="relative mt-4 rounded-2xl border border-border/70 bg-surface-2/55 px-4 py-4">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.13em] text-muted">Gasto energético estimado</p>
+              <p className="pt-1 text-3xl font-extrabold tracking-[-0.05em] tabular-nums">
+                {insight.estimatedExpenditure ?? '—'}
+                {insight.estimatedExpenditure !== null && <span className="pl-1 text-sm font-medium text-muted">kcal/día</span>}
+              </p>
+            </div>
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-primary/12 text-primary">
+              <IconFlame size={20} />
+            </span>
+          </div>
+          {balance !== null ? (
+            <p className="pt-2 text-xs leading-relaxed text-muted">
+              Tu ingesta media de <strong className="text-text">{insight.averageKcal} kcal</strong> produce un{' '}
+              <strong className={balance <= 0 ? 'text-success' : 'text-warning'}>
+                {balance <= 0 ? 'déficit' : 'superávit'} estimado de {Math.abs(balance)} kcal/día
+              </strong>.
+            </p>
+          ) : (
+            <p className="pt-2 text-xs leading-relaxed text-muted">
+              Registra al menos 10 de 14 días y 3 pesos distribuidos durante 14 días para activar esta estimación.
+            </p>
+          )}
+        </div>
+
+        <div className="relative mt-3 grid grid-cols-3 gap-2">
+          <NutritionMetric label="Registro" value={`${insight.coveragePct}%`} detail={`${insight.loggedDays}/14 días`} />
+          <NutritionMetric label="Calorías" value={`${insight.calorieAdherencePct}%`} detail="dentro de ±10%" />
+          <NutritionMetric label="Proteína" value={`${insight.proteinAdherencePct}%`} detail="≥90% meta" />
+        </div>
+      </section>
+
+      <section className="card mt-3 px-3 py-4" aria-label="Ingesta calórica de los últimos 14 días">
+        <div className="flex items-center justify-between px-1 pb-3">
+          <div>
+            <h2 className="text-sm font-bold">Ingesta vs objetivo</h2>
+            <p className="pt-0.5 text-[11px] text-muted">Los huecos son días sin registro, no ceros.</p>
+          </div>
+          <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-bold text-primary">
+            meta {goals.kcal}
+          </span>
+        </div>
+        {insight.loggedDays === 0 ? (
+          <div className="grid min-h-44 place-items-center rounded-2xl bg-surface-2/30 px-5 text-center">
+            <div>
+              <span className="mx-auto grid h-10 w-10 place-items-center rounded-2xl bg-primary/10 text-primary">
+                <IconChart size={19} />
+              </span>
+              <p className="pt-2 text-xs font-bold">Registra comidas para ver tu patrón de ingesta</p>
+              <p className="mx-auto max-w-xs pt-1 text-[10px] leading-relaxed text-muted">
+                Los días aparecerán aquí al añadir alimentos al diario.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={185}>
+            <BarChart data={chartData} margin={{ top: 6, right: 4, bottom: 0, left: -17 }}>
+              <CartesianGrid stroke="var(--color-border)" strokeDasharray="2 6" vertical={false} />
+              <XAxis dataKey="label" stroke="var(--color-muted)" fontSize={9} tickLine={false} axisLine={false} interval={2} />
+              <YAxis stroke="var(--color-muted)" fontSize={9} tickLine={false} axisLine={false} width={42} />
+              <ReferenceLine y={goals.kcal} stroke="var(--color-accent)" strokeDasharray="5 5" strokeOpacity={0.8} />
+              <Tooltip
+                cursor={{ fill: 'color-mix(in srgb, var(--color-primary) 7%, transparent)' }}
+                contentStyle={{ background: 'var(--color-surface-2)', border: '1px solid var(--color-border)', borderRadius: 12, fontSize: 11 }}
+                formatter={(value) => [`${Number(value)} kcal`, 'Ingesta']}
+              />
+              <Bar dataKey="kcal" fill="var(--color-primary)" radius={[5, 5, 2, 2]} maxBarSize={18} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+        <p className="sr-only">
+          {insight.loggedDays} días registrados; promedio de {insight.averageKcal ?? 0} kilocalorías.
+        </p>
+      </section>
+
+      <section className="card mt-3 px-4 py-4">
+        <div className="flex items-start gap-3">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent/10 text-accent">
+            <IconChart size={18} />
+          </span>
+          <div>
+            <h2 className="text-sm font-bold">Lectura del coach</h2>
+            <p className="pt-1 text-xs leading-relaxed text-muted">
+              {insight.coveragePct < 70
+                ? 'Prioriza la constancia de registro antes de cambiar calorías; con datos incompletos cualquier ajuste sería ruido.'
+                : insight.proteinAdherencePct < 70
+                  ? 'Tu mayor oportunidad es la proteína: alcanza al menos 90% del objetivo con más regularidad antes de mover calorías.'
+                  : insight.calorieAdherencePct < 70
+                    ? 'La ingesta varía bastante entre días. Acercarte al objetivo con más consistencia hará más fiable la tendencia.'
+                    : 'Tu registro ya permite separar fluctuaciones diarias de una tendencia útil. Mantén el plan y evalúa cambios cada dos semanas.'}
+            </p>
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function NutritionMetric({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="rounded-xl bg-surface-2/50 px-2 py-2.5 text-center">
+      <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-muted">{label}</p>
+      <p className="pt-0.5 text-lg font-extrabold tabular-nums">{value}</p>
+      <p className="text-[8px] leading-tight text-muted">{detail}</p>
     </div>
   )
 }
