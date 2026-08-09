@@ -25,12 +25,13 @@ export default function App() {
 
   return (
     <div className="mx-auto min-h-dvh w-full max-w-md pt-[env(safe-area-inset-top)]">
-      <div key={pathname} className="page-enter">
+      <a className="skip-link" href="#main-content">Saltar al contenido</a>
+      <main id="main-content" key={pathname} className="page-enter" tabIndex={-1}>
         <Suspense fallback={<PageFallback />}>
           <Outlet />
         </Suspense>
-      </div>
-      <div className="h-44" />
+      </main>
+      <div className={hideTabs ? 'h-8' : 'app-nav-spacer'} aria-hidden="true" />
       <ScrollRestoration />
       <RestTimerOverlay hideTabs={hideTabs} />
       <ActiveBanner hideTabs={hideTabs} />
@@ -52,7 +53,7 @@ function ActiveBanner({ hideTabs }: { hideTabs: boolean }) {
 
   const bottom = hideTabs
     ? 'calc(0.5rem + env(safe-area-inset-bottom))'
-    : 'calc(4.2rem + env(safe-area-inset-bottom))'
+    : 'calc(5.6rem + env(safe-area-inset-bottom))'
   return (
     <div className="fixed inset-x-0 z-40" style={{ bottom }}>
       <button
@@ -122,7 +123,7 @@ function RestTimerOverlay({ hideTabs }: { hideTabs: boolean }) {
   const urgent = remaining <= 10
   const onSession = pathname.startsWith('/entreno')
   const bannerVisible = !!session && !onSession
-  const base = hideTabs && !onSession ? 8 : onSession ? 8 : 68
+  const base = hideTabs && !onSession ? 8 : onSession ? 8 : 90
   const offset = base + (bannerVisible ? 60 : 0)
 
   return (

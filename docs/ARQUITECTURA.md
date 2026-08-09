@@ -2,7 +2,7 @@
 
 > Documento de referencia para entender cómo funciona la app por dentro. Complementa a
 > [../CLAUDE.md](../CLAUDE.md) (invariantes y convenciones) y [DESPLIEGUE.md](DESPLIEGUE.md) (build y deploy).
-> Última actualización: 2026-07-19 (auditoría completa, ver [AUDITORIA-2026-07.md](AUDITORIA-2026-07.md)).
+> Última actualización: 2026-08-09 (navegación, análisis, nutrición e importación Hevy).
 
 ## Visión general
 
@@ -86,8 +86,10 @@ Notas:
   para volumen y PRs), `bestsOfSets`/`bestsFromHistory`/`detectPRs` (peso máx, e1RM, volumen por
   serie — hasta 3 PRs por ejercicio), `weeklySetsByGroup` (ventana rodante de 7 días), `ema`
   (suavizado α=0.25), `exerciseSeries` (puntos para las gráficas de ExerciseDetail).
-- **Análisis** ([Analysis.tsx](../src/pages/Analysis.tsx)): heatmap y series por grupo usan **últimos 7 días rodantes**;
-  el gráfico "Volumen semanal" usa **semanas de calendario (lunes)** con `addWeeks` (DST-safe).
+- **Análisis** ([Analysis.tsx](../src/pages/Analysis.tsx)): `compareTrainingPeriods` compara ventanas de
+  4/8/12 semanas con el periodo anterior; `topExerciseProgress` calcula cambio de e1RM solo con al
+  menos dos sesiones. El heatmap/detalle muscular usa **últimos 7 días rodantes** y el gráfico de
+  volumen usa semanas de calendario (lunes) con media, sesiones y series efectivas.
 
 ### Catálogo de ejercicios
 
@@ -133,6 +135,10 @@ en Dexie; si no, proporcional.
   pesos (se pintan los últimos 30). `weeklyChangePct` exige ≥14 días reales de calendario y
   calcula %/semana sobre la tendencia suavizada. `suggestCalorieAdjustment` compara con el ritmo
   esperado del objetivo y sugiere ±100-200 kcal.
+- **Inteligencia nutricional** ([nutrition.ts](../src/lib/nutrition.ts) `buildNutritionInsights`): ventana de
+  14 días con cobertura, adherencia calórica/proteica y gasto estimado por balance energético. Exige
+  ≥70% de registro y una pendiente con ≥3 pesajes separados ≥14 días dentro de la misma ventana;
+  declara confianza y nunca rellena días ausentes con cero.
 - **Día**: clave local `YYYY-MM-DD`; no se puede navegar a futuro; "Copiar el día anterior" busca
   hasta 14 días atrás. Resumen semanal = media de los días CON registros en los últimos 7.
 
@@ -150,8 +156,9 @@ en Dexie; si no, proporcional.
 - **Precache** (~10.6 MB, ~1.364 entradas): shell JS/CSS/HTML, `data/exercises.json` y TODAS las
   miniaturas jpg. `maximumFileSizeToCacheInBytes: 8 MB`.
 - **Runtime caching**: GIFs (`videos/**`, ~130 MB) en CacheFirst caché `gifs` (máx 1.500,
-  `purgeOnQuotaError`) — se llenan al verlos o con "Descargar todos los GIFs" en Perfil
-  ([gifs.ts](../src/lib/gifs.ts), 6 workers). Open Food Facts en NetworkFirst (timeout 6 s, 7 días).
+  `purgeOnQuotaError`) — se llenan al verlos o con la descarga de pendientes en Perfil
+  ([gifs.ts](../src/lib/gifs.ts), 6 workers). El avance compara rutas canónicas únicas contra el
+  catálogo vigente; al completarlo se oculta la descarga. Open Food Facts usa NetworkFirst.
 - **Navegación**: fallback SPA a `index.html` precacheado (denylist jpg/gif/json) + `404.html`
   copiado por postbuild para deep links en GitHub Pages.
 - **Actualización**: `registerType: 'autoUpdate'` — el SW nuevo hace `skipWaiting` +
@@ -187,3 +194,6 @@ quede bajo el teclado · EXIF de fotos · Web Share para exportar · metas Apple
   del JSX. Rutas en español ([main.tsx](../src/main.tsx)), páginas lazy (Recharts fuera del bundle inicial).
 - **Gráficas Recharts**: estilo oscuro inline (`contentStyle` `#1f1f27`, grid `#2a2a33`,
   ejes `#8f8f9b`, línea principal `#3d8bfd`).
+- **Navegación**: dock flotante inferior en móvil y rail vertical desde 768 px. `TabBar` calcula el
+  estado activo explícitamente para que `/analisis` y `/medidas` conserven Perfil como contexto.
+  El sistema visual completo vive en [../design-system/nextrep/MASTER.md](../design-system/nextrep/MASTER.md).

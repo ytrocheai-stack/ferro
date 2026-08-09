@@ -10,14 +10,14 @@ import { useSettings } from '../stores/settings'
 import { useCatalog } from '../data/exercises'
 import { exportBackup, exportPhotosBackup, importBackup, importPhotosBackup } from '../lib/backup'
 import { exportWorkoutsCsv } from '../lib/csv'
-import { cachedGifCount, downloadAllGifs } from '../lib/gifs'
+import { downloadAllGifs, getGifCacheStatus, type GifCacheStatus } from '../lib/gifs'
 import { ensureNotifyPermission } from '../lib/notify'
 import { formatDuration, formatVolume } from '../lib/format'
 import { isIOS, isStandalone } from '../lib/platform'
 import { Select } from '../components/Select'
 import { Confirm } from '../components/Sheet'
 import { HevyImportSheet } from '../components/HevyImportSheet'
-import { IconDownload, IconFlame, IconRuler, IconShare, IconUpload } from '../components/icons'
+import { IconCheck, IconDownload, IconFlame, IconRuler, IconShare, IconUpload } from '../components/icons'
 import { APP_VERSION, DATASET_URL, REST_OPTIONS, restLabel } from '../lib/constants'
 import { useLocalDateKey } from '../lib/useLocalDateKey'
 import { undoImport, type ImportSummary } from '../lib/hevyImport'
@@ -298,12 +298,15 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
   // GIFs offline
   const swReady = 'serviceWorker' in navigator && !!navigator.serviceWorker.controller
   const totalGifs = useMemo(() => all.filter((e) => e.gif && !e.custom).length, [all])
-  const [cached, setCached] = useState(0)
+  const [gifStatus, setGifStatus] = useState<GifCacheStatus>({ cached: 0, total: 0, complete: false })
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const stopRef = useRef(false)
 
   useEffect(() => {
-    void cachedGifCount().then(setCached)
+    void getGifCacheStatus(all).then(setGifStatus)
+  }, [all])
+
+  useEffect(() => {
     void (async () => {
       try {
         const est = await navigator.storage?.estimate?.()
@@ -324,7 +327,7 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
       () => stopRef.current,
     )
     setProgress(null)
-    setCached(await cachedGifCount())
+    setGifStatus(await getGifCacheStatus(all))
   }
 
   const onImportFile = (f: File | undefined) => {
@@ -434,7 +437,7 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
         <div className="flex items-center justify-between text-sm">
           <span>GIFs para uso offline</span>
           <span className="text-xs text-muted">
-            {cached} / {totalGifs || '…'}
+            {gifStatus.cached} / {gifStatus.total || totalGifs || '…'}
           </span>
         </div>
         {progress ? (
@@ -454,9 +457,17 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
               </button>
             </div>
           </div>
+        ) : gifStatus.complete ? (
+          <div
+            className="mt-2 flex items-center gap-2 rounded-xl border border-success/25 bg-success/10 px-3 py-2.5 text-xs font-semibold text-success"
+            role="status"
+          >
+            <IconCheck size={16} />
+            Biblioteca completa disponible sin conexión
+          </div>
         ) : swReady ? (
           <button className="btn mt-2 w-full bg-primary/15 py-2 text-sm text-primary" onClick={() => void startDownload()}>
-            Descargar todos los GIFs (~130 MB)
+            Descargar GIFs pendientes (~130 MB total)
           </button>
         ) : (
           <p className="pt-1.5 text-xs text-muted">

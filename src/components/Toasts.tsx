@@ -8,7 +8,7 @@ export function Toasts({ hideTabs }: { hideTabs: boolean }) {
 
   const bottom = hideTabs
     ? 'calc(0.75rem + env(safe-area-inset-bottom))'
-    : 'calc(4.5rem + env(safe-area-inset-bottom))'
+    : 'calc(5.8rem + env(safe-area-inset-bottom))'
 
   return (
     <div

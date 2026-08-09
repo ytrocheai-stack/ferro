@@ -1,9 +1,18 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { addWeeks, format, startOfWeek, subWeeks } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import { db } from '../db/db'
 import type { Workout } from '../db/types'
 import { useCatalog } from '../data/exercises'
@@ -15,18 +24,29 @@ import {
   type MuscleGroup,
 } from '../data/muscleGroups'
 import { weeklySetsByGroup } from '../lib/stats'
-import { formatDuration, formatVolume } from '../lib/format'
+import { compareTrainingPeriods, topExerciseProgress } from '../lib/analytics'
+import { formatVolume } from '../lib/format'
 import { MuscleHeatmap } from '../components/MuscleHeatmap'
 import { SkeletonChart } from '../components/Skeleton'
-import { IconChevronLeft } from '../components/icons'
+import {
+  IconChart,
+  IconChevronLeft,
+  IconTrophy,
+} from '../components/icons'
+
+const PERIODS = [4, 8, 12] as const
+const DAY = 86_400_000
 
 export default function Analysis() {
   const navigate = useNavigate()
   const workouts = useLiveQuery(() => db.workouts.toArray(), [], undefined as Workout[] | undefined)
-  const { all } = useCatalog()
-  const units = useSettings((s) => s.units)
+  const { all, byId } = useCatalog()
+  const units = useSettings((state) => state.units)
+  const weeklyGoal = useSettings((state) => state.weeklyGoal)
+  const [periodWeeks, setPeriodWeeks] = useState<(typeof PERIODS)[number]>(8)
+  const [now] = useState(Date.now)
 
-  const targetById = useMemo(() => new Map(all.map((e) => [e.id, e.target])), [all])
+  const targetById = useMemo(() => new Map(all.map((exercise) => [exercise.id, exercise.target])), [all])
   const weekly = useMemo<Partial<Record<MuscleGroup, number>>>(
     () => (workouts ? weeklySetsByGroup(workouts, targetById, 7) : {}),
     [workouts, targetById],
@@ -34,28 +54,47 @@ export default function Analysis() {
 
   const weeksData = useMemo(() => {
     if (!workouts) return []
-    const buckets: { label: string; volume: number; duration: number; count: number }[] = []
-    for (let i = 7; i >= 0; i--) {
-      // addWeeks respeta los cambios de hora (DST): sumar 7×86400000 ms desplazaría el
-      // límite 1 h dos veces al año y contaría entrenos en el bucket equivocado
-      const startD = startOfWeek(subWeeks(new Date(), i), { weekStartsOn: 1 })
-      const start = startD.getTime()
-      const end = addWeeks(startD, 1).getTime()
-      const items = workouts.filter((w) => w.startedAt >= start && w.startedAt < end)
-      buckets.push({
+    return Array.from({ length: periodWeeks }, (_, index) => {
+      const weeksAgo = periodWeeks - index - 1
+      const startDate = startOfWeek(subWeeks(new Date(now), weeksAgo), { weekStartsOn: 1 })
+      const start = startDate.getTime()
+      const end = addWeeks(startDate, 1).getTime()
+      const items = workouts.filter((workout) => workout.startedAt >= start && workout.startedAt < end)
+      return {
+        start,
         label: format(start, 'd MMM', { locale: es }),
-        volume: items.reduce((a, w) => a + w.volumeKg, 0),
-        duration: items.length ? items.reduce((a, w) => a + (w.endedAt - w.startedAt), 0) / items.length / 60000 : 0,
-        count: items.length,
-      })
-    }
-    return buckets
-  }, [workouts])
+        volume: Math.round(items.reduce((sum, workout) => sum + workout.volumeKg, 0)),
+        sessions: items.length,
+        sets: items.reduce((sum, workout) => sum + workout.totalSets, 0),
+      }
+    })
+  }, [now, periodWeeks, workouts])
 
-  const avgDurationMin = useMemo(() => {
-    if (!workouts?.length) return 0
-    return workouts.reduce((a, w) => a + (w.endedAt - w.startedAt), 0) / workouts.length / 60000
-  }, [workouts])
+  const comparison = useMemo(
+    () => compareTrainingPeriods(workouts ?? [], now, periodWeeks * 7),
+    [now, periodWeeks, workouts],
+  )
+  const progress = useMemo(
+    () => topExerciseProgress(workouts ?? [], now - periodWeeks * 7 * DAY, 4),
+    [now, periodWeeks, workouts],
+  )
+  const averageWeeklyVolume = weeksData.length
+    ? weeksData.reduce((sum, week) => sum + week.volume, 0) / weeksData.length
+    : 0
+  const sessionsPerWeek = comparison.sessions / periodWeeks
+  const goalPct = Math.min(100, Math.round((sessionsPerWeek / Math.max(1, weeklyGoal)) * 100))
+
+  const muscleSummary = useMemo(() => {
+    let inRange = 0
+    let above = 0
+    for (const group of MUSCLE_GROUP_ORDER) {
+      const value = weekly[group] ?? 0
+      const [low, high] = RECOMMENDED_WEEKLY_SETS[group]
+      if (value >= low && value <= high) inRange++
+      if (value > high) above++
+    }
+    return { inRange, above, below: MUSCLE_GROUP_ORDER.length - inRange - above }
+  }, [weekly])
 
   if (workouts === undefined) {
     return (
@@ -67,92 +106,246 @@ export default function Analysis() {
 
   return (
     <div className="px-4 pt-4">
-      <header className="flex items-center gap-2 pb-4">
+      <header className="flex items-start gap-3 pb-4">
         <button
-          className="pressable -ml-2 rounded-lg p-1.5 text-muted"
+          className="pressable -ml-1 mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-border bg-surface/80 text-muted shadow-sm"
           onClick={() => navigate(-1)}
           aria-label="Volver"
         >
-          <IconChevronLeft size={22} />
+          <IconChevronLeft size={21} />
         </button>
-        <h1 className="text-xl font-extrabold">Análisis</h1>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Rendimiento</p>
+          <h1 className="text-2xl font-extrabold tracking-[-0.03em]">Análisis</h1>
+          <p className="pt-0.5 text-xs text-muted">Carga, constancia y fuerza con contexto.</p>
+        </div>
       </header>
 
+      <div
+        className="mb-4 grid grid-cols-3 gap-1 rounded-2xl border border-border bg-surface/75 p-1"
+        role="group"
+        aria-label="Periodo de análisis"
+      >
+        {PERIODS.map((weeks) => (
+          <button
+            key={weeks}
+            className={`min-h-11 rounded-xl text-xs font-bold transition-[background-color,color,box-shadow] duration-150 ${
+              periodWeeks === weeks
+                ? 'bg-surface-2 text-text shadow-sm shadow-black/30'
+                : 'text-muted'
+            }`}
+            type="button"
+            aria-pressed={periodWeeks === weeks}
+            onClick={() => setPeriodWeeks(weeks)}
+          >
+            {weeks} semanas
+          </button>
+        ))}
+      </div>
+
       {workouts.length === 0 ? (
-        <div className="card px-4 py-8 text-center text-sm text-muted">
-          Registra entrenos para ver tu volumen por grupo muscular y tu evolución.
+        <div className="card overflow-hidden px-5 py-8 text-center">
+          <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-primary/12 text-primary">
+            <IconChart size={23} />
+          </div>
+          <h2 className="pt-3 text-base font-bold">Tu lectura de rendimiento empieza aquí</h2>
+          <p className="mx-auto max-w-xs pt-1 text-sm leading-relaxed text-muted">
+            Registra dos o más entrenos para comparar carga, constancia y progreso de fuerza.
+          </p>
+          <button className="btn btn-primary mx-auto mt-4 text-sm" onClick={() => navigate('/')}>
+            Registrar un entreno
+          </button>
         </div>
       ) : (
         <>
-          <div className="card px-3 py-3">
-            <h2 className="pb-1 px-1 text-sm font-bold">Mapa de series (7 días)</h2>
-            <MuscleHeatmap counts={weekly} />
-          </div>
-
-          <div className="card mt-3 px-4 py-3">
-            <h2 className="pb-3 text-sm font-bold">Series por grupo muscular (últimos 7 días)</h2>
-            <div className="flex flex-col gap-2.5">
-              {MUSCLE_GROUP_ORDER.map((g) => {
-                const v = weekly[g] ?? 0
-                const [lo, hi] = RECOMMENDED_WEEKLY_SETS[g]
-                const pct = Math.min(100, (v / hi) * 100)
-                const under = v < lo
-                return (
-                  <div key={g}>
-                    <div className="flex items-center justify-between pb-1 text-xs">
-                      <span className="font-semibold">{MUSCLE_GROUP_LABELS[g]}</span>
-                      <span className={`tabular-nums ${under ? 'text-warning' : 'text-muted'}`}>
-                        {v} <span className="text-muted">/ {lo}-{hi}</span>
-                      </span>
-                    </div>
-                    <div className="relative h-2 overflow-hidden rounded-full bg-surface-2">
-                      <div
-                        className="absolute inset-y-0 rounded-full bg-border"
-                        style={{ left: `${(lo / hi) * 100}%`, width: `${100 - (lo / hi) * 100}%` }}
-                      />
-                      <div
-                        className={`absolute inset-y-0 left-0 rounded-full ${under ? 'bg-warning' : 'bg-primary'}`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                )
-              })}
+          <section className="card relative overflow-hidden px-4 py-4">
+            <div className="pointer-events-none absolute -right-16 -top-20 h-44 w-44 rounded-full bg-primary/15 blur-3xl" />
+            <div className="relative flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted">
+                  Pulso de entrenamiento
+                </p>
+                <div className="flex items-end gap-2 pt-1">
+                  <span className="text-3xl font-extrabold tracking-[-0.05em] tabular-nums">
+                    {formatVolume(comparison.volumeKg, units)}
+                  </span>
+                </div>
+                <p className="pt-1 text-xs text-muted">Carga acumulada en {periodWeeks} semanas</p>
+              </div>
+              <TrendBadge value={comparison.volumeChangePct} />
             </div>
-            <p className="pt-3 text-[11px] text-muted">
-              Banda gris = rango recomendado para hipertrofia (10–20 series/semana según músculo).
-              Naranja = por debajo del mínimo.
-            </p>
-          </div>
 
-          <div className="card mt-3 px-2 py-3">
-            <h2 className="px-2 pb-2 text-sm font-bold">Volumen semanal</h2>
-            <ResponsiveContainer width="100%" height={160}>
-              <BarChart data={weeksData} margin={{ top: 4, right: 8, bottom: 0, left: -18 }}>
-                <CartesianGrid stroke="#2a2a33" strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="label" stroke="#8f8f9b" fontSize={10} tickLine={false} axisLine={false} />
-                <YAxis stroke="#8f8f9b" fontSize={10} tickLine={false} axisLine={false} />
-                <Tooltip
-                  contentStyle={{ background: '#1f1f27', border: '1px solid #2a2a33', borderRadius: 12, fontSize: 12 }}
-                  formatter={(v) => [formatVolume(Number(v), units), 'Volumen']}
+            <div className="relative mt-4 grid grid-cols-3 gap-2 border-t border-border/70 pt-3">
+              <Metric label="Sesiones" value={String(comparison.sessions)} detail={`${sessionsPerWeek.toFixed(1)}/sem`} />
+              <Metric label="Series" value={String(comparison.workingSets)} detail="efectivas" />
+              <Metric label="Récords" value={String(comparison.prCount)} detail="en periodo" />
+            </div>
+            <div className="relative mt-3 rounded-xl bg-surface-2/70 px-3 py-2.5">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-semibold">Constancia frente a tu meta</span>
+                <span className="font-bold tabular-nums text-primary">{goalPct}%</span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-border/70">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-primary to-accent"
+                  style={{ width: `${goalPct}%` }}
                 />
-                <Bar dataKey="volume" fill="#3d8bfd" radius={[5, 5, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+              </div>
+              <p className="pt-1.5 text-[10px] text-muted">
+                {sessionsPerWeek.toFixed(1)} de {weeklyGoal} sesiones por semana
+              </p>
+            </div>
+          </section>
 
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <div className="card px-3 py-3 text-center">
-              <div className="text-[10px] font-bold uppercase tracking-wide text-muted">Duración media</div>
-              <div className="pt-1 text-lg font-extrabold tabular-nums">{formatDuration(avgDurationMin * 60)}</div>
+          <section className="card mt-3 px-3 py-4" aria-label={`Carga semanal de las últimas ${periodWeeks} semanas`}>
+            <div className="flex items-end justify-between px-1 pb-3">
+              <div>
+                <h2 className="text-sm font-bold">Carga semanal</h2>
+                <p className="pt-0.5 text-[11px] text-muted">Volumen total; toca la curva para el detalle.</p>
+              </div>
+              <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-bold text-primary">
+                media {formatVolume(averageWeeklyVolume, units)}
+              </span>
             </div>
-            <div className="card px-3 py-3 text-center">
-              <div className="text-[10px] font-bold uppercase tracking-wide text-muted">Entrenos totales</div>
-              <div className="pt-1 text-lg font-extrabold tabular-nums">{workouts.length}</div>
+            <ResponsiveContainer width="100%" height={190}>
+              <AreaChart data={weeksData} margin={{ top: 8, right: 6, bottom: 0, left: -17 }}>
+                <defs>
+                  <linearGradient id="trainingLoadFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.42} />
+                    <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0.015} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="var(--color-border)" strokeDasharray="2 6" vertical={false} />
+                <XAxis dataKey="label" stroke="var(--color-muted)" fontSize={9} tickLine={false} axisLine={false} minTickGap={18} />
+                <YAxis stroke="var(--color-muted)" fontSize={9} tickLine={false} axisLine={false} width={42} />
+                {averageWeeklyVolume > 0 && (
+                  <ReferenceLine y={averageWeeklyVolume} stroke="var(--color-accent)" strokeDasharray="4 5" strokeOpacity={0.55} />
+                )}
+                <Tooltip content={<TrainingTooltip units={units} />} cursor={{ stroke: 'var(--color-border)' }} />
+                <Area
+                  type="monotone"
+                  dataKey="volume"
+                  stroke="var(--color-primary)"
+                  strokeWidth={2.5}
+                  fill="url(#trainingLoadFill)"
+                  activeDot={{ r: 5, fill: 'var(--color-primary)', stroke: 'var(--color-text)', strokeWidth: 2 }}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </section>
+
+          <section className="card mt-3 px-4 py-4">
+            <div className="flex items-center gap-2">
+              <span className="grid h-8 w-8 place-items-center rounded-xl bg-success/10 text-success">
+                <IconTrophy size={17} />
+              </span>
+              <div>
+                <h2 className="text-sm font-bold">Momentum de fuerza</h2>
+                <p className="text-[11px] text-muted">Cambio de e1RM entre la primera y última sesión.</p>
+              </div>
             </div>
-          </div>
+            {progress.length ? (
+              <div className="mt-3 divide-y divide-border/60">
+                {progress.map((item) => (
+                  <div key={item.exerciseId} className="flex items-center gap-3 py-3 first:pt-1 last:pb-0">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-bold">{byId.get(item.exerciseId)?.name ?? item.exerciseId}</p>
+                      <p className="pt-0.5 text-[10px] text-muted">
+                        {item.sessions} sesiones · {item.startE1rm.toFixed(1)} → {item.endE1rm.toFixed(1)} kg e1RM
+                      </p>
+                    </div>
+                    <span className={`text-sm font-extrabold tabular-nums ${item.changePct >= 0 ? 'text-success' : 'text-danger'}`}>
+                      {item.changePct >= 0 ? '+' : ''}{item.changePct.toFixed(1)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 rounded-xl bg-surface-2/60 px-3 py-3 text-xs leading-relaxed text-muted">
+                Repite un ejercicio al menos dos veces dentro del periodo para medir su tendencia de fuerza.
+              </p>
+            )}
+          </section>
+
+          <section className="card mt-3 overflow-hidden px-3 py-4">
+            <div className="flex items-start justify-between gap-3 px-1">
+              <div>
+                <h2 className="text-sm font-bold">Dosis muscular · 7 días</h2>
+                <p className="pt-0.5 text-[11px] text-muted">Series efectivas contra rangos de hipertrofia.</p>
+              </div>
+              <div className="flex gap-1 text-[9px] font-bold">
+                <span className="rounded-full bg-success/10 px-2 py-1 text-success">{muscleSummary.inRange} en rango</span>
+                {muscleSummary.above > 0 && <span className="rounded-full bg-warning/10 px-2 py-1 text-warning">{muscleSummary.above} altas</span>}
+              </div>
+            </div>
+            <div className="mt-2 rounded-2xl bg-surface-2/30 py-2">
+              <MuscleHeatmap counts={weekly} />
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {MUSCLE_GROUP_ORDER.map((group) => (
+                <MuscleDose key={group} group={group} value={weekly[group] ?? 0} />
+              ))}
+            </div>
+            <p className="px-1 pt-3 text-[10px] leading-relaxed text-muted">
+              Los rangos son una referencia general. Ajusta volumen según recuperación, experiencia y objetivo.
+            </p>
+          </section>
         </>
       )}
+    </div>
+  )
+}
+
+function TrendBadge({ value }: { value: number | null }) {
+  if (value === null) {
+    return <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-bold text-muted">Sin base previa</span>
+  }
+  const positive = value >= 0
+  return (
+    <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold tabular-nums ${positive ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}`}>
+      {positive ? '+' : ''}{value}% vs periodo anterior
+    </span>
+  )
+}
+
+function Metric({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div>
+      <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-muted">{label}</p>
+      <p className="pt-0.5 text-lg font-extrabold tracking-[-0.03em] tabular-nums">{value}</p>
+      <p className="text-[9px] text-muted">{detail}</p>
+    </div>
+  )
+}
+
+function MuscleDose({ group, value }: { group: MuscleGroup; value: number }) {
+  const [low, high] = RECOMMENDED_WEEKLY_SETS[group]
+  const progress = Math.min(100, (value / high) * 100)
+  const status = value === 0 ? 'Sin estímulo' : value < low ? 'Bajo' : value <= high ? 'En rango' : 'Alto'
+  const tone = value === 0 ? 'text-muted' : value < low ? 'text-warning' : value <= high ? 'text-success' : 'text-danger'
+  const fill = value === 0 ? 'bg-border' : value < low ? 'bg-warning' : value <= high ? 'bg-success' : 'bg-danger'
+  return (
+    <div className="rounded-xl border border-border/60 bg-surface-2/45 px-2.5 py-2.5">
+      <div className="flex items-start justify-between gap-1">
+        <span className="truncate text-[11px] font-bold">{MUSCLE_GROUP_LABELS[group]}</span>
+        <span className={`text-[9px] font-bold ${tone}`}>{status}</span>
+      </div>
+      <div className="mt-2 h-1 overflow-hidden rounded-full bg-border/80">
+        <div className={`h-full rounded-full ${fill}`} style={{ width: `${progress}%` }} />
+      </div>
+      <p className="pt-1.5 text-[9px] tabular-nums text-muted">{value} / {low}–{high} series</p>
+    </div>
+  )
+}
+
+function TrainingTooltip({ active, payload, units }: { active?: boolean; payload?: Array<{ payload: { label: string; volume: number; sessions: number; sets: number } }>; units: 'kg' | 'lb' }) {
+  const point = payload?.[0]?.payload
+  if (!active || !point) return null
+  return (
+    <div className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs shadow-xl shadow-black/40">
+      <p className="font-bold">Semana del {point.label}</p>
+      <p className="pt-1 font-semibold text-primary">{formatVolume(point.volume, units)}</p>
+      <p className="pt-0.5 text-[10px] text-muted">{point.sessions} sesiones · {point.sets} series</p>
     </div>
   )
 }

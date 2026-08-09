@@ -21,3 +21,20 @@ test('la pantalla inicial no tiene violaciones axe críticas', async ({ page }) 
   const result = await new AxeBuilder({ page }).analyze()
   expect(result.violations.filter((violation) => violation.impact === 'critical')).toEqual([])
 })
+
+test('Análisis permite cambiar el periodo sin perder el contexto', async ({ page }) => {
+  await page.goto('./analisis')
+  await expect(page.getByRole('heading', { name: 'Análisis' })).toBeVisible()
+  await expect(page.getByRole('group', { name: 'Periodo de análisis' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '8 semanas', pressed: true })).toBeVisible()
+})
+
+test('Nutrición separa el diario de las tendencias', async ({ page }) => {
+  await page.goto('./nutricion')
+  await expect(page.getByRole('tablist', { name: 'Vista de nutrición' })).toBeVisible()
+  const closeWizard = page.getByRole('button', { name: 'Cerrar' })
+  if (await closeWizard.isVisible()) await closeWizard.click()
+  await page.getByRole('tab', { name: 'Tendencias' }).click()
+  await expect(page.getByRole('heading', { name: 'Inteligencia nutricional' })).toBeVisible()
+  await expect(page.getByText('Registra comidas para ver tu patrón de ingesta')).toBeVisible()
+})

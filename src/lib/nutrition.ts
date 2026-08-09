@@ -1,5 +1,6 @@
 import type { ActivityLevel, Goal, Sex } from '../stores/nutrition'
 import { ACTIVITY_FACTORS } from '../stores/nutrition'
+import type { FoodLogEntry, Measurement } from '../db/types'
 
 /** Mifflin-St Jeor */
 export function bmr(sex: Sex, weightKg: number, heightCm: number, age: number): number {
@@ -70,4 +71,125 @@ export function suggestCalorieAdjustment(
     return { deltaKcal: 100, reason: 'Estás perdiendo peso muy rápido (riesgo de perder músculo) — sube 100 kcal/día.' }
   }
   return null
+}
+
+export interface NutritionInsightDay {
+  date: string
+  kcal: number | null
+  proteinG: number | null
+}
+
+export interface NutritionInsights {
+  days: NutritionInsightDay[]
+  loggedDays: number
+  coveragePct: number
+  calorieAdherencePct: number
+  proteinAdherencePct: number
+  averageKcal: number | null
+  estimatedExpenditure: number | null
+  expenditureConfidence: 'low' | 'medium' | 'high'
+}
+
+function localDateKey(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function estimateWeightSlopePerDay(measurements: Measurement[]): number | null {
+  const points = measurements
+    .filter((measurement) => measurement.kind === 'weight' && measurement.value > 0)
+    .sort((a, b) => a.date - b.date)
+  if (points.length < 3) return null
+  const spanDays = (points[points.length - 1].date - points[0].date) / 86_400_000
+  if (spanDays < 14) return null
+
+  const origin = points[0].date
+  const xs = points.map((point) => (point.date - origin) / 86_400_000)
+  const meanX = xs.reduce((sum, value) => sum + value, 0) / xs.length
+  const meanY = points.reduce((sum, point) => sum + point.value, 0) / points.length
+  let numerator = 0
+  let denominator = 0
+  for (let index = 0; index < points.length; index++) {
+    const dx = xs[index] - meanX
+    numerator += dx * (points[index].value - meanY)
+    denominator += dx * dx
+  }
+  return denominator > 0 ? numerator / denominator : null
+}
+
+/**
+ * Resume la calidad de registro y estima gasto energético con balance energético:
+ * gasto ≈ ingesta media − (pendiente de peso kg/día × 7.700 kcal/kg).
+ */
+export function buildNutritionInsights(
+  entries: FoodLogEntry[],
+  measurements: Measurement[],
+  goals: { kcal: number; proteinG: number },
+  now: Date = new Date(),
+  windowDays = 14,
+): NutritionInsights {
+  const totals = new Map<string, { kcal: number; proteinG: number }>()
+  for (const entry of entries) {
+    const current = totals.get(entry.date) ?? { kcal: 0, proteinG: 0 }
+    current.kcal += entry.kcal
+    current.proteinG += entry.p
+    totals.set(entry.date, current)
+  }
+
+  const days: NutritionInsightDay[] = []
+  for (let offset = windowDays - 1; offset >= 0; offset--) {
+    const date = new Date(now)
+    date.setHours(12, 0, 0, 0)
+    date.setDate(date.getDate() - offset)
+    const key = localDateKey(date)
+    const total = totals.get(key)
+    days.push({
+      date: key,
+      kcal: total && total.kcal > 0 ? Math.round(total.kcal) : null,
+      proteinG: total && total.kcal > 0 ? total.proteinG : null,
+    })
+  }
+
+  const logged = days.filter((day) => day.kcal !== null)
+  const loggedDays = logged.length
+  const coveragePct = Math.round((loggedDays / Math.max(1, windowDays)) * 100)
+  const averageKcal = loggedDays
+    ? Math.round(logged.reduce((sum, day) => sum + (day.kcal ?? 0), 0) / loggedDays)
+    : null
+  const calorieAdherent = logged.filter(
+    (day) => (day.kcal ?? 0) >= goals.kcal * 0.9 && (day.kcal ?? 0) <= goals.kcal * 1.1,
+  ).length
+  const proteinAdherent = logged.filter(
+    (day) => (day.proteinG ?? 0) >= goals.proteinG * 0.9,
+  ).length
+
+  const windowStart = now.getTime() - windowDays * 86_400_000
+  const relevantMeasurements = measurements.filter(
+    (measurement) => measurement.date >= windowStart && measurement.date <= now.getTime(),
+  )
+  const slope = estimateWeightSlopePerDay(relevantMeasurements)
+  const eligible = averageKcal !== null && coveragePct >= 70 && slope !== null
+  const estimatedExpenditure = eligible
+    ? Math.round((averageKcal - slope * 7_700) / 10) * 10
+    : null
+  const weightCount = relevantMeasurements.filter((measurement) => measurement.kind === 'weight').length
+  const confidence: NutritionInsights['expenditureConfidence'] =
+    estimatedExpenditure === null
+      ? 'low'
+      : coveragePct >= 85 && weightCount >= 8
+        ? 'high'
+        : 'medium'
+
+  return {
+    days,
+    loggedDays,
+    coveragePct,
+    calorieAdherencePct: loggedDays ? Math.round((calorieAdherent / loggedDays) * 100) : 0,
+    proteinAdherencePct: loggedDays ? Math.round((proteinAdherent / loggedDays) * 100) : 0,
+    averageKcal,
+    estimatedExpenditure,
+    expenditureConfidence: confidence,
+  }
 }
