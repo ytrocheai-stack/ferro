@@ -39,7 +39,7 @@ export function FoodPickerSheet({
       id: uid(),
       date,
       meal,
-      foodId: food.id.startsWith('seed-') ? undefined : food.id,
+      foodId: food.source === 'seed' ? undefined : food.id,
       name: food.name,
       grams,
       ...m,
@@ -141,6 +141,8 @@ function OnlineTab({ online, onPick }: { online: boolean; onPick: (f: LocalFood)
           f100: f.f100,
           servingG: f.servingG ?? 100,
           source: 'off',
+          aliases: f.aliases,
+          usdaFdcId: f.usdaFdcId,
           favorite: f.favorite,
         })),
       )
@@ -221,6 +223,8 @@ function ScanTab({ online, onPick }: { online: boolean; onPick: (f: LocalFood) =
         f100: food.f100,
         servingG: food.servingG ?? 100,
         source: 'off',
+        aliases: food.aliases,
+        usdaFdcId: food.usdaFdcId,
       })
     } catch {
       setState('error')

@@ -17,6 +17,10 @@ export interface Exercise {
   image: string | null
   gif: string | null
   steps: string[]
+  source?: 'primary' | 'wger'
+  sourceUrl?: string
+  license?: string
+  aliases?: string[]
   custom?: boolean
 }
 
@@ -30,10 +34,26 @@ export function loadExercises(): Promise<Exercise[]> {
       if (!r.ok) throw new Error(`No se pudo cargar la biblioteca (HTTP ${r.status})`)
       return r.json()
     })
-    .then((list: Exercise[]) => {
-      list.sort((a, b) => a.name.localeCompare(b.name))
-      cache = list
-      return list
+    .then(async (list: Exercise[]) => {
+      const primary = list.map((exercise) => ({ ...exercise, source: exercise.source ?? 'primary' as const }))
+      let supplement: Exercise[] = []
+      try {
+        const response = await fetch(import.meta.env.BASE_URL + 'data/exercises-wger.json')
+        if (response.ok) supplement = (await response.json()) as Exercise[]
+      } catch {
+        // El catálogo principal sigue funcionando aunque falte el snapshot opcional.
+      }
+      const names = new Set(primary.map((exercise) => normalize(exercise.name)))
+      const merged = [...primary]
+      for (const exercise of supplement) {
+        const normalized = normalize(exercise.name)
+        if (!normalized || names.has(normalized)) continue
+        names.add(normalized)
+        merged.push({ ...exercise, source: 'wger' })
+      }
+      merged.sort((a, b) => a.name.localeCompare(b.name))
+      cache = merged
+      return merged
     })
     .catch((err) => {
       pending = null
@@ -115,7 +135,7 @@ export function searchExercises(all: Exercise[], f: ExerciseFilters): Exercise[]
     if (f.equipment && e.equipment !== f.equipment) return false
     if (q) {
       const hay = normalize(
-        `${e.name} ${e.target} ${e.equipment} ${e.bodyPart} ${t(e.target)} ${t(e.equipment)} ${t(e.bodyPart)}`,
+        `${e.name} ${(e.aliases ?? []).join(' ')} ${e.target} ${e.equipment} ${e.bodyPart} ${t(e.target)} ${t(e.equipment)} ${t(e.bodyPart)}`,
       )
       for (const token of q.split(/\s+/)) {
         if (!hay.includes(token)) return false

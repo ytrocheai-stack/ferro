@@ -7,6 +7,7 @@
   --color-border: #2a2a33;
   --color-primary: #3d8bfd;
   --color-primary-strong: #2f6fe0;
+  --color-accent: #8c72ff;
   --color-text: #f2f2f5;
   --color-muted: #8f8f9b;
   --color-success: #33c076;
@@ -16,17 +17,31 @@
 }
 
 html {
-  background: var(--color-bg);
+  background: #090a10;
 }
 
 body {
   margin: 0;
-  background: var(--color-bg);
+  min-width: 320px;
+  background:
+    radial-gradient(ellipse 80% 38% at 50% -10%, color-mix(in srgb, var(--color-primary) 13%, transparent), transparent 72%),
+    radial-gradient(ellipse 65% 30% at 100% 6%, color-mix(in srgb, var(--color-accent) 9%, transparent), transparent 75%),
+    var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior-y: none;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(118deg, transparent 0 42%, color-mix(in srgb, var(--color-primary) 3%, transparent) 52%, transparent 66%);
+  opacity: 0.75;
 }
 
 input,
@@ -50,9 +65,11 @@ input[type='number'] {
 
 @layer components {
   .card {
-    background: var(--color-surface);
+    background: color-mix(in srgb, var(--color-surface) 92%, transparent);
     border: 1px solid var(--color-border);
     border-radius: 1rem;
+    box-shadow: 0 12px 30px rgb(0 0 0 / 0.12), inset 0 1px 0 rgb(255 255 255 / 0.025);
+    backdrop-filter: blur(10px);
   }
   .btn {
     display: flex;
@@ -69,8 +86,9 @@ input[type='number'] {
     opacity: 0.7;
   }
   .btn-primary {
-    background: var(--color-primary);
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 145%);
     color: #fff;
+    box-shadow: 0 8px 18px color-mix(in srgb, var(--color-primary) 25%, transparent);
   }
   .btn-surface {
     background: var(--color-surface-2);
@@ -91,6 +109,7 @@ input[type='number'] {
   }
   .input:focus {
     border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 15%, transparent);
   }
   .chip {
     display: inline-flex;
@@ -203,6 +222,13 @@ input[type='number'] {
 .pressable:active {
   transform: scale(0.96);
 }
+
+@media (pointer: coarse) {
+  .pressable {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
 .btn {
   transition:
     transform 0.12s ease-out,
@@ -264,4 +290,3 @@ input[type='number'] {
     transition-duration: 0.01ms !important;
   }
 }
-

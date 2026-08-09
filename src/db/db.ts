@@ -9,6 +9,8 @@ import type {
   Food,
   Dish,
   FoodLogEntry,
+  ImportBatch,
+  ExternalRef,
 } from './types'
 
 class FerroDB extends Dexie {
@@ -21,6 +23,8 @@ class FerroDB extends Dexie {
   foods!: Table<Food, string>
   dishes!: Table<Dish, string>
   foodLog!: Table<FoodLogEntry, string>
+  importBatches!: Table<ImportBatch, string>
+  externalRefs!: Table<ExternalRef, string>
 
   constructor() {
     super('ferro')
@@ -40,6 +44,20 @@ class FerroDB extends Dexie {
       foods: 'id, name, source, usedAt, offCode',
       dishes: 'id, name',
       foodLog: 'id, date, [date+meal]',
+    })
+    // v3: trazabilidad y deshacer de importaciones. Aditiva: no cambia IDs ni datos existentes.
+    this.version(3).stores({
+      workouts: 'id, startedAt',
+      routines: 'id, sortOrder, folderId',
+      customExercises: 'id',
+      folders: 'id, sortOrder',
+      measurements: 'id, date, kind, [kind+date]',
+      photos: 'id, date',
+      foods: 'id, name, source, usedAt, offCode, usdaFdcId',
+      dishes: 'id, name',
+      foodLog: 'id, date, [date+meal]',
+      importBatches: 'id, source, createdAt, status',
+      externalRefs: '&key, source, entity, localId, batchId',
     })
   }
 }

@@ -1,0 +1,18 @@
+{
+  "generatedAt": "2026-08-09T04:27:46.959Z",
+  "sources": {
+    "usdaFoundation": {
+      "url": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_json_2026-04-30.zip",
+      "release": "April 2026",
+      "license": "CC0",
+      "sha256": "9cd4f6a6a7256914b90c97d1139e2ba9ee0bc39f3f2d1c96fe8da3f93b06c9c2",
+      "records": 363
+    },
+    "wgerExercises": {
+      "url": "https://wger.de/api/v2/exerciseinfo/?language=2&limit=1000",
+      "license": "CC-BY-SA",
+      "sha256": "6ed171091602c4ea1a9e686bdf706478dd2f0792e23c725241ec8f4f1c2c017a",
+      "records": 834
+    }
+  }
+}

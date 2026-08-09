@@ -84,6 +84,26 @@ export function detectPRs(exercises: WorkoutExercise[], history: Workout[]): PR[
   return prs
 }
 
+/**
+ * Rebuilds derived workout fields after a historical edit/import. The input is not
+ * mutated; the returned list is chronological so PRs always compare against the
+ * workouts that genuinely happened before each session.
+ */
+export function recalculateWorkoutHistory(workouts: Workout[]): Workout[] {
+  const ordered = [...workouts].sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id))
+  const history: Workout[] = []
+  return ordered.map((workout) => {
+    const next: Workout = {
+      ...workout,
+      volumeKg: Math.round(workoutVolume(workout.exercises) * 10) / 10,
+      totalSets: completedSetCount(workout.exercises),
+      prs: detectPRs(workout.exercises, history),
+    }
+    history.push(next)
+    return next
+  })
+}
+
 /** Serie temporal por entreno para las gráficas de un ejercicio */
 export interface ExercisePoint {
   date: number

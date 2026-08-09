@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- route-level lazy modules intentionally live here. */
 import { lazy, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'

@@ -2,6 +2,8 @@ import { db } from '../db/db'
 import type { Food } from '../db/types'
 
 const API = 'https://es.openfoodfacts.org'
+const SEARCH_MIN_INTERVAL_MS = 6_000
+let lastSearchAt = 0
 
 interface OffProduct {
   code: string
@@ -47,7 +49,12 @@ function toFood(p: OffProduct): OffFood | null {
  * (sin añadir nada) no contamine "recientes" ni borre favoritos.
  */
 export async function searchOpenFoodFacts(query: string, limit = 20): Promise<Food[]> {
-  const url = `${API}/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=${limit}&fields=code,product_name,product_name_es,brands,nutriments`
+  const term = query.trim()
+  if (!term) return []
+  const wait = SEARCH_MIN_INTERVAL_MS - (Date.now() - lastSearchAt)
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait))
+  lastSearchAt = Date.now()
+  const url = `${API}/cgi/search.pl?search_terms=${encodeURIComponent(term)}&search_simple=1&action=process&json=1&page_size=${Math.min(20, Math.max(1, limit))}&fields=code,product_name,product_name_es,brands,nutriments`
   const res = await fetch(url)
   if (!res.ok) throw new Error(`Open Food Facts: HTTP ${res.status}`)
   const data = (await res.json()) as { products?: OffProduct[] }
@@ -63,10 +70,10 @@ export async function searchOpenFoodFacts(query: string, limit = 20): Promise<Fo
 export async function lookupBarcode(code: string): Promise<Food | null> {
   const cached = await db.foods.get(`off-${code}`)
   if (cached) return cached
-  const res = await fetch(`${API}/api/v2/product/${encodeURIComponent(code)}.json?fields=code,product_name,product_name_es,brands,nutriments`)
+  const res = await fetch(`${API}/api/v3.6/product/${encodeURIComponent(code)}.json?fields=code,product_name,product_name_es,brands,nutriments`)
   if (!res.ok) throw new Error(`Open Food Facts: HTTP ${res.status}`)
-  const data = (await res.json()) as { status: number; product?: OffProduct }
-  if (data.status !== 1 || !data.product) return null
+  const data = (await res.json()) as { status?: number | string; product?: OffProduct }
+  if ((data.status !== 1 && data.status !== 'success') || !data.product) return null
   const food = toFood({ ...data.product, code })
   if (food) await db.foods.put(food)
   return food

@@ -21,15 +21,17 @@ import {
   IconTarget,
 } from '../components/icons'
 import { uid } from '../lib/format'
+import { useLocalDateKey } from '../lib/useLocalDateKey'
 
 export default function Home() {
   const navigate = useNavigate()
+  const dateKey = useLocalDateKey()
   const routines = useLiveQuery(() => db.routines.orderBy('sortOrder').toArray(), [], undefined)
   const folders = useLiveQuery(() => db.folders.orderBy('sortOrder').toArray(), [], [])
   const workoutsThisWeek = useLiveQuery(() => {
     const start = startOfWeek(new Date(), { weekStartsOn: 1 }).getTime()
     return db.workouts.where('startedAt').aboveOrEqual(start).count()
-  }, [])
+  }, [dateKey])
   const weeklyGoal = useSettings((s) => s.weeklyGoal)
   const session = useActive((s) => s.session)
   const { byId } = useCatalog()

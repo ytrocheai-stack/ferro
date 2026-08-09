@@ -46,12 +46,22 @@ export interface Workout {
 export interface RoutineExercise {
   exerciseId: string
   plannedSets: number
+  /** Objetivo detallado por serie cuando la fuente lo proporciona (p. ej. Hevy). */
+  setTargets?: PlannedSet[]
   restSec: number
   notes?: string
   supersetGroup?: number
   /** rango de reps objetivo para doble progresión (default 8–12) */
   repRangeMin?: number
   repRangeMax?: number
+}
+
+export interface PlannedSet {
+  type: SetType
+  weightKg?: number
+  reps?: number
+  durationSec?: number
+  distanceM?: number
 }
 
 export interface Routine {
@@ -122,9 +132,13 @@ export interface Food {
   id: string
   name: string
   brand?: string
-  source: 'custom' | 'off' | 'seed'
+  source: 'custom' | 'off' | 'seed' | 'usda'
   /** código de barras (productos OFF) */
   offCode?: string
+  /** identificador FoodData Central para alimentos USDA */
+  usdaFdcId?: number
+  /** alias de búsqueda verificados, sin sustituir el nombre oficial */
+  aliases?: string[]
   kcal100: number
   p100: number
   c100: number
@@ -134,6 +148,26 @@ export interface Food {
   favorite?: boolean
   /** última vez usado, para "recientes" */
   usedAt?: number
+}
+
+export type ImportSource = 'hevy-csv' | 'hevy-api'
+export type ImportEntity = 'workout' | 'routine' | 'folder' | 'measurement' | 'exercise'
+
+export interface ImportBatch {
+  id: string
+  source: ImportSource
+  createdAt: number
+  status: 'completed' | 'undone'
+  counts: Partial<Record<ImportEntity, number>>
+}
+
+export interface ExternalRef {
+  key: string
+  source: ImportSource
+  entity: ImportEntity
+  externalId: string
+  localId: string
+  batchId: string
 }
 
 export interface DishItem {
