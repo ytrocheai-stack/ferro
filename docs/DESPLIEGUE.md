@@ -4,7 +4,7 @@
 - **URL**: `https://ytrocheai-stack.github.io/ferro/`
 - **Ruta pública**: `/ferro/` (forma parte del contrato de la PWA y de sus enlaces internos)
 
-El workflow [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) está preparado para ejecutarse al hacer push a `main` o manualmente desde Actions. El token disponible para esta publicación no tiene el scope `workflow`, por lo que GitHub no permite subir ese archivo todavía; el release 1.1 se publicó directamente a `gh-pages` y queda listo para instalar. Al otorgar ese scope, añade el workflow y futuras publicaciones quedarán automatizadas.
+El workflow [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) se ejecuta al hacer push a `main` o manualmente desde Actions. GitHub Pages está configurado en modo `workflow` y el despliegue automático quedó verificado con la ejecución [31299312626](https://github.com/ytrocheai-stack/ferro/actions/runs/31299312626).
 
 ## Publicar una versión
 
