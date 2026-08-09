@@ -16,8 +16,11 @@ import { formatDuration, formatVolume } from '../lib/format'
 import { isIOS, isStandalone } from '../lib/platform'
 import { Select } from '../components/Select'
 import { Confirm } from '../components/Sheet'
+import { HevyImportSheet } from '../components/HevyImportSheet'
 import { IconDownload, IconFlame, IconRuler, IconShare, IconUpload } from '../components/icons'
 import { APP_VERSION, DATASET_URL, REST_OPTIONS, restLabel } from '../lib/constants'
+import { useLocalDateKey } from '../lib/useLocalDateKey'
+import { undoImport, type ImportSummary } from '../lib/hevyImport'
 
 const weekKey = (d: Date | number) => format(startOfWeek(d, { weekStartsOn: 1 }), 'yyyy-MM-dd')
 
@@ -36,6 +39,7 @@ function weeklyStreak(workouts: Workout[]): number {
 
 export default function Profile() {
   const workouts = useLiveQuery(() => db.workouts.toArray(), [], [] as Workout[])
+  useLocalDateKey()
   const settings = useSettings()
   const units = settings.units
 
@@ -288,6 +292,8 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [storage, setStorage] = useState<{ usageMB: number; persisted: boolean } | null>(null)
+  const [hevyOpen, setHevyOpen] = useState(false)
+  const [lastImport, setLastImport] = useState<ImportSummary | null>(null)
 
   // GIFs offline
   const swReady = 'serviceWorker' in navigator && !!navigator.serviceWorker.controller
@@ -338,6 +344,12 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
     }
   }
 
+  const onHevyImported = (summary: ImportSummary) => {
+    setLastImport(summary)
+    const total = Object.values(summary.counts).reduce((sum, count) => sum + (count ?? 0), 0)
+    setMsg(`Hevy importado: ${total} registros. Puedes deshacer este lote.`)
+  }
+
   const photosFileRef = useRef<HTMLInputElement>(null)
   const [photosMsg, setPhotosMsg] = useState<string | null>(null)
   const onImportPhotos = async (f: File | undefined) => {
@@ -374,6 +386,19 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
         />
       </div>
       {msg && <p className="pt-2 text-xs text-success">{msg}</p>}
+
+      <button className="btn my-3 w-full bg-primary/15 text-sm text-primary" onClick={() => setHevyOpen(true)}>
+        <IconDownload size={16} />
+        Importar datos de Hevy
+      </button>
+      {lastImport && (
+        <button
+          className="mb-3 w-full rounded-xl border border-danger/30 px-3 py-2 text-xs font-semibold text-danger"
+          onClick={() => void undoImport(lastImport.batchId).then(() => { setMsg('Importación de Hevy deshecha.'); setLastImport(null) })}
+        >
+          Deshacer última importación de Hevy
+        </button>
+      )}
 
       <div className="flex gap-2 border-b border-border/50 pb-3 pt-3">
         <button
@@ -460,6 +485,7 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
         danger
         onConfirm={() => void doImport()}
       />
+      <HevyImportSheet open={hevyOpen} onClose={() => setHevyOpen(false)} onImported={onHevyImported} />
     </div>
   )
 }

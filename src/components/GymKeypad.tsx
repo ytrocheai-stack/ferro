@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- keypad constants are shared by its input controls. */
 import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import { IconCheck } from './icons'

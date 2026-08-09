@@ -6,6 +6,6 @@ export function restLabel(sec: number): string {
   return sec === 0 ? 'Sin descanso' : clock(sec)
 }
 
-export const APP_VERSION = '1.0.0'
+export const APP_VERSION = '1.1.0'
 
 export const DATASET_URL = 'https://github.com/hasaneyldrm/exercises-dataset'

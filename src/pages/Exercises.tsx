@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Virtuoso } from 'react-virtuoso'
 import type { Exercise, ExerciseGroup } from '../data/exercises'
 import { exerciseGroup, searchExercises, useCatalog } from '../data/exercises'
 import { MUSCLE_GROUP_LABELS, MUSCLE_GROUP_ORDER } from '../data/muscleGroups'
@@ -55,6 +56,13 @@ export default function Exercises() {
 
   const showSections = !query.trim() && !group && !equipment && !onlyCustom
   const sections = useMemo(() => (showSections ? groupByMuscle(results) : []), [showSections, results])
+  const virtualItems = useMemo(() => {
+    if (!showSections) return results.map((exercise) => ({ type: 'exercise' as const, exercise }))
+    return sections.flatMap((section) => [
+      { type: 'header' as const, key: section.key, label: section.label, count: section.items.length },
+      ...section.items.map((exercise) => ({ type: 'exercise' as const, exercise })),
+    ])
+  }, [results, sections, showSections])
 
   return (
     <div className="px-4 pt-6">
@@ -91,19 +99,19 @@ export default function Exercises() {
 
       {!ready && !error && <SkeletonList rows={9} />}
 
-      <div>
-        {showSections
-          ? sections.map((s) => (
-              <div key={s.key}>
-                <div className="sticky top-[env(safe-area-inset-top)] z-10 -mx-4 bg-bg/95 px-4 py-1.5 text-xs font-bold uppercase tracking-wide text-muted backdrop-blur">
-                  {s.label} <span className="text-muted/70">· {s.items.length}</span>
-                </div>
-                {s.items.map((e) => (
-                  <ExerciseRow key={e.id} exercise={e} />
-                ))}
+      <div className="-mx-4">
+        {ready && virtualItems.length > 0 && (
+          <Virtuoso
+            useWindowScroll
+            data={virtualItems}
+            computeItemKey={(_, item) => item.type === 'header' ? `section-${item.key}` : item.exercise.id}
+            itemContent={(_, item) => item.type === 'header' ? (
+              <div className="sticky top-[env(safe-area-inset-top)] z-10 bg-bg/95 px-4 py-1.5 text-xs font-bold uppercase tracking-wide text-muted backdrop-blur">
+                {item.label} <span className="text-muted/70">· {item.count}</span>
               </div>
-            ))
-          : results.map((e) => <ExerciseRow key={e.id} exercise={e} />)}
+            ) : <ExerciseRow exercise={item.exercise} />}
+          />
+        )}
         {ready && results.length === 0 && (
           <p className="py-10 text-center text-sm text-muted">
             {onlyCustom

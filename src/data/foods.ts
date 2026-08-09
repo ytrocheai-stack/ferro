@@ -13,12 +13,16 @@ export interface LocalFood {
   c100: number
   f100: number
   servingG: number
-  source: 'seed' | 'custom' | 'off'
+  source: 'seed' | 'custom' | 'off' | 'usda'
+  aliases?: string[]
+  usdaFdcId?: number
   favorite?: boolean
   usedAt?: number
 }
 
 let seedCache: LocalFood[] | null = null
+let usdaCache: LocalFood[] | null = null
+let usdaPending: Promise<LocalFood[]> | null = null
 
 export function seedFoods(): LocalFood[] {
   seedCache ??= flattenFoodSeed().map(([name, kcal100, p100, c100, f100, servingG]) => ({
@@ -34,6 +38,24 @@ export function seedFoods(): LocalFood[] {
   return seedCache
 }
 
+export function loadUsdaFoods(): Promise<LocalFood[]> {
+  if (usdaCache) return Promise.resolve(usdaCache)
+  usdaPending ??= fetch(import.meta.env.BASE_URL + 'data/usda-foundation.json')
+    .then((response) => {
+      if (!response.ok) throw new Error(`No se pudo cargar USDA (HTTP ${response.status})`)
+      return response.json() as Promise<LocalFood[]>
+    })
+    .then((foods) => {
+      usdaCache = foods.map((food) => ({ ...food, source: 'usda' as const, servingG: food.servingG ?? 100 }))
+      return usdaCache
+    })
+    .catch((error) => {
+      usdaPending = null
+      throw error
+    })
+  return usdaPending
+}
+
 function fromDbFood(f: Food): LocalFood {
   return {
     id: f.id,
@@ -46,6 +68,8 @@ function fromDbFood(f: Food): LocalFood {
     source: f.source,
     favorite: f.favorite,
     usedAt: f.usedAt,
+    aliases: f.aliases,
+    usdaFdcId: f.usdaFdcId,
   }
 }
 
@@ -53,11 +77,26 @@ function fromDbFood(f: Food): LocalFood {
  *  materializado en Dexie (favorito) sustituye a su copia estática para no duplicarlo. */
 export function useFoodCatalog() {
   const dbFoods = useLiveQuery(() => db.foods.toArray(), [], [] as Food[])
+  const [usda, setUsda] = useState<LocalFood[]>(usdaCache ?? [])
+  useEffect(() => {
+    if (usdaCache) return
+    let alive = true
+    void loadUsdaFoods().then((foods) => {
+      if (alive) setUsda(foods)
+    }).catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
   const all = useMemo(() => {
     const custom = dbFoods.map(fromDbFood)
     const overridden = new Set(dbFoods.map((f) => f.id))
-    return [...custom, ...seedFoods().filter((s) => !overridden.has(s.id))]
-  }, [dbFoods])
+    return [
+      ...custom,
+      ...seedFoods().filter((s) => !overridden.has(s.id)),
+      ...usda.filter((s) => !overridden.has(s.id)),
+    ]
+  }, [dbFoods, usda])
   return all
 }
 
@@ -65,14 +104,15 @@ export function searchFoods(all: LocalFood[], query: string, limit = 40): LocalF
   const q = normalize(query.trim())
   if (!q) {
     // favoritos fijados arriba; el resto por recencia de uso
-    return [...all]
+    return all
+      .filter((food) => food.source !== 'off' || food.favorite || food.usedAt)
       .sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0) || (b.usedAt ?? 0) - (a.usedAt ?? 0))
       .slice(0, limit)
   }
   const tokens = q.split(/\s+/)
   return all
     .filter((f) => {
-      const hay = normalize(f.name)
+      const hay = normalize(`${f.name} ${(f.aliases ?? []).join(' ')}`)
       return tokens.every((t) => hay.includes(t))
     })
     .slice(0, limit)
@@ -92,15 +132,34 @@ export function macrosForGrams(
 }
 
 export async function markFoodUsed(foodId: string) {
-  if (foodId.startsWith('seed-')) return
   const existing = await db.foods.get(foodId)
-  if (existing) await db.foods.put({ ...existing, usedAt: Date.now() })
+  if (existing) {
+    await db.foods.put({ ...existing, usedAt: Date.now() })
+    return
+  }
+  const staticFood = [...seedFoods(), ...(usdaCache ?? await loadUsdaFoods().catch(() => []))].find((food) => food.id === foodId)
+  if (staticFood) {
+    await db.foods.put({
+      id: staticFood.id,
+      name: staticFood.name,
+      source: staticFood.source,
+      aliases: staticFood.aliases,
+      usdaFdcId: staticFood.usdaFdcId,
+      kcal100: staticFood.kcal100,
+      p100: staticFood.p100,
+      c100: staticFood.c100,
+      f100: staticFood.f100,
+      servingG: staticFood.servingG,
+      usedAt: Date.now(),
+    })
+  }
 }
 
 export async function toggleFavoriteFood(food: LocalFood) {
+  const isStatic = food.source === 'seed' || food.source === 'usda'
   const existing = await db.foods.get(food.id)
   if (existing) {
-    if (food.source === 'seed' && existing.favorite) {
+    if (isStatic && existing.favorite) {
       // desmarcar un alimento base: se borra la copia y vuelve a valer el registro estático
       await db.foods.delete(food.id)
     } else {
@@ -108,12 +167,14 @@ export async function toggleFavoriteFood(food: LocalFood) {
     }
     return
   }
-  if (food.source === 'seed') {
+  if (isStatic) {
     // materializar el alimento base en Dexie para poder recordar el favorito
     await db.foods.put({
       id: food.id,
       name: food.name,
-      source: 'seed',
+      source: food.source,
+      aliases: food.aliases,
+      usdaFdcId: food.usdaFdcId,
       kcal100: food.kcal100,
       p100: food.p100,
       c100: food.c100,

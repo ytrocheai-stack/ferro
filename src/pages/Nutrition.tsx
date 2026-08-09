@@ -16,6 +16,7 @@ import { NutritionGoalsWizard } from '../components/NutritionGoalsWizard'
 import { ActionSheet, Sheet } from '../components/Sheet'
 import { SkeletonChart } from '../components/Skeleton'
 import { IconChevronLeft, IconChevronRight, IconDots, IconPlus, IconRepeat, IconTarget } from '../components/icons'
+import { useLocalDateKey } from '../lib/useLocalDateKey'
 
 const MEALS: { key: MealKey; label: string }[] = [
   { key: 'breakfast', label: 'Desayuno' },
@@ -28,11 +29,15 @@ const dateKey = (d: Date) => format(d, 'yyyy-MM-dd')
 
 export default function Nutrition() {
   const [day, setDay] = useState(() => new Date())
+  const todayKey = useLocalDateKey()
   const goals = useNutrition((s) => s.goals)
   const [wizardOpen, setWizardOpen] = useState(!goals.configured)
   const [pickerFor, setPickerFor] = useState<MealKey | null>(null)
 
   const key = dateKey(day)
+  useEffect(() => {
+    if (key === dateKey(new Date())) setDay(new Date())
+  }, [todayKey, key])
   const entries = useLiveQuery(() => db.foodLog.where('date').equals(key).toArray(), [key], undefined)
 
   const totals = useMemo(() => {
@@ -51,7 +56,6 @@ export default function Nutrition() {
     let prev: FoodLogEntry[] = []
     for (let i = 0; i < 14; i++) {
       const k = dateKey(cursor)
-      // eslint-disable-next-line no-await-in-loop
       prev = await db.foodLog.where('date').equals(k).toArray()
       if (prev.length) break
       cursor = subDays(cursor, 1)

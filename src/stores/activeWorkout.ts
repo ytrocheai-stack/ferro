@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { db } from '../db/db'
 import type { Routine, SetType, Workout, WorkoutExercise } from '../db/types'
-import { completedSetCount, detectPRs, workoutVolume } from '../lib/stats'
+import { recalculateWorkoutHistory } from '../lib/stats'
 import { uid } from '../lib/format'
 import { vibrate } from '../lib/notify'
 import { useSettings } from './settings'
@@ -542,20 +542,22 @@ async function doFinish(get: Getter, set: Setter): Promise<string | null> {
   const isEdit = !!s.editingWorkoutId
   const startedAt = isEdit ? (s.originalStartedAt ?? s.startedAt) : s.startedAt
   const endedAt = isEdit ? (s.originalEndedAt ?? Date.now()) : Date.now()
-  const all = await db.workouts.orderBy('startedAt').toArray()
-  const history = all.filter((w) => w.startedAt < startedAt && w.id !== s.editingWorkoutId)
   const workout: Workout = {
     id: s.editingWorkoutId ?? uid(),
     name: s.name.trim() || defaultWorkoutName(),
     startedAt,
     endedAt,
     exercises,
-    volumeKg: Math.round(workoutVolume(exercises) * 10) / 10,
-    totalSets: completedSetCount(exercises),
-    prs: detectPRs(exercises, history),
+    volumeKg: 0,
+    totalSets: 0,
+    prs: [],
     notes: s.notes.trim() || undefined,
   }
-  await db.workouts.put(workout)
+  const all = await db.workouts.toArray()
+  const normalized = recalculateWorkoutHistory([...all.filter((item) => item.id !== workout.id), workout])
+  await db.transaction('rw', db.workouts, async () => {
+    await db.workouts.bulkPut(normalized)
+  })
   set({ session: null, rest: null })
   return workout.id
 }

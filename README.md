@@ -1,55 +1,51 @@
-# NextRep 🏋️
+# NextRep
 
-Registro de entrenamientos de gimnasio estilo [Hevy](https://www.hevyapp.com/), para uso personal.
-**PWA 100% offline**: se instala en Android (Chrome) y iPhone (Safari) y funciona sin conexión.
+Registro de entrenamientos y nutrición personal, inspirado en Hevy. Es una PWA offline-first: los datos del usuario viven en IndexedDB del dispositivo y la interfaz mantiene la misma experiencia en Android, iPhone y escritorio.
 
-## Características
+## Qué incluye
 
-- **1,324 ejercicios** con GIF, imagen e instrucciones paso a paso **en español** (dataset [exercises-dataset](https://github.com/hasaneyldrm/exercises-dataset), media © Gym visual), organizados por grupo muscular
-- **Rutinas y programas**: plantillas propias con series objetivo, rangos de reps y descansos; programas listos (PPL, Torso/Pierna, Full-body, Bro split, Arnold Split)
-- **Registro de entrenos**: valores del entreno anterior como referencia, tipos de serie (W/F/D), superseries, RPE, cardio, sugerencia de doble progresión, calculadora de discos, temporizador de descanso con vibración/sonido/notificación
-- **Historial** completo y editable, con récords personales automáticos
-- **Análisis**: series por grupo muscular vs. recomendado, heatmap corporal, volumen semanal
-- **Nutrición**: diario de comidas (base local de ~250 alimentos, búsqueda Open Food Facts, escáner de código de barras, platos propios, favoritos), objetivos con asistente BMR/TDEE, tendencia de peso suavizada con sugerencia adaptativa de calorías
-- **Medidas y fotos**: 15 medidas corporales con gráficas, fotos de progreso con visor y comparador antes/después
-- **Backup**: exporta/importa todos tus datos en JSON; series a CSV
-- kg/lb, pantalla siempre encendida al entrenar (Wake Lock), tema oscuro
-
-Todos los datos viven en tu teléfono (IndexedDB). No hay servidor ni cuentas.
-
-## Documentación
-
-- [CLAUDE.md](CLAUDE.md) — contexto rápido e invariantes para devs y agentes de IA
-- [docs/ARQUITECTURA.md](docs/ARQUITECTURA.md) — cómo funciona todo por dentro
-- [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md) — cómo se despliega (¡el deploy es manual!)
-- [docs/AUDITORIA-2026-07.md](docs/AUDITORIA-2026-07.md) — auditoría de bugs y limitaciones conocidas
+- Biblioteca de ejercicios con imágenes/GIFs, catálogo complementario de wger y ejercicios personalizados.
+- Rutinas, superseries, calentamientos, RPE, cardio, progresión y PRs recalculados cronológicamente.
+- Historial editable, medidas, fotos y análisis de volumen.
+- Diario nutricional con alimentos base, USDA FoodData Central, Open Food Facts, escáner y platos.
+- Backup JSON validado (con límite de tamaño), CSV de series y restauración segura sin mutaciones parciales.
+- Importación Hevy por CSV o API Pro: entrenos, rutinas, carpetas, medidas y ejercicios; lotes trazables y deshacer.
+- PWA instalable y usable sin conexión; los snapshots de datos quedan fijados por hash.
 
 ## Desarrollo
 
 ```bash
 npm install
-npm run fetch-data   # descarga el dataset (~150 MB) y genera public/data|images|videos
+npm run fetch-data   # dataset de ejercicios + snapshots USDA/wger
 npm run dev          # http://localhost:5173
-npm run build        # build de producción (dist/) con service worker
-npm run preview      # sirve el build en http://localhost:4173/ferro/
+npm run check        # lint, typecheck, tests y build
+npm run test:e2e     # Playwright (Chromium + WebKit)
 ```
 
-El deploy a GitHub Pages es **manual**: se compila y se sube `dist/` a la rama `gh-pages`
-(no hay CI activo). Pasos exactos en [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md).
+El build usa `/ferro/` como basename para mantener compatibilidad con el sitio publicado y con IndexedDB `ferro`. No cambies esos identificadores sin una migración explícita.
 
-## Instalación en el teléfono
+## Datos externos y licencias
 
-**Android**: abre la URL en Chrome → menú ⋮ → **«Instalar aplicación»**.
-**iPhone**: abre la URL en Safari → **Compartir** → **«Añadir a pantalla de inicio»**.
+Los snapshots reproducibles y sus hashes están en [`data/sources.lock.json`](data/sources.lock.json). El workflow ejecuta `npm run fetch-data` antes del build para regenerar `public/data`.
 
-Después:
-1. Abre la app instalada una vez con conexión (precachea la biblioteca, ~15 MB)
-2. Opcional: en **Perfil → Datos → «Descargar todos los GIFs»** (~130 MB) para tener las animaciones sin conexión. Los GIFs que veas con conexión también quedan guardados automáticamente.
+- Ejercicios y media: [exercises-dataset](https://github.com/hasaneyldrm/exercises-dataset), con atribución a Gym visual.
+- Alimentos: [USDA FoodData Central Foundation](https://fdc.nal.usda.gov/download-datasets.html), CC0; el nombre oficial se conserva y las búsquedas pueden usar alias verificados.
+- Ejercicios complementarios: [wger](https://wger.de/en/software/api), CC BY-SA.
+- Productos y códigos de barras: [Open Food Facts](https://world.openfoodfacts.org/data), datos comunitarios; la app muestra estos resultados como fuente cacheada y aplica límites de consulta.
 
-## Stack
+Consulta [`docs/DATOS-REALES.md`](docs/DATOS-REALES.md) para refrescar snapshots y [`docs/IMPORTACION-HEVY.md`](docs/IMPORTACION-HEVY.md) para CSV/API.
 
-Vite · React 18 · TypeScript · Tailwind CSS v4 · Dexie (IndexedDB) · Zustand · Recharts · vite-plugin-pwa (Workbox)
+## Publicación
 
-## Atribución
+Cada push a `main` ejecuta [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), instala dependencias con `npm ci`, regenera los datos fijados, ejecuta el build y despliega GitHub Pages. La guía de operación está en [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 
-Datos e imágenes de ejercicios: [hasaneyldrm/exercises-dataset](https://github.com/hasaneyldrm/exercises-dataset) — media © [Gym visual](https://gymvisual.com/). Proyecto personal sin ánimo de lucro, no afiliado a Hevy.
+## Instalación
+
+En Android abre la URL en Chrome y elige **Instalar aplicación**. En iPhone abre Safari, toca **Compartir** y después **Añadir a pantalla de inicio**. Abre la app una vez con conexión para precachear la biblioteca; los GIFs se pueden descargar desde **Perfil → Datos**.
+
+## Arquitectura
+
+- React 18 + TypeScript + Vite + Tailwind CSS v4.
+- Dexie/IndexedDB para persistencia local y Zustand para la sesión activa.
+- Vitest + Testing Library para unit/integration; Playwright + axe para smoke y accesibilidad.
+- `docs/ARQUITECTURA.md` mantiene el mapa técnico e invariantes.
