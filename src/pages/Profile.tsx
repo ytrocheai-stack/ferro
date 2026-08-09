@@ -350,7 +350,10 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
   const onHevyImported = (summary: ImportSummary) => {
     setLastImport(summary)
     const total = Object.values(summary.counts).reduce((sum, count) => sum + (count ?? 0), 0)
-    setMsg(`Hevy importado: ${total} registros. Puedes deshacer este lote.`)
+    const warning = summary.unclassifiedExercises.length
+      ? ` Sin grupo muscular: ${summary.unclassifiedExercises.join(', ')}.`
+      : ''
+    setMsg(`Hevy importado: ${total} registros. Puedes deshacer este lote.${warning}`)
   }
 
   const photosFileRef = useRef<HTMLInputElement>(null)

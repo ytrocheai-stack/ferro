@@ -20,6 +20,7 @@ import { useSettings } from '../stores/settings'
 import {
   MUSCLE_GROUP_LABELS,
   MUSCLE_GROUP_ORDER,
+  classifyMuscleDose,
   RECOMMENDED_WEEKLY_SETS,
   type MuscleGroup,
 } from '../data/muscleGroups'
@@ -321,9 +322,10 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
 function MuscleDose({ group, value }: { group: MuscleGroup; value: number }) {
   const [low, high] = RECOMMENDED_WEEKLY_SETS[group]
   const progress = Math.min(100, (value / high) * 100)
-  const status = value === 0 ? 'Sin estímulo' : value < low ? 'Bajo' : value <= high ? 'En rango' : 'Alto'
-  const tone = value === 0 ? 'text-muted' : value < low ? 'text-warning' : value <= high ? 'text-success' : 'text-danger'
-  const fill = value === 0 ? 'bg-border' : value < low ? 'bg-warning' : value <= high ? 'bg-success' : 'bg-danger'
+  const state = classifyMuscleDose(group, value)
+  const status = state === 'none' ? 'Sin estímulo' : state === 'low' ? 'Bajo' : state === 'optimal' ? 'En rango' : 'Alto'
+  const tone = state === 'none' ? 'text-muted' : state === 'low' ? 'text-primary-strong' : state === 'optimal' ? 'text-success' : 'text-warning'
+  const fill = state === 'none' ? 'bg-border' : state === 'low' ? 'bg-primary-strong' : state === 'optimal' ? 'bg-success' : 'bg-warning'
   return (
     <div className="rounded-xl border border-border/60 bg-surface-2/45 px-2.5 py-2.5">
       <div className="flex items-start justify-between gap-1">

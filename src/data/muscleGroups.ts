@@ -62,6 +62,17 @@ export const RECOMMENDED_WEEKLY_SETS: Record<MuscleGroup, [number, number]> = {
   calves: [8, 16],
 }
 
+export type MuscleDoseState = 'none' | 'low' | 'optimal' | 'high'
+
+/** Clasifica la dosis semanal contra el rango recomendado del propio músculo. */
+export function classifyMuscleDose(group: MuscleGroup, value: number): MuscleDoseState {
+  const [low, high] = RECOMMENDED_WEEKLY_SETS[group]
+  if (value <= 0) return 'none'
+  if (value < low) return 'low'
+  if (value <= high) return 'optimal'
+  return 'high'
+}
+
 export function groupFromTarget(target: string): MuscleGroup | null {
   return TARGET_TO_GROUP[target.toLowerCase()] ?? null
 }

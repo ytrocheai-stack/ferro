@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { MUSCLE_GROUP_LABELS, type MuscleGroup } from '../data/muscleGroups'
+import { classifyMuscleDose, MUSCLE_GROUP_LABELS, type MuscleDoseState, type MuscleGroup } from '../data/muscleGroups'
 
 interface Region {
   group: MuscleGroup
@@ -31,29 +31,14 @@ const HEAD = 'M80 12 a18 18 0 1 0 0.1 0'
 const TORSO_OUTLINE =
   'M60 40 h40 l14 20 v70 l-10 10 v90 h-14 v70 h-20 v-70 h-14 v-90 l-10 -10 v-70 z'
 
-function intensityColor(value: number, max: number): string {
-  if (value <= 0) return 'var(--color-surface-2)'
-  const t = Math.min(1, value / Math.max(1, max))
-  // azul (bajo) → verde (óptimo) → naranja (alto)
-  if (t < 0.5) {
-    const k = t / 0.5
-    return mix('#2f6fe0', '#33c076', k)
-  }
-  const k = (t - 0.5) / 0.5
-  return mix('#33c076', '#f2a33c', k)
+function doseColor(state: MuscleDoseState): string {
+  if (state === 'low') return 'var(--color-primary-strong)'
+  if (state === 'optimal') return 'var(--color-success)'
+  if (state === 'high') return 'var(--color-warning)'
+  return 'var(--color-surface-2)'
 }
 
-function mix(c1: string, c2: string, t: number): string {
-  const p = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16))
-  const [r1, g1, b1] = p(c1)
-  const [r2, g2, b2] = p(c2)
-  const r = Math.round(r1 + (r2 - r1) * t)
-  const g = Math.round(g1 + (g2 - g1) * t)
-  const b = Math.round(b1 + (b2 - b1) * t)
-  return `rgb(${r},${g},${b})`
-}
-
-function Body({ regions, counts, max }: { regions: Region[]; counts: Partial<Record<MuscleGroup, number>>; max: number }) {
+function Body({ regions, counts }: { regions: Region[]; counts: Partial<Record<MuscleGroup, number>> }) {
   const [hover, setHover] = useState<MuscleGroup | null>(null)
   return (
     <svg viewBox="0 0 160 320" className="h-full w-full">
@@ -61,11 +46,12 @@ function Body({ regions, counts, max }: { regions: Region[]; counts: Partial<Rec
       <path d={TORSO_OUTLINE} fill="var(--color-surface-2)" opacity={0.5} />
       {regions.map((r, i) => {
         const v = counts[r.group] ?? 0
+        const state = classifyMuscleDose(r.group, v)
         return (
           <path
             key={i}
             d={r.d}
-            fill={intensityColor(v, max)}
+            fill={doseColor(state)}
             fillRule="evenodd"
             stroke="var(--color-bg)"
             strokeWidth={1.5}
@@ -90,29 +76,28 @@ function Body({ regions, counts, max }: { regions: Region[]; counts: Partial<Rec
 }
 
 export function MuscleHeatmap({ counts }: { counts: Partial<Record<MuscleGroup, number>> }) {
-  const max = Math.max(1, ...Object.values(counts).map((v) => v ?? 0))
   return (
     <div>
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col items-center gap-1">
           <div className="aspect-[1/2] w-full max-w-[140px]">
-            <Body regions={FRONT_REGIONS} counts={counts} max={max} />
+            <Body regions={FRONT_REGIONS} counts={counts} />
           </div>
           <span className="text-[10px] font-semibold uppercase text-muted">Frente</span>
         </div>
         <div className="flex flex-col items-center gap-1">
           <div className="aspect-[1/2] w-full max-w-[140px]">
-            <Body regions={BACK_REGIONS} counts={counts} max={max} />
+            <Body regions={BACK_REGIONS} counts={counts} />
           </div>
           <span className="text-[10px] font-semibold uppercase text-muted">Espalda</span>
         </div>
       </div>
       <div className="flex items-center justify-center gap-2 pt-3 text-[10px] text-muted">
-        <span className="h-2.5 w-2.5 rounded-full" style={{ background: intensityColor(0.1, 1) }} />
+        <span className="h-2.5 w-2.5 rounded-full" style={{ background: doseColor('low') }} />
         Poco
-        <span className="ml-2 h-2.5 w-2.5 rounded-full" style={{ background: intensityColor(0.5, 1) }} />
+        <span className="ml-2 h-2.5 w-2.5 rounded-full" style={{ background: doseColor('optimal') }} />
         Óptimo
-        <span className="ml-2 h-2.5 w-2.5 rounded-full" style={{ background: intensityColor(1, 1) }} />
+        <span className="ml-2 h-2.5 w-2.5 rounded-full" style={{ background: doseColor('high') }} />
         Mucho
       </div>
     </div>

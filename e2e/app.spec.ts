@@ -16,6 +16,13 @@ test('el panel de importación Hevy expone controles accesibles', async ({ page 
   await expect(page.getByLabel('API key')).toHaveAttribute('type', 'password')
 })
 
+test('importa el dialecto real del CSV de Hevy', async ({ page }) => {
+  await page.goto('./perfil')
+  await page.getByRole('button', { name: /Importar datos de Hevy/ }).click()
+  await page.locator('input[type="file"][accept*=".csv"]').setInputFiles('e2e/fixtures/hevy-workouts.csv')
+  await expect(page.getByText(/Hevy importado: 3 registros/)).toBeVisible()
+})
+
 test('la pantalla inicial no tiene violaciones axe críticas', async ({ page }) => {
   await page.goto('./')
   const result = await new AxeBuilder({ page }).analyze()
