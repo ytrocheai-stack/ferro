@@ -17,7 +17,7 @@ export interface Exercise {
   image: string | null
   gif: string | null
   steps: string[]
-  source?: 'primary' | 'wger'
+  source?: 'primary'
   sourceUrl?: string
   license?: string
   aliases?: string[]
@@ -34,26 +34,11 @@ export function loadExercises(): Promise<Exercise[]> {
       if (!r.ok) throw new Error(`No se pudo cargar la biblioteca (HTTP ${r.status})`)
       return r.json()
     })
-    .then(async (list: Exercise[]) => {
+    .then((list: Exercise[]) => {
       const primary = list.map((exercise) => ({ ...exercise, source: exercise.source ?? 'primary' as const }))
-      let supplement: Exercise[] = []
-      try {
-        const response = await fetch(import.meta.env.BASE_URL + 'data/exercises-wger.json')
-        if (response.ok) supplement = (await response.json()) as Exercise[]
-      } catch {
-        // El catálogo principal sigue funcionando aunque falte el snapshot opcional.
-      }
-      const names = new Set(primary.map((exercise) => normalize(exercise.name)))
-      const merged = [...primary]
-      for (const exercise of supplement) {
-        const normalized = normalize(exercise.name)
-        if (!normalized || names.has(normalized)) continue
-        names.add(normalized)
-        merged.push({ ...exercise, source: 'wger' })
-      }
-      merged.sort((a, b) => a.name.localeCompare(b.name))
-      cache = merged
-      return merged
+      primary.sort((a, b) => a.name.localeCompare(b.name))
+      cache = primary
+      return primary
     })
     .catch((err) => {
       pending = null

@@ -20,7 +20,44 @@ test('importa el dialecto real del CSV de Hevy', async ({ page }) => {
   await page.goto('./perfil')
   await page.getByRole('button', { name: /Importar datos de Hevy/ }).click()
   await page.locator('input[type="file"][accept*=".csv"]').setInputFiles('e2e/fixtures/hevy-workouts.csv')
-  await expect(page.getByText(/Hevy importado: 3 registros/)).toBeVisible()
+  await expect(page.getByText(/Hevy importado: 1 registros y 2 series/)).toBeVisible()
+  await expect(page.getByRole('button', { name: /Deshacer última importación/ })).toBeVisible()
+})
+
+test('la importación Hevy es idempotente y se puede deshacer tras recargar', async ({ page }) => {
+  await page.goto('./perfil')
+  const importButton = page.getByRole('button', { name: /Importar datos de Hevy/ })
+  await importButton.click()
+  const input = page.locator('input[type="file"][accept*=".csv"]')
+  await input.setInputFiles('e2e/fixtures/hevy-workouts.csv')
+  await expect(page.getByText(/Hevy importado: 1 registros/)).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('button', { name: /Deshacer última importación/ })).toBeVisible()
+  await page.getByRole('button', { name: /Deshacer última importación/ }).click()
+  await expect(page.getByText('Importación de Hevy deshecha.')).toBeVisible()
+  await expect(page.getByText('Entrenos0', { exact: true })).toBeVisible()
+})
+
+test('un archivo binario con extensión CSV muestra un error accionable', async ({ page }) => {
+  await page.goto('./perfil')
+  await page.getByRole('button', { name: /Importar datos de Hevy/ }).click()
+  await page.locator('input[type="file"][accept*=".csv"]').setInputFiles({
+    name: 'workout_data.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from('PK\u0003\u0004[Content_Types].xml'),
+  })
+  await expect(page.getByRole('alert')).toContainText(/Excel|XLSX|CSV válido/)
+  await expect(page.getByRole('alert')).not.toContainText(/Content_Types|workbook\.xml/)
+})
+
+test('exporta las series en un CSV descargable desde Android', async ({ page }) => {
+  await page.goto('./perfil')
+  await page.getByRole('button', { name: /Importar datos de Hevy/ }).click()
+  await page.locator('input[type="file"][accept*=".csv"]').setInputFiles('e2e/fixtures/hevy-workouts.csv')
+  await expect(page.getByText(/Hevy importado: 1 registros/)).toBeVisible()
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Exportar series a CSV' }).click()
+  await expect((await download).suggestedFilename()).toMatch(/^nextrep-series-\d{4}-\d{2}-\d{2}\.csv$/)
 })
 
 test('la pantalla inicial no tiene violaciones axe críticas', async ({ page }) => {
