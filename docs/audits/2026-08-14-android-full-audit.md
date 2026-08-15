@@ -11,10 +11,10 @@ Se auditó la aplicación en viewport Android Pixel 7 con Chromium y se repitió
 - `npm test`: 14 archivos, 34 pruebas, OK.
 - `npm run build`: OK.
 - `npx playwright test --project=chromium-android`: 9/9 OK.
-- `npm run test:e2e`: 18/18 OK (9 Android + 9 iPhone/WebKit).
+- `npm run test:e2e`: 30/30 OK (15 Android + 15 iPhone/WebKit).
 - Axe en la pantalla inicial: sin violaciones críticas.
 
-Los escenarios Android cubren navegación principal, apertura accesible del importador Hevy, CSV real de Hevy, archivo binario disfrazado de CSV, reimportación idempotente, deshacer después de recargar, exportación de series CSV y las pantallas de análisis/nutrición.
+Los escenarios Android cubren navegación principal, creación de entrenos y rutinas, registro de series, historial lista/calendario, medidas, catálogo y ejercicios personalizados, diario nutricional, apertura accesible del importador Hevy, CSV real de Hevy, archivo binario disfrazado de CSV, reimportación idempotente, deshacer después de recargar, exportación de series CSV y las pantallas de análisis/nutrición.
 
 ## CSV real de Hevy
 
