@@ -4,7 +4,7 @@ Registro de entrenamientos y nutrición personal, inspirado en Hevy. Es una PWA 
 
 ## Qué incluye
 
-- Biblioteca de ejercicios con imágenes/GIFs, catálogo complementario de wger y ejercicios personalizados.
+- Biblioteca principal de ejercicios con imágenes/GIFs y ejercicios personalizados deliberados.
 - Rutinas, superseries, calentamientos, RPE, cardio, progresión y PRs recalculados cronológicamente.
 - Historial editable, medidas, fotos y análisis comparativo de carga, constancia, fuerza y dosis muscular.
 - Diario nutricional con alimentos base, USDA FoodData Central, Open Food Facts, escáner y platos.
@@ -17,7 +17,7 @@ Registro de entrenamientos y nutrición personal, inspirado en Hevy. Es una PWA 
 
 ```bash
 npm install
-npm run fetch-data   # dataset de ejercicios + snapshots USDA/wger
+npm run fetch-data   # dataset de ejercicios + snapshot USDA
 npm run dev          # http://localhost:5173
 npm run check        # lint, typecheck, tests y build
 npm run test:e2e     # Playwright (Chromium + WebKit)
@@ -31,7 +31,6 @@ Los snapshots reproducibles y sus hashes están en [`data/sources.lock.json`](da
 
 - Ejercicios y media: [exercises-dataset](https://github.com/hasaneyldrm/exercises-dataset), con atribución a Gym visual.
 - Alimentos: [USDA FoodData Central Foundation](https://fdc.nal.usda.gov/download-datasets.html), CC0; el nombre oficial se conserva y las búsquedas pueden usar alias verificados.
-- Ejercicios complementarios: [wger](https://wger.de/en/software/api), CC BY-SA.
 - Productos y códigos de barras: [Open Food Facts](https://world.openfoodfacts.org/data), datos comunitarios; la app muestra estos resultados como fuente cacheada y aplica límites de consulta.
 
 Consulta [`docs/DATOS-REALES.md`](docs/DATOS-REALES.md) para refrescar snapshots,

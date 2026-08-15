@@ -55,13 +55,13 @@ describe('Hevy import', () => {
     expect(parsed.workouts).toHaveLength(3)
   })
 
-  it('reporta los ejercicios cuyo grupo muscular no puede inferirse', async () => {
-    const result = await importHevyCsv([
+  it('bloquea atómicamente los ejercicios que no puede vincular', async () => {
+    await expect(importHevyCsv([
       'title,start_time,end_time,exercise_title,set_index,set_type,weight_kg,reps',
       'Upper,2026-08-19T20:16:00Z,2026-08-19T21:02:00Z,Ejercicio desconocido,0,normal,20,10',
-    ].join('\n'))
-
-    expect(result.unclassifiedExercises).toEqual(['Ejercicio desconocido'])
+    ].join('\n'))).rejects.toThrow(/No se pudieron vincular.*Ejercicio desconocido/)
+    expect(await db.workouts.count()).toBe(0)
+    expect(await db.customExercises.count()).toBe(0)
   })
 
   it('groups CSV rows into one workout and preserves warmup/drop set types', () => {
@@ -78,7 +78,7 @@ describe('Hevy import', () => {
   it('writes an import batch and can undo the imported records', async () => {
     const result = await importHevyCsv([
       'workout_id,workout_title,start_time,end_time,exercise_template_id,exercise_title,set_type,weight_kg,reps',
-      'w9,Legs,2026-08-02T10:00:00Z,2026-08-02T11:00:00Z,99,Squat,normal,100,5',
+      'w9,Legs,2026-08-02T10:00:00Z,2026-08-02T11:00:00Z,99,Sentadilla Hack (Máquina),normal,100,5',
     ].join('\n'))
     expect(await db.workouts.get('hevy-workout-w9')).toMatchObject({ name: 'Legs', volumeKg: 500, totalSets: 1 })
     expect(await db.importBatches.get(result.batchId)).toMatchObject({ status: 'completed', source: 'hevy-csv' })

@@ -153,12 +153,21 @@ export interface Food {
 export type ImportSource = 'hevy-csv' | 'hevy-api'
 export type ImportEntity = 'workout' | 'routine' | 'folder' | 'measurement' | 'exercise'
 
+export interface ImportChange {
+  entity: ImportEntity
+  localId: string
+  written: unknown
+  previous?: unknown
+  previousRef?: ExternalRef
+}
+
 export interface ImportBatch {
   id: string
   source: ImportSource
   createdAt: number
   status: 'completed' | 'undone'
   counts: Partial<Record<ImportEntity, number>>
+  changes?: ImportChange[]
 }
 
 export interface ExternalRef {

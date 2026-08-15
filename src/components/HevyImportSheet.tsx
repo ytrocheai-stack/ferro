@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Sheet } from './Sheet'
-import { importHevyApi, importHevyCsvFile, type ImportSummary } from '../lib/hevyImport'
+import { importHevyApi, importHevyFile, type ImportSummary } from '../lib/hevyImport'
 import { IconTarget, IconUpload } from './icons'
 
 const HEVY_EXPORT_GUIDE =
@@ -43,7 +43,7 @@ export function HevyImportSheet({
 
         <section className="card p-3">
           <div className="flex items-center gap-2 text-sm font-bold">
-            <IconUpload size={16} className="text-primary" /> CSV de Hevy
+            <IconUpload size={16} className="text-primary" /> CSV o XLSX de Hevy
           </div>
           <div className="mt-2 rounded-xl border border-border/70 bg-surface-2/70 p-3">
             <p className="text-xs font-semibold text-text">Primero expórtalo desde Hevy</p>
@@ -61,23 +61,24 @@ export function HevyImportSheet({
             </a>
           </div>
           <p className="pt-2 text-xs text-muted">
-            NextRep lo procesa localmente; el archivo no se sube a ningún servidor.
+            NextRep lo procesa localmente; el archivo no se sube a ningún servidor. Se aceptan
+            exportaciones CSV y Excel (.xlsx).
           </p>
           <button
             className="btn btn-primary mt-3 w-full text-sm"
             disabled={busy}
             onClick={() => fileRef.current?.click()}
           >
-            {busy ? 'Leyendo archivo…' : 'Ya tengo el CSV'}
+            {busy ? 'Leyendo archivo…' : 'Ya tengo el archivo'}
           </button>
           <input
             ref={fileRef}
             type="file"
-            accept=".csv,text/csv,text/plain,application/vnd.ms-excel,application/octet-stream"
+            accept=".csv,.xlsx,text/csv,text/plain,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream"
             className="hidden"
             onChange={(event) => {
               const file = event.target.files?.[0]
-              if (file) void run(() => importHevyCsvFile(file))
+              if (file) void run(() => importHevyFile(file))
               event.currentTarget.value = ''
             }}
           />

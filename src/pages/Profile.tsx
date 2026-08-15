@@ -294,6 +294,11 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
   const [storage, setStorage] = useState<{ usageMB: number; persisted: boolean } | null>(null)
   const [hevyOpen, setHevyOpen] = useState(false)
   const [lastImport, setLastImport] = useState<ImportSummary | null>(null)
+  const latestImportBatch = useLiveQuery(
+    () => db.importBatches.orderBy('createdAt').reverse().filter((batch) => batch.status === 'completed').first(),
+    [],
+    null,
+  )
 
   // GIFs offline
   const swReady = 'serviceWorker' in navigator && !!navigator.serviceWorker.controller
@@ -350,10 +355,10 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
   const onHevyImported = (summary: ImportSummary) => {
     setLastImport(summary)
     const total = Object.values(summary.counts).reduce((sum, count) => sum + (count ?? 0), 0)
-    const warning = summary.unclassifiedExercises.length
-      ? ` Sin grupo muscular: ${summary.unclassifiedExercises.join(', ')}.`
+    const warning = summary.anomalies.length
+      ? ` Aviso: ${summary.anomalies.map((anomaly) => `${anomaly.name} duró ${anomaly.hours.toFixed(1)} h`).join('; ')}. Se conservaron las marcas de tiempo.`
       : ''
-    setMsg(`Hevy importado: ${total} registros. Puedes deshacer este lote.${warning}`)
+    setMsg(`Hevy importado: ${total} registros y ${summary.sets} series. Puedes deshacer este lote.${warning}`)
   }
 
   const photosFileRef = useRef<HTMLInputElement>(null)
@@ -397,10 +402,17 @@ function DataCard({ workoutsCount }: { workoutsCount: number }) {
         <IconDownload size={16} />
         Importar datos de Hevy
       </button>
-      {lastImport && (
+      {(lastImport?.batchId ?? latestImportBatch?.id) && (
         <button
           className="mb-3 w-full rounded-xl border border-danger/30 px-3 py-2 text-xs font-semibold text-danger"
-          onClick={() => void undoImport(lastImport.batchId).then(() => { setMsg('Importación de Hevy deshecha.'); setLastImport(null) })}
+          onClick={() => {
+            const batchId = lastImport?.batchId ?? latestImportBatch?.id
+            if (!batchId) return
+            void undoImport(batchId).then(
+              () => { setMsg('Importación de Hevy deshecha.'); setLastImport(null) },
+              (error: unknown) => setMsg(error instanceof Error ? error.message : 'No se pudo deshacer la importación.'),
+            )
+          }}
         >
           Deshacer última importación de Hevy
         </button>

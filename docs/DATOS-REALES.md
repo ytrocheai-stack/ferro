@@ -7,6 +7,6 @@ npm run fetch-real-data       # usa snapshots ya presentes
 node scripts/fetch-real-data.mjs --refresh
 ```
 
-El snapshot USDA conserva el nombre oficial en inglés y los macronutrientes por 100 g; la UI puede mostrar alias de búsqueda sin sustituir ese nombre. El snapshot wger se incorpora como suplemento, manteniendo prioridad del catálogo principal cuando el nombre normalizado coincide.
+El snapshot USDA conserva el nombre oficial en inglés y los macronutrientes por 100 g; la UI puede mostrar alias de búsqueda sin sustituir ese nombre. El catálogo de ejercicios usa exclusivamente el dataset principal con sus GIFs; los ejercicios personalizados se mantienen separados en la base local.
 
 Open Food Facts no se empaqueta: se consulta bajo demanda para códigos de barras/búsqueda, se cachea en IndexedDB y se limita la frecuencia para respetar sus límites públicos. Sus datos son comunitarios y pueden contener errores; la app no los presenta como equivalentes a los datos USDA.

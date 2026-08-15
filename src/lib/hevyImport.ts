@@ -2,6 +2,7 @@ import { db } from '../db/db'
 import type {
   ExternalRef,
   Folder,
+  ImportChange,
   ImportBatch,
   ImportEntity,
   ImportSource,
@@ -12,16 +13,26 @@ import type {
   Workout,
   WorkoutExercise,
   LoggedSet,
-  CustomExercise,
 } from '../db/types'
 import { uid, normalize, parseDec } from './format'
 import { loadExercises } from '../data/exercises'
 import { recalculateWorkoutHistory } from './stats'
+import { datasetExerciseIdForHevyName } from './hevyAliases'
+
+export interface ImportAnomaly {
+  kind: 'duration'
+  workoutId: string
+  name: string
+  hours: number
+}
 
 export interface ImportSummary {
   batchId: string
   source: ImportSource
   counts: Partial<Record<ImportEntity, number>>
+  sets: number
+  mappedExercises: number
+  anomalies: ImportAnomaly[]
   unclassifiedExercises: string[]
 }
 
@@ -192,77 +203,11 @@ function mapRoutine(input: HevyRoutine, exerciseMap: Map<string, string>, folder
   }
 }
 
-type ImportedExerciseMeta = { target: string; bodyPart: string; equipment?: string }
-
-const HEVY_EXERCISE_TARGETS: Record<string, ImportedExerciseMeta> = {
-  'curl de pierna sentado': { target: 'hamstrings', bodyPart: 'upper legs' },
-  'curl de piernas acostado maquina': { target: 'hamstrings', bodyPart: 'upper legs' },
-  'sentadilla hack maquina': { target: 'quads', bodyPart: 'upper legs' },
-  'extension de pierna': { target: 'quads', bodyPart: 'upper legs' },
-  'abduccion de caderas': { target: 'glutes', bodyPart: 'upper legs' },
-  'press de banca inclinado mancuerna': { target: 'pectorals', bodyPart: 'chest' },
-  'mariposa pec deck': { target: 'pectorals', bodyPart: 'chest' },
-  'jalon al pecho cable': { target: 'lats', bodyPart: 'back' },
-  'jalon al pecho agarre cerrado cable': { target: 'lats', bodyPart: 'back' },
-  'elevacion laterales cable': { target: 'delts', bodyPart: 'shoulders' },
-  'remo sentado con cable': { target: 'lats', bodyPart: 'back' },
-  'remo sentado maquina': { target: 'lats', bodyPart: 'back' },
-  'press frances barra': { target: 'triceps', bodyPart: 'upper arms' },
-  'curl por detras de la espalda polea': { target: 'biceps', bodyPart: 'upper arms' },
-  'behind the back curl cable': { target: 'biceps', bodyPart: 'upper arms' },
-  'jalon de dorsales con brazos rectos polea': { target: 'lats', bodyPart: 'back' },
-  'rope straight arm pulldown': { target: 'lats', bodyPart: 'back' },
-  'dominada asistida': { target: 'lats', bodyPart: 'back' },
-  'remo inclinado barra': { target: 'lats', bodyPart: 'back' },
-  'extension de triceps por encima de la cabeza cable': { target: 'triceps', bodyPart: 'upper arms' },
-  'overhead triceps extension cable': { target: 'triceps', bodyPart: 'upper arms' },
-  'peso muerto mancuerna': { target: 'glutes', bodyPart: 'upper legs' },
-  'jalon de remo a un brazo': { target: 'lats', bodyPart: 'back' },
-  'vuelos posteriores maquina': { target: 'delts', bodyPart: 'shoulders' },
-  'press de banca barra': { target: 'pectorals', bodyPart: 'chest' },
-  'press de hombros sentado maquina': { target: 'delts', bodyPart: 'shoulders' },
-  'press de banca inclinado maquina smith': { target: 'pectorals', bodyPart: 'chest' },
-  'curl martillo mancuerna': { target: 'biceps', bodyPart: 'upper arms' },
-  'curl martillo cable': { target: 'biceps', bodyPart: 'upper arms' },
-  'extension de triceps a un brazo cable': { target: 'triceps', bodyPart: 'upper arms' },
-  'preacher curl barbell': { target: 'biceps', bodyPart: 'upper arms' },
-  'preacher curl machine': { target: 'biceps', bodyPart: 'upper arms' },
-  'triceps con polea': { target: 'triceps', bodyPart: 'upper arms' },
-  'press de piernas': { target: 'quads', bodyPart: 'upper legs' },
-  'press de banca en declive maquina': { target: 'pectorals', bodyPart: 'chest' },
-  'press jm barra': { target: 'triceps', bodyPart: 'upper arms' },
-  'jm press barbell': { target: 'triceps', bodyPart: 'upper arms' },
-  'sentadilla maquina smith': { target: 'quads', bodyPart: 'upper legs' },
-  'sentadilla bulgara': { target: 'quads', bodyPart: 'upper legs' },
-  'bayesian curl': { target: 'biceps', bodyPart: 'upper arms' },
-}
-
-function hevyKey(value: string | undefined): string {
-  return normalize(value ?? '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-}
-
-function materializeExercise(template: HevyTemplate, exerciseMap: Map<string, string>, meta?: ImportedExerciseMeta): CustomExercise {
-  const external = asId(template.id, normalize(template.title ?? 'exercise'))
-  const id = `hevy-exercise-${external}`
-  exerciseMap.set(external, id)
-  const target = template.primary_muscle_group || meta?.target || 'other'
-  return {
-    id,
-    name: template.title?.trim() || `Ejercicio Hevy ${external}`,
-    bodyPart: meta?.bodyPart || template.primary_muscle_group || 'other',
-    equipment: template.equipment_category || meta?.equipment || 'other',
-    target,
-    secondaryMuscles: [],
-    createdAt: Date.now(),
-  }
-}
-
-async function exerciseIdMap(templates: HevyTemplate[] = [], names: string[] = []): Promise<{ map: Map<string, string>; customs: CustomExercise[]; unclassifiedExercises: string[] }> {
+async function exerciseIdMap(templates: HevyTemplate[] = [], usedExercises: HevyExercise[] = []): Promise<{ map: Map<string, string>; unclassifiedExercises: string[]; mappedExercises: number }> {
   const map = new Map<string, string>()
-  const customs: CustomExercise[] = []
   const unclassifiedExercises = new Set<string>()
+  const names = usedExercises.map((exercise) => exercise.title ?? '')
+  const usedTemplateIds = new Set(usedExercises.map((exercise) => asId(exercise.exercise_template_id, normalize(exercise.title ?? 'exercise'))))
   let catalog: Awaited<ReturnType<typeof loadExercises>> = []
   try { catalog = await loadExercises() } catch { /* el import sigue siendo utilizable offline */ }
   const byName = new Map<string, string>()
@@ -270,31 +215,47 @@ async function exerciseIdMap(templates: HevyTemplate[] = [], names: string[] = [
     byName.set(normalize(exercise.name), exercise.id)
     for (const alias of exercise.aliases ?? []) byName.set(normalize(alias), exercise.id)
   }
+  const resolve = (title: string | undefined): string | undefined => {
+    if (!title) return undefined
+    return datasetExerciseIdForHevyName(title) ?? byName.get(normalize(title))
+  }
   for (const template of templates) {
     const external = asId(template.id, normalize(template.title ?? 'exercise'))
-    const known = template.title ? byName.get(normalize(template.title)) : undefined
+    const titleKey = template.title ? normalize(template.title) : ''
+    const used = usedTemplateIds.has(external) || (!!titleKey && names.some((name) => normalize(name) === titleKey))
+    if (!used) continue
+    const known = resolve(template.title)
     if (known) map.set(external, known)
-    else {
-      const meta = template.title ? HEVY_EXERCISE_TARGETS[hevyKey(template.title)] : undefined
-      if (!template.primary_muscle_group && !meta) unclassifiedExercises.add(template.title?.trim() || external)
-      customs.push(materializeExercise(template, map, meta))
-    }
+    else unclassifiedExercises.add(template.title?.trim() || external)
   }
-  for (const name of names) {
-    const key = normalize(name)
-    if (!key || map.has(key) || byName.has(key)) continue
-    const meta = HEVY_EXERCISE_TARGETS[hevyKey(name)]
-    if (!meta) unclassifiedExercises.add(name.trim())
-    const custom = materializeExercise({ id: key, title: name }, map, meta)
-    customs.push(custom)
+  for (const exercise of usedExercises) {
+    const name = exercise.title ?? ''
+    const key = asId(exercise.exercise_template_id, normalize(name))
+    if (!key) continue
+    if (map.has(key)) continue
+    const known = resolve(name)
+    if (known) map.set(key, known)
+    else unclassifiedExercises.add(name.trim())
   }
-  return { map, customs, unclassifiedExercises: [...unclassifiedExercises].filter(Boolean).sort() }
+  return { map, unclassifiedExercises: [...unclassifiedExercises].filter(Boolean).sort(), mappedExercises: new Set(map.values()).size }
+}
+
+function tableFor(entity: ImportEntity) {
+  if (entity === 'workout') return db.workouts
+  if (entity === 'routine') return db.routines
+  if (entity === 'folder') return db.folders
+  if (entity === 'measurement') return db.measurements
+  return db.customExercises
+}
+
+function equalValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
 }
 
 async function saveImport(
   source: ImportSource,
   records: { entity: ImportEntity; externalId: string; localId: string; value: unknown }[],
-  unclassifiedExercises: string[] = [],
+  options: { unclassifiedExercises?: string[]; mappedExercises?: number; anomalies?: ImportAnomaly[] } = {},
 ): Promise<ImportSummary> {
   const incomingWorkouts = records.filter((record): record is typeof record & { value: Workout } => record.entity === 'workout').map((record) => record.value)
   if (incomingWorkouts.length) {
@@ -306,27 +267,31 @@ async function saveImport(
   }
   const batchId = uid()
   const counts: Partial<Record<ImportEntity, number>> = {}
-  const batch: ImportBatch = { id: batchId, source, createdAt: Date.now(), status: 'completed', counts }
+  const changes: ImportChange[] = []
   const refs: ExternalRef[] = records.map((record) => ({ key: `${source}:${record.entity}:${record.externalId}`, source, entity: record.entity, externalId: record.externalId, localId: record.localId, batchId }))
+  const batch: ImportBatch = { id: batchId, source, createdAt: Date.now(), status: 'completed', counts, changes }
   await db.transaction('rw', [db.workouts, db.routines, db.folders, db.measurements, db.customExercises, db.importBatches, db.externalRefs], async () => {
     for (const record of records) {
-      const n = (counts[record.entity] ?? 0) + 1
-      counts[record.entity] = n
-      if (record.entity === 'workout') await db.workouts.put(record.value as Workout)
-      else if (record.entity === 'routine') await db.routines.put(record.value as Routine)
-      else if (record.entity === 'folder') await db.folders.put(record.value as Folder)
-      else if (record.entity === 'measurement') await db.measurements.put(record.value as Measurement)
-      else if (record.entity === 'exercise') await db.customExercises.put(record.value as CustomExercise)
+      const table = tableFor(record.entity)
+      const previous = await table.get(record.localId)
+      const previousRef = await db.externalRefs.get(`${source}:${record.entity}:${record.externalId}`)
+      changes.push({ entity: record.entity, localId: record.localId, written: record.value, ...(previous === undefined ? {} : { previous }), ...(previousRef ? { previousRef } : {}) })
+      counts[record.entity] = (counts[record.entity] ?? 0) + 1
+      await table.put(record.value as never)
     }
     await db.importBatches.put(batch)
     await db.externalRefs.bulkPut(refs)
   })
-  return { batchId, source, counts, unclassifiedExercises }
+  const sets = incomingWorkouts.reduce((sum, workout) => sum + workout.exercises.reduce((n, exercise) => n + exercise.sets.length, 0), 0)
+  return { batchId, source, counts, sets, mappedExercises: options.mappedExercises ?? 0, anomalies: options.anomalies ?? [], unclassifiedExercises: options.unclassifiedExercises ?? [] }
 }
 
 export async function importHevyPayload(payload: { workouts?: HevyWorkout[]; routines?: HevyRoutine[]; folders?: HevyFolder[]; templates?: HevyTemplate[]; measurements?: unknown[] }, source: ImportSource): Promise<ImportSummary> {
-  const names = [...(payload.workouts ?? []), ...(payload.routines ?? [])].flatMap((w) => (w.exercises ?? []).map((e) => e.title ?? ''))
-  const { map, customs, unclassifiedExercises } = await exerciseIdMap(payload.templates, names)
+  const usedExercises = [...(payload.workouts ?? []), ...(payload.routines ?? [])].flatMap((w) => w.exercises ?? [])
+  const { map, unclassifiedExercises, mappedExercises } = await exerciseIdMap(payload.templates, usedExercises)
+  if (unclassifiedExercises.length) {
+    throw new Error(`No se pudieron vincular estos ejercicios con el catálogo: ${unclassifiedExercises.join(', ')}. No se importó ningún registro.`)
+  }
   const folderMap = new Map<string, string>()
   const folders = (payload.folders ?? []).map((folder, index) => {
     const externalId = asId(folder.id, String(index))
@@ -334,7 +299,7 @@ export async function importHevyPayload(payload: { workouts?: HevyWorkout[]; rou
     folderMap.set(externalId, id)
     return { externalId, value: { id, name: folder.title?.trim() || 'Carpeta importada', sortOrder: folder.index ?? index } satisfies Folder }
   })
-  const records: { entity: ImportEntity; externalId: string; localId: string; value: unknown }[] = customs.map((value) => ({ entity: 'exercise', externalId: value.id.replace(/^hevy-exercise-/, ''), localId: value.id, value }))
+  const records: { entity: ImportEntity; externalId: string; localId: string; value: unknown }[] = []
   records.push(...folders.map((folder) => ({ entity: 'folder' as const, externalId: folder.externalId, localId: folder.value.id, value: folder.value })))
   records.push(...(payload.routines ?? []).map((value) => {
     const mapped = mapRoutine(value, map, folderMap)
@@ -356,7 +321,15 @@ export async function importHevyPayload(payload: { workouts?: HevyWorkout[]; rou
     records.push({ entity: 'measurement', externalId, localId: mapped.id, value: mapped })
   }
   if (!records.length) throw new Error('Hevy no devolvió datos importables.')
-  return saveImport(source, records, unclassifiedExercises)
+  const anomalies: ImportAnomaly[] = (payload.workouts ?? []).flatMap((workout) => {
+    const startedAt = parseHevyTime(workout.start_time)
+    const endedAt = parseHevyTime(workout.end_time)
+    if (startedAt === undefined || endedAt === undefined || endedAt <= startedAt) return []
+    const hours = (endedAt - startedAt) / 3_600_000
+    if (hours <= 12) return []
+    return [{ kind: 'duration' as const, workoutId: asId(workout.id, normalize(workout.title ?? 'workout')), name: workout.title?.trim() || 'Entreno importado de Hevy', hours }]
+  })
+  return saveImport(source, records, { unclassifiedExercises, mappedExercises, anomalies })
 }
 
 function parseCsv(text: string): string[][] {
@@ -382,21 +355,31 @@ function col(headers: string[], ...names: string[]): number {
   return names.map((n) => normalized.indexOf(normalize(n).replace(/[^a-z0-9]/g, ''))).find((i) => i >= 0) ?? -1
 }
 
-function cell(row: string[], index: number): string {
-  return index >= 0 ? (row[index] ?? '').trim() : ''
+type CellValue = string | number | boolean | Date | null | undefined
+
+function cell(row: CellValue[], index: number): string {
+  if (index < 0) return ''
+  const value = row[index]
+  if (value instanceof Date) return value.toISOString()
+  return value == null ? '' : String(value).trim()
 }
 
-function optionalDecimal(row: string[], index: number): number | undefined {
+function optionalDecimal(row: CellValue[], index: number): number | undefined {
   const raw = cell(row, index)
   if (!raw) return undefined
   const value = parseDec(raw)
   return Number.isFinite(value) ? value : undefined
 }
 
-export function parseHevyCsv(text: string): { workouts: HevyWorkout[]; templates: HevyTemplate[] } {
-  const rows = parseCsv(text)
+function hasHevyHeaders(headers: CellValue[] | undefined): boolean {
+  if (!headers?.length) return false
+  const normalized = headers.map((value) => normalize(String(value ?? '')).replace(/[^a-z0-9]/g, ''))
+  return normalized.includes('starttime') && (normalized.includes('title') || normalized.includes('workouttitle')) && normalized.includes('exercisetitle')
+}
+
+function parseHevyRows(rows: CellValue[][]): { workouts: HevyWorkout[]; templates: HevyTemplate[] } {
   if (rows.length < 2) throw new Error('El CSV de Hevy no contiene filas.')
-  const headers = rows[0].map((h) => h.replace(/^\uFEFF/, '').trim())
+  const headers = rows[0].map((h) => String(h ?? '').replace(/^\uFEFF/, '').trim())
   const workoutIndex = col(headers, 'workout_id', 'workout id', 'workoutid', 'id')
   const workoutTitle = col(headers, 'workout_title', 'workout title', 'workout', 'title', 'name')
   const start = col(headers, 'start_time', 'start time', 'date', 'start')
@@ -479,6 +462,47 @@ export function parseHevyCsv(text: string): { workouts: HevyWorkout[]; templates
   return { workouts: [...byWorkout.values()], templates: [...templates.values()] }
 }
 
+export function parseHevyCsv(text: string): { workouts: HevyWorkout[]; templates: HevyTemplate[] } {
+  return parseHevyRows(parseCsv(text))
+}
+
+const MAX_HEVY_FILE_BYTES = 20 * 1024 * 1024
+
+async function parseHevyXlsx(file: File): Promise<{ workouts: HevyWorkout[]; templates: HevyTemplate[] }> {
+  const module = await import('read-excel-file/browser')
+  const readXlsxFile = module.default
+  const workbook = await readXlsxFile(file)
+  const sheets = Array.isArray(workbook) ? workbook : [workbook]
+  for (const sheet of sheets) {
+    const rows = (sheet as { data?: unknown[][] }).data as CellValue[][] | undefined
+    if (rows?.length && hasHevyHeaders(rows[0])) return parseHevyRows(rows)
+  }
+  throw new Error('El XLSX no contiene una hoja con el formato de exportación de Hevy.')
+}
+
+function isZipSignature(bytes: Uint8Array): boolean {
+  return bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b
+}
+
+export async function importHevyFile(file: File): Promise<ImportSummary> {
+  if (file.size > MAX_HEVY_FILE_BYTES) throw new Error('El archivo de Hevy supera el límite de 20 MB.')
+  const head = new Uint8Array(await file.slice(0, 4).arrayBuffer())
+  const extension = file.name.toLowerCase().split('.').pop() ?? ''
+  const isXlsx = extension === 'xlsx' || file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || isZipSignature(head)
+  if (isXlsx) {
+    if (!isZipSignature(head)) throw new Error('El archivo indicado como XLSX no es un Excel válido o está corrupto.')
+    try {
+      return await importHevyPayload(await parseHevyXlsx(file), 'hevy-csv')
+    } catch (error) {
+      if (error instanceof Error && (error.message.startsWith('No se pudieron') || error.message.startsWith('Hevy no devolvió') || error.message.startsWith('Fila') || error.message.startsWith('El CSV'))) throw error
+      throw new Error('No se pudo leer el XLSX de Hevy. Verifica que sea un Excel válido exportado por Hevy.', { cause: error })
+    }
+  }
+  const text = await file.text()
+  if (text.startsWith('PK')) throw new Error('El archivo parece Excel (XLSX), no CSV. Selecciona un CSV o XLSX válido de Hevy.')
+  return importHevyCsv(text)
+}
+
 const HEVY_API = 'https://api.hevyapp.com/v1'
 async function hevyJson<T>(path: string, apiKey: string): Promise<T> {
   const response = await fetch(`${HEVY_API}${path}`, { headers: { 'api-key': apiKey, Accept: 'application/json' } })
@@ -517,7 +541,7 @@ export async function importHevyApi(apiKey: string): Promise<ImportSummary> {
 }
 
 export async function importHevyCsvFile(file: File): Promise<ImportSummary> {
-  return importHevyCsv(await file.text())
+  return importHevyFile(file)
 }
 
 export async function importHevyCsv(text: string): Promise<ImportSummary> {
@@ -527,6 +551,33 @@ export async function importHevyCsv(text: string): Promise<ImportSummary> {
 export async function undoImport(batchId: string): Promise<void> {
   const batch = await db.importBatches.get(batchId)
   if (!batch || batch.status === 'undone') return
+  if (batch.changes?.length) {
+    const refs = await db.externalRefs.where('batchId').equals(batchId).toArray()
+    await db.transaction('rw', [db.workouts, db.routines, db.folders, db.measurements, db.customExercises, db.importBatches, db.externalRefs], async () => {
+      for (const change of batch.changes ?? []) {
+        const current = await tableFor(change.entity).get(change.localId)
+        const expectedRef = refs.find((ref) => ref.entity === change.entity && ref.localId === change.localId)
+        const currentRef = expectedRef ? await db.externalRefs.get(expectedRef.key) : undefined
+        if (!equalValue(current, change.written) || (expectedRef && currentRef?.batchId !== batchId)) {
+          throw new Error('No se puede deshacer la importación porque uno de sus registros fue modificado después.')
+        }
+      }
+      for (const change of batch.changes ?? []) {
+        const table = tableFor(change.entity)
+        if (change.previous === undefined) await table.delete(change.localId)
+        else await table.put(change.previous as never)
+        const currentRef = refs.find((ref) => ref.entity === change.entity && ref.localId === change.localId)
+        if (currentRef) {
+          if (change.previousRef) await db.externalRefs.put(change.previousRef)
+          else await db.externalRefs.delete(currentRef.key)
+        }
+      }
+      await db.importBatches.update(batchId, { status: 'undone' })
+    })
+    const workouts = await db.workouts.toArray()
+    await db.workouts.bulkPut(recalculateWorkoutHistory(workouts))
+    return
+  }
   const refs = await db.externalRefs.where('batchId').equals(batchId).toArray()
   await db.transaction('rw', [db.workouts, db.routines, db.folders, db.measurements, db.customExercises, db.importBatches, db.externalRefs], async () => {
     for (const ref of refs) {
