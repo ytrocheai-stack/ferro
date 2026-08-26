@@ -4,6 +4,8 @@ dev-dist
 .cache
 .playwright-cli
 test-results
+.worktrees
+.superpowers
 
 # Assets generados por scripts/fetch-dataset.mjs (se regeneran en CI)
 public/data
