@@ -1,7 +1,8 @@
-# Adaptación de entrenamiento v1 (en desarrollo)
+# Adaptación de entrenamiento v1 (beta cerrada)
 
-> Auditoría del repositorio: 2026-08-28. Estado real: código integrado y comprobable en local,
-> pero beta cerrada **no desplegable todavía**. Todos los proveedores permanecen apagados.
+> Auditoría del repositorio: 2026-08-30. Estado real: código e infraestructura publicados y
+> comprobables remotamente. La beta cerrada **todavía no está habilitada**: el corpus real no está
+> indexado, la calidad RAG no está evaluada y todos los proveedores permanecen apagados.
 
 ## Estado verificado
 
@@ -14,9 +15,20 @@
 | Worker | Auth, CORS, cuota 10/semana, idempotencia, retención y fallback | `worker/src/index.ts`, migraciones `0001`–`0003` |
 | RAG | Puertos, recuperación, importador como función y evaluación sintética | `worker/src/rag.ts`, `worker/src/evaluation.ts` |
 | NVIDIA | Adaptadores y modelos configurados; llamadas apagadas | `worker/wrangler.toml` |
-| Cloudflare real | Sin crear/configurar | ID D1 de ejemplo; no hay evidencia de índices ni deploy |
+| Cloudflare real | Creado y desplegado | D1 remoto con migraciones aplicadas, índices Vectorize 768/1024 y Worker activo |
 | Corpus real | No importado | no hay manifiesto, chunks aprobados ni reporte de evaluación |
-| Beta privada | No habilitada | faltan configuración, gates y pruebas end-to-end del coach |
+| Beta privada | No habilitada | faltan corpus/evaluación, smoke autenticado y pruebas end-to-end del coach |
+
+### Comprobaciones remotas de esta revisión
+
+- `main` apunta a `86115ed` y el workflow de GitHub Pages [`33299809907`](https://github.com/ytrocheai-stack/ferro/actions/runs/33299809907) terminó correctamente.
+- La PWA pública es `https://ytrocheai-stack.github.io/ferro/`; carga Clerk y el Worker configurados.
+- `GET /health` del Worker devuelve HTTP 200. Un análisis sin JWT devuelve HTTP 401, por lo que la
+  ruta alcanza el gate de autenticación de producción.
+- D1 `nextrep-adaptation` existe, tiene sus migraciones aplicadas y conserva las tablas operativas.
+  Los índices `nextrep-adaptation-768` y `nextrep-adaptation-eval-1024` existen.
+- Están configurados los nombres de los secretos Clerk, seudonimización y NVIDIA. Los flags de
+  embeddings, Flash, Pro, reranking y probe siguen en `false`.
 
 La configuración fijada coincide, a la fecha de esta auditoría, con los catálogos oficiales de
 NVIDIA para
@@ -140,17 +152,18 @@ proveedor sin cambiar dominio ni UI.
 
 ## Acciones manuales requeridas
 
-1. Crear/confirmar la instancia de Clerk y entregar publishable key, JWT key, authorized parties y
-   los IDs exactos de los usuarios beta.
-2. Autorizar la cuenta/proyecto Cloudflare. Crear D1 e índices Vectorize de 768 (1024 solo para la
-   evaluación), reemplazar el ID de ejemplo y aplicar las tres migraciones.
-3. Crear una clave NVIDIA de prueba y aceptar sus términos. No colocarla en variables `VITE_*`.
-4. Revisar legalmente el corpus y proporcionar los archivos/chunks y metadatos autorizados. No se
+1. Entregar los IDs exactos de los usuarios beta y ejecutar un smoke con un JWT real de Clerk,
+   comprobando `authorizedParties`, allowlist y el origen de GitHub Pages.
+2. Ejecutar las pruebas remotas de CORS, cuota, idempotencia, replay, retención y rollback con datos
+   ficticios; comprobar también el Cron diario.
+3. Revisar legalmente el corpus y proporcionar los archivos/chunks y metadatos autorizados. No se
    ha modificado la selección de creadores ni la estrategia de videos.
-5. Configurar secretos/variables de Worker y variables públicas de GitHub según
-   [DESPLIEGUE.md](DESPLIEGUE.md).
-6. Aprobar el texto de privacidad/consentimiento y decidir la retención operativa antes del primer
+4. Convertir el importador en una operación reanudable, indexar el corpus aprobado y producir el
+   reporte Recall@5/precisión de citas antes de activar embeddings.
+5. Aprobar el texto de privacidad/consentimiento y decidir la retención operativa antes del primer
    análisis real.
+6. Activar providers de forma gradual: embeddings, Flash y después Pro. Mantener reranking apagado
+   hasta contar con evidencia de mejora.
 
 ## Verificación local
 
@@ -160,6 +173,7 @@ los artefactos públicos. `npm run test:e2e` se ejecuta aparte y, hasta añadir 
 no valida el coach adaptativo.
 
 Resultado de esta auditoría: `npm run check` pasó con 47/47 pruebas y `npm run test:e2e` pasó con
-12/12 casos en Chromium Android y WebKit iPhone. El dry-run de Wrangler 4.30.0 también empaquetó el
-Worker; ese resultado valida el bundle/TOML, no la existencia de los recursos indicados por los
-bindings de ejemplo.
+12/12 casos en Chromium Android y WebKit iPhone. El build también pasó la comprobación de que el
+bundle público no contiene secretos ni claves NVIDIA. La verificación remota de esta revisión cubre
+la publicación, `/health`, el gate de auth sin token, D1, migraciones, índices y nombres de secretos;
+no sustituye todavía el smoke autenticado ni la evaluación del corpus real.

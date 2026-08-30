@@ -15,11 +15,11 @@ Registro de entrenamientos y nutrición personal, inspirado en Hevy. Es una PWA 
 
 ## Coach adaptativo (beta cerrada)
 
-La primera fase del coach está integrada en el repositorio, pero permanece desactivada. Incluye un
-motor determinista compartido, propuestas locales confirmables, autenticación con Clerk y un Worker
-aislado para RAG/explicaciones. Todavía no existe un corpus real indexado ni una evaluación de
-recuperación representativa, y los bindings/proveedores de Cloudflare están sin configurar. El
-estado verificado, los riesgos y las tareas manuales están en
+La primera fase del coach está integrada y publicada, pero permanece desactivada para la beta privada.
+Incluye un motor determinista compartido, propuestas locales confirmables, autenticación con Clerk y un
+Worker aislado para RAG/explicaciones. La infraestructura Cloudflare ya está creada y el Worker responde,
+pero todavía no existe un corpus real indexado ni una evaluación de recuperación representativa; los
+providers NVIDIA permanecen apagados. El estado verificado, los riesgos y las tareas manuales están en
 [`docs/ADAPTACION-ENTRENAMIENTO.md`](docs/ADAPTACION-ENTRENAMIENTO.md).
 
 ## Desarrollo

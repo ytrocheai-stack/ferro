@@ -8,9 +8,9 @@
 
 **NextRep** (antes "Ferro") es un clon personal de [Hevy](https://www.hevyapp.com/): registro de
 entrenos de gimnasio + nutrición + medidas, como **PWA offline-first**. Los datos finales viven en
-el dispositivo (IndexedDB + localStorage). Clerk y un Worker opcional se están integrando
-exclusivamente para la beta cerrada del agente adaptativo; el registro normal sigue funcionando
-sin ese backend. La usa una persona real en su teléfono a diario — **los datos de producción son
+el dispositivo (IndexedDB + localStorage). Clerk y el Worker adaptativo ya están desplegados para la
+beta cerrada, pero el agente sigue desactivado hasta superar sus gates; el registro normal sigue
+funcionando sin ese backend. La usa una persona real en su teléfono a diario — **los datos de producción son
 irreemplazables**.
 
 - **Stack**: Vite 6 · React 18 · TypeScript · Tailwind CSS v4 · Dexie 4 (IndexedDB) · Zustand 5 · Recharts · vite-plugin-pwa (Workbox)
@@ -41,7 +41,7 @@ irreemplazables**.
 2. **El deploy de la PWA es GitHub Pages mediante Actions desde `main`.**
    [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) instala dependencias, regenera los
    datos fijados, compila e inyecta solo las variables públicas de Clerk/Worker. El Worker se
-   despliega por separado y sigue desactivado hasta completar los gates de la beta. Flujo completo
+   despliega por separado y sus proveedores siguen desactivados hasta completar los gates de la beta. Flujo completo
    en [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md).
 3. **Los pesos se persisten SIEMPRE en kg** (`weightKg`). Las libras son solo presentación
    (`kgToDisplay`/`displayToKg`/`formatWeight` en [src/lib/format.ts](src/lib/format.ts)). Nunca guardes valores en unidades de display.

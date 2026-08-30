@@ -2,8 +2,8 @@
 
 ## En desarrollo — agente adaptativo beta
 
-> No desplegado: faltan cerrar reglas deterministas, routing de escalación, pipeline/evaluación del
-> corpus, configuración real de Clerk/Cloudflare/NVIDIA, privacidad y E2E del coach.
+> Estado 2026-08-30: código e infraestructura publicados; la beta sigue cerrada porque faltan corpus,
+> evaluación RAG, smoke autenticado, privacidad y E2E del coach. Los providers siguen apagados.
 
 - Consolidado el contrato canónico de adaptación con ocurrencias estables, snapshot prescrito/ejecutado, Dexie v5 aditivo y snapshots completos de revisiones.
 - Añadida cola offline recuperable, reintento explícito de fallidos, cola de eventos y replay idempotente determinista.
@@ -11,6 +11,10 @@
 - Añadido importador RAG determinista 2048→768/1024 y gates de Recall@5/precisión de citas. Proveedores apagados por defecto.
 - Actualizada la documentación para distinguir capacidades locales, limitaciones conocidas, gates
   por fase y tareas manuales de la beta.
+- Publicada la integración con Clerk y el Worker adaptativo; GitHub Pages y el smoke remoto básico
+  (`/health` y rechazo de análisis sin JWT) quedaron verificados.
+- Documentado el estado real de D1, Vectorize, secretos y la diferencia entre configuración desplegada
+  en producción y el `worker/wrangler.toml` local.
 
 ## 1.2.0 — 2026-08-09
 

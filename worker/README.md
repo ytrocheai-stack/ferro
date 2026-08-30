@@ -1,7 +1,9 @@
 # NextRep Adaptation Worker
 
-> Estado 2026-08-28: implementación local en desarrollo. No hay recursos Cloudflare reales
-> documentados, corpus indexado ni providers activados; `wrangler.toml` conserva un ID D1 de ejemplo.
+> Estado 2026-08-30: Worker desplegado en `https://nextrep-adaptation.yehoshuatroche.workers.dev`.
+> D1, los índices Vectorize y los secretos están configurados; no hay corpus real indexado ni
+> providers activados. El despliegue activo usa producción, mientras el `wrangler.toml` local conserva
+> flags de desarrollo para evitar activar proveedores accidentalmente desde el checkout.
 
 Worker independiente para análisis de adaptación. No guarda payloads, sets, feedback, nombres ni resúmenes: D1 conserva únicamente seudónimo HMAC, identificadores, configuración, latencia/error y eventos de aceptación durante la retención operativa.
 
@@ -19,7 +21,7 @@ validación de metadata ≤10 KiB, reanudación y corpus real. `src/evaluation.t
 fixtures sintéticos y no validan calidad de recuperación del dominio. No activar embeddings/RAG
 hasta generar un reporte con el corpus aprobado.
 
-Antes de desplegar se requieren cuenta Cloudflare, IDs de D1/Vectorize, configuración Clerk,
-allowlist y autorización explícita. El orden y los gates están en
+El smoke remoto actual devuelve HTTP 200 en `/health` y HTTP 401 en un análisis sin JWT. Falta
+completar la misma ruta con un JWT real de Clerk y un usuario de la allowlist. El orden y los gates están en
 [`../docs/DESPLIEGUE.md`](../docs/DESPLIEGUE.md) y
 [`../docs/ADAPTACION-ENTRENAMIENTO.md`](../docs/ADAPTACION-ENTRENAMIENTO.md).

@@ -4,7 +4,7 @@
 
 > Documento de referencia para entender cómo funciona la app por dentro. Complementa a
 > [../CLAUDE.md](../CLAUDE.md) (invariantes y convenciones) y [DESPLIEGUE.md](DESPLIEGUE.md) (build y deploy).
-> Última actualización: 2026-08-28 (Dexie v5, Clerk y beta adaptativa).
+> Última actualización: 2026-08-30 (Dexie v5, Clerk, Worker desplegado y beta adaptativa cerrada).
 
 ## Visión general
 
@@ -60,10 +60,11 @@ estricta → propuesta pendiente en IndexedDB → decisión explícita → trans
 rutina. El Worker nunca confía en candidatos numéricos enviados por el navegador y la UI no aplica
 cambios sin confirmación.
 
-El código está integrado y probado localmente, pero la función no está lista para producción: los
-proveedores están apagados, `wrangler.toml` conserva un ID de D1 de ejemplo, no hay corpus real
-indexado ni evaluación representativa. El inventario exacto de trabajo pendiente y los gates están
-en [ADAPTACION-ENTRENAMIENTO.md](ADAPTACION-ENTRENAMIENTO.md).
+El código está integrado y publicado, y el Worker tiene D1 e índices Vectorize reales. La función aún
+no está habilitada para la beta: los proveedores están apagados, no hay corpus real indexado ni
+evaluación representativa. El despliegue activo usa producción; el `worker/wrangler.toml` local mantiene
+flags de desarrollo para impedir activaciones accidentales. El inventario exacto de trabajo pendiente y
+los gates están en [ADAPTACION-ENTRENAMIENTO.md](ADAPTACION-ENTRENAMIENTO.md).
 
 ## Stores Zustand (localStorage)
 
