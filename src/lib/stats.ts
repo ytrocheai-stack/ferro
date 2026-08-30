@@ -1,12 +1,9 @@
 import type { LoggedSet, PR, Workout, WorkoutExercise } from '../db/types'
 import { groupFromTarget, type MuscleGroup } from '../data/muscleGroups'
+import { epley1RM as sharedEpley1RM } from '../../packages/adaptation-core/src/index'
 
 /** 1RM estimado con fórmula de Epley */
-export function epley1RM(weightKg: number, reps: number): number {
-  if (reps <= 0 || weightKg <= 0) return 0
-  if (reps === 1) return weightKg
-  return weightKg * (1 + reps / 30)
-}
+export const epley1RM = sharedEpley1RM
 
 /** Sets que cuentan para volumen y récords: completados y no-calentamiento */
 export function workingSets(sets: LoggedSet[]): LoggedSet[] {

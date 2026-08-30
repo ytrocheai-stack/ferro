@@ -1,3 +1,4 @@
+import { ClerkProvider } from '@clerk/react'
 /* eslint-disable react-refresh/only-export-components -- route-level lazy modules intentionally live here. */
 import { lazy, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -43,6 +44,8 @@ const router = createBrowserRouter(
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <RouterProvider router={router} />
+    <ClerkProvider afterSignOutUrl="/">
+      <RouterProvider router={router} />
+    </ClerkProvider>
   </StrictMode>,
 )

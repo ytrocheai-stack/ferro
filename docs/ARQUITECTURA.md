@@ -1,29 +1,36 @@
 # Arquitectura de NextRep
 
+> La arquitectura adaptativa en desarrollo está documentada en [ADAPTACION-ENTRENAMIENTO.md](ADAPTACION-ENTRENAMIENTO.md). La beta permanece desactivada por defecto.
+
 > Documento de referencia para entender cómo funciona la app por dentro. Complementa a
 > [../CLAUDE.md](../CLAUDE.md) (invariantes y convenciones) y [DESPLIEGUE.md](DESPLIEGUE.md) (build y deploy).
-> Última actualización: 2026-08-09 (navegación, análisis, nutrición e importación Hevy).
+> Última actualización: 2026-08-28 (Dexie v5, Clerk y beta adaptativa).
 
 ## Visión general
 
-PWA de una sola persona, 100% offline, sin backend. Tres dominios funcionales:
+PWA offline-first. El registro de datos personales y el uso diario no dependen de un backend.
+Actualmente tiene cuatro dominios funcionales:
 
 1. **Entrenos** — rutinas, sesión activa, historial, progresión, PRs, análisis de volumen.
 2. **Nutrición** — diario de comidas (4 vías de registro + platos), objetivos, tendencia de peso.
 3. **Medidas** — peso/medidas corporales y fotos de progreso.
+4. **Coach adaptativo (beta cerrada, desactivado)** — analiza un entrenamiento mediante un Worker
+   autenticado y guarda localmente una propuesta que requiere confirmación explícita.
 
 Persistencia dual: los **datos finales** viven en Dexie/IndexedDB (base `ferro`); el **estado de
 sesión** (entreno en curso, ajustes, objetivos) vive en Zustand con `persist` en localStorage.
-Nada importante existe solo en memoria.
+Nada importante existe solo en memoria. Cuando el coach está habilitado, un resumen mínimo viaja
+transitoriamente al Worker y al proveedor de IA; el backend no persiste entrenamientos ni feedback.
 
 ## Esquema de datos (Dexie, base `ferro`)
 
-Definido en [src/db/db.ts](../src/db/db.ts); tipos en [src/db/types.ts](../src/db/types.ts). PK de todas las tablas: `id` (string de `uid()`).
+Definido en [src/db/db.ts](../src/db/db.ts); tipos en [src/db/types.ts](../src/db/types.ts).
+La PK habitual es `id` (string de `uid()`); `externalRefs` usa `key` como PK única.
 
 | Tabla | Índices | Contenido | Versión |
 |---|---|---|---|
-| `workouts` | `startedAt` | Entrenos terminados: ejercicios → series (`LoggedSet`), volumen, PRs congelados | v1 |
-| `routines` | `sortOrder`, `folderId` | Plantillas del usuario (`RoutineExercise[]`, rango de reps, descansos) | v1 (+`folderId` v2) |
+| `workouts` | `startedAt`, `routineId`, `routineRevision` | Entrenos terminados: ejecución, snapshot de prescripción, feedback, volumen y PRs | v1 (+coach v4/v5) |
+| `routines` | `sortOrder`, `folderId`, `revision`, `coachReviewed` | Plantillas versionadas; rol e incremento se conservan por ocurrencia de ejercicio | v1 (+coach v4/v5) |
 | `customExercises` | — | Ejercicios propios (id `custom-…`) | v1 |
 | `folders` | `sortOrder` | Carpetas de rutinas | v2 |
 | `measurements` | `date`, `kind`, `[kind+date]` | Peso, % graso, perímetros (15 tipos) | v2 |
@@ -31,6 +38,12 @@ Definido en [src/db/db.ts](../src/db/db.ts); tipos en [src/db/types.ts](../src/d
 | `foods` | `name`, `source`, `usedAt`, `offCode` | Alimentos: `custom-…`, caché OFF (`off-<ean>`), y base `seed-…` materializados al marcarlos favoritos | v2 |
 | `dishes` | `name` | Platos: combinaciones de alimentos con macros denormalizados (`DishItem[]`) | v2 |
 | `foodLog` | `date`, `[date+meal]` | Diario: una entrada por alimento/plato registrado, macros ya calculados (robusto a borrar el origen) | v2 |
+| `importBatches` | `source`, `createdAt`, `status` | Lotes trazables de importación Hevy | v3 |
+| `externalRefs` | `source`, `entity`, `localId`, `batchId` | Correspondencia entre IDs externos y locales | v3 |
+| `routineRevisionSnapshots` | `routineId`, `revision` | Snapshot completo para aplicación/reversión atómica | v5 |
+| `adaptationProposals` | `analysisId`, `baseRoutineId`, `baseRoutineRevision`, `status`, `candidateId`, `occurrenceId` | Propuestas inmutables y revisables | v4/v5 |
+| `adaptationJobs` | `workoutId`, `status`, `nextRetryAt`, `updatedAt` | Cola offline de análisis | v4/v5 |
+| `adaptationEventJobs` | `analysisId`, `status`, `nextRetryAt` | Cola offline de eventos de auditoría | v5 |
 
 Notas:
 - Los campos añadidos con el tiempo (`rpe`, `durationSec`/`distanceM` de cardio, `supersetGroup`,
@@ -38,6 +51,19 @@ Notas:
 - Los índices `[kind+date]`, `[date+meal]` y los secundarios de `foods` están declarados pero las
   consultas actuales no los usan (filtran por el campo simple); disponibles para futuras queries.
 - `ensurePersistentStorage()` pide `navigator.storage.persist()` al arrancar.
+
+## Dominio: coach adaptativo (beta cerrada)
+
+El flujo implementado es PWA → Worker autenticado con Clerk → recálculo con
+`packages/adaptation-core` → recuperación RAG opcional → explicación Flash/Pro opcional → validación
+estricta → propuesta pendiente en IndexedDB → decisión explícita → transacción sobre una revisión de
+rutina. El Worker nunca confía en candidatos numéricos enviados por el navegador y la UI no aplica
+cambios sin confirmación.
+
+El código está integrado y probado localmente, pero la función no está lista para producción: los
+proveedores están apagados, `wrangler.toml` conserva un ID de D1 de ejemplo, no hay corpus real
+indexado ni evaluación representativa. El inventario exacto de trabajo pendiente y los gates están
+en [ADAPTACION-ENTRENAMIENTO.md](ADAPTACION-ENTRENAMIENTO.md).
 
 ## Stores Zustand (localStorage)
 
@@ -167,7 +193,8 @@ en Dexie; si no, proporcional.
 
 ## Backup / exportación
 
-- **Backup general** ([backup.ts](../src/lib/backup.ts)): JSON con las 8 tablas (sin fotos) + settings + objetivos.
+- **Backup general** ([backup.ts](../src/lib/backup.ts)): JSON v5 con las 14 tablas que no contienen
+  fotos + settings + objetivos; importa formatos v1–v5.
   Import: valida shape por registro ANTES de tocar nada (workouts estricto; rutinas, medidas y
   foodLog mínimos) y reemplaza TODO dentro de una transacción atómica.
 - **Backup de fotos**: archivo aparte (dataURL base64); el import AÑADE, no reemplaza.

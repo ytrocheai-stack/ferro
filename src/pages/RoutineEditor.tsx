@@ -17,7 +17,7 @@ import {
   IconPlus,
   IconTrash,
 } from '../components/icons'
-import { uid } from '../lib/format'
+import { parseDec, uid } from '../lib/format'
 import { REST_OPTIONS, restLabel } from '../lib/constants'
 
 export default function RoutineEditor() {
@@ -39,6 +39,8 @@ export default function RoutineEditor() {
   const [folderOpen, setFolderOpen] = useState(false)
   const [confirmExit, setConfirmExit] = useState(false)
   const [repRangeFor, setRepRangeFor] = useState<number | null>(null)
+  const [targetRpeFor, setTargetRpeFor] = useState<number | null>(null)
+  const [confirmCoach, setConfirmCoach] = useState(isNew ? false : false)
 
   useEffect(() => {
     if (isNew) return
@@ -47,16 +49,22 @@ export default function RoutineEditor() {
         navigate('/', { replace: true })
         return
       }
+      const normalizedExercises = r.exercises.map((exercise, index) => ({
+        ...exercise,
+        occurrenceId: exercise.occurrenceId ?? `${r.id}:${index}:${exercise.exerciseId}`,
+        trainingRole: exercise.trainingRole ?? exercise.role ?? r.trainingRole,
+      }))
       setName(r.name)
-      setExercises(r.exercises)
+      setExercises(normalizedExercises)
       setFolderId(r.folderId)
-      setOriginal(JSON.stringify({ name: r.name, exercises: r.exercises, folderId: r.folderId }))
+      setConfirmCoach(r.coachReviewed ?? false)
+      setOriginal(JSON.stringify({ name: r.name, exercises: normalizedExercises, folderId: r.folderId }))
       setLoaded(true)
     })
   }, [id, isNew, navigate])
 
   const dirty = loaded && JSON.stringify({ name, exercises, folderId }) !== original
-  const canSave = name.trim().length > 0 && exercises.length > 0
+  const canSave = name.trim().length > 0 && exercises.length > 0 && confirmCoach
 
   const save = async () => {
     if (!canSave) return
@@ -66,8 +74,17 @@ export default function RoutineEditor() {
       name: name.trim(),
       sortOrder: existing?.sortOrder ?? Date.now(),
       createdAt: existing?.createdAt ?? Date.now(),
-      exercises,
+      exercises: exercises.map((exercise, index) => ({
+        ...exercise,
+        occurrenceId: exercise.occurrenceId ?? `${existing?.id ?? 'new'}:${index}:${exercise.exerciseId}`,
+        trainingRole: exercise.trainingRole ?? exercise.role ?? existing?.trainingRole ?? 'hypertrophy',
+        role: undefined,
+      })),
       folderId,
+      revision: existing ? (dirty ? (existing.revision ?? 1) + 1 : existing.revision ?? 1) : 1,
+      trainingRole: exercises[0]?.trainingRole ?? exercises[0]?.role ?? existing?.trainingRole ?? 'hypertrophy',
+      loadIncrementKg: exercises[0]?.loadIncrementKg ?? existing?.loadIncrementKg ?? 2.5,
+      coachReviewed: confirmCoach,
     })
     navigate('/', { replace: true })
   }
@@ -192,6 +209,28 @@ export default function RoutineEditor() {
                   </span>
                 </button>
               </div>
+              <div className="grid grid-cols-2 gap-3 pt-3">
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold uppercase text-muted">Rol</span>
+                  <Select
+                    value={re.trainingRole ?? re.role ?? 'hypertrophy'}
+                    onChange={(value) => update(i, { trainingRole: value, role: undefined })}
+                    options={[
+                      { value: 'strength' as const, label: 'Fuerza' },
+                      { value: 'hypertrophy' as const, label: 'Hipertrofia' },
+                      { value: 'accessory' as const, label: 'Accesorio' },
+                    ]}
+                    sheetTitle="Rol de entrenamiento"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold uppercase text-muted">Incremento (kg)</span>
+                  <input className="input" inputMode="decimal" value={re.loadIncrementKg ?? 2.5} onChange={(event) => update(i, { loadIncrementKg: Math.max(0.25, parseDec(event.target.value)) })} />
+                </label>
+              </div>
+              <button className="pressable pt-3 text-left text-xs font-semibold text-muted" onClick={() => setTargetRpeFor(i)}>
+                RPE objetivo: {re.targetRpeMin !== undefined && re.targetRpeMax !== undefined ? `${re.targetRpeMin}–${re.targetRpeMax}` : 'sin objetivo (RIR libre)'}
+              </button>
             </div>
           )
         })}
@@ -217,6 +256,9 @@ export default function RoutineEditor() {
               restSec: defaultRestSec,
               repRangeMin: 8,
               repRangeMax: 12,
+              trainingRole: 'hypertrophy' as const,
+              occurrenceId: uid(),
+              loadIncrementKg: 2.5,
             })),
           ])
         }
@@ -267,6 +309,21 @@ export default function RoutineEditor() {
           />
         )}
       </Sheet>
+
+      <Sheet open={targetRpeFor !== null} onClose={() => setTargetRpeFor(null)} title="RPE objetivo">
+        {targetRpeFor !== null && (
+          <TargetRpeEditor
+            min={exercises[targetRpeFor]?.targetRpeMin}
+            max={exercises[targetRpeFor]?.targetRpeMax}
+            onChange={(min, max) => update(targetRpeFor, { targetRpeMin: min, targetRpeMax: max })}
+          />
+        )}
+      </Sheet>
+
+      <label className="card mt-4 flex items-start gap-3 px-3 py-3 text-sm">
+        <input type="checkbox" checked={confirmCoach} onChange={(event) => setConfirmCoach(event.target.checked)} />
+        <span><strong>Confirmar configuración del coach</strong><br /><span className="text-xs text-muted">Revisa rol, incremento y RPE de cada ejercicio. El análisis se mantendrá bloqueado hasta confirmar.</span></span>
+      </label>
 
       <Confirm
         open={confirmExit}
@@ -353,6 +410,22 @@ function RepRangeEditor({
         />
         <span className="text-sm text-muted">reps</span>
       </div>
+    </div>
+  )
+}
+
+function TargetRpeEditor({ min, max, onChange }: { min?: number; max?: number; onChange: (min?: number, max?: number) => void }) {
+  const [minText, setMinText] = useState(min === undefined ? '' : String(min))
+  const [maxText, setMaxText] = useState(max === undefined ? '' : String(max))
+  return (
+    <div className="flex flex-col gap-3 pb-4">
+      <p className="text-xs text-muted">RPE 10 equivale a RIR 0; RPE 7 equivale aproximadamente a RIR 3. Déjalo vacío si no quieres usarlo.</p>
+      <div className="grid grid-cols-2 gap-3">
+        <input className="input" inputMode="decimal" placeholder="Mín. RPE" value={minText} onChange={(event) => setMinText(event.target.value)} />
+        <input className="input" inputMode="decimal" placeholder="Máx. RPE" value={maxText} onChange={(event) => setMaxText(event.target.value)} />
+      </div>
+      <button className="btn btn-primary" onClick={() => onChange(minText.trim() ? parseDec(minText) : undefined, maxText.trim() ? parseDec(maxText) : undefined)}>Aplicar</button>
+      <button className="btn btn-surface" onClick={() => onChange(undefined, undefined)}>Quitar objetivo</button>
     </div>
   )
 }

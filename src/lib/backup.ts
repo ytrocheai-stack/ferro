@@ -12,15 +12,20 @@ import type {
   ProgressPhoto,
   Routine,
   Workout,
+  AdaptationProposal,
+  AdaptationJob,
+  RoutineRevisionSnapshot,
+  AdaptationEventJob,
 } from '../db/types'
 import { useSettings, type SettingsValues } from '../stores/settings'
 import { useNutrition, type NutritionGoals } from '../stores/nutrition'
 import { shareOrDownloadFile, uid } from './format'
 import { backupSchema, photosBackupSchema } from './validation'
+import { normalizeRoutine } from './adaptation'
 
 interface BackupFile {
   app: 'ferro'
-  version: 1 | 2 | 3
+  version: 1 | 2 | 3 | 4 | 5
   exportedAt: string
   settings: SettingsValues
   nutritionGoals?: NutritionGoals
@@ -34,10 +39,14 @@ interface BackupFile {
   foodLog?: FoodLogEntry[]
   importBatches?: ImportBatch[]
   externalRefs?: ExternalRef[]
+  adaptationProposals?: AdaptationProposal[]
+  adaptationJobs?: AdaptationJob[]
+  routineRevisionSnapshots?: RoutineRevisionSnapshot[]
+  adaptationEventJobs?: AdaptationEventJob[]
 }
 
 export async function exportBackup(): Promise<void> {
-  const [workouts, routines, customExercises, folders, measurements, foods, dishes, foodLog, importBatches, externalRefs] =
+  const [workouts, routines, customExercises, folders, measurements, foods, dishes, foodLog, importBatches, externalRefs, adaptationProposals, adaptationJobs, routineRevisionSnapshots, adaptationEventJobs] =
     await Promise.all([
       db.workouts.toArray(),
       db.routines.toArray(),
@@ -49,10 +58,14 @@ export async function exportBackup(): Promise<void> {
       db.foodLog.toArray(),
       db.importBatches.toArray(),
       db.externalRefs.toArray(),
+      db.adaptationProposals.toArray(),
+      db.adaptationJobs.toArray(),
+      db.routineRevisionSnapshots.toArray(),
+      db.adaptationEventJobs.toArray(),
     ])
   const payload: BackupFile = {
     app: 'ferro',
-    version: 3,
+    version: 5,
     exportedAt: new Date().toISOString(),
     settings: { ...useSettings.getState() },
     nutritionGoals: { ...useNutrition.getState().goals },
@@ -66,6 +79,10 @@ export async function exportBackup(): Promise<void> {
     foodLog,
     importBatches,
     externalRefs,
+    adaptationProposals,
+    adaptationJobs,
+    routineRevisionSnapshots,
+    adaptationEventJobs,
   }
   await downloadJson(payload, `nextrep-backup-${format(new Date(), 'yyyy-MM-dd')}.json`)
 }
@@ -115,7 +132,7 @@ export async function importBackup(file: File): Promise<ImportResult> {
 
   await db.transaction(
     'rw',
-    [db.workouts, db.routines, db.customExercises, db.folders, db.measurements, db.foods, db.dishes, db.foodLog, db.importBatches, db.externalRefs],
+    [db.workouts, db.routines, db.customExercises, db.folders, db.measurements, db.foods, db.dishes, db.foodLog, db.importBatches, db.externalRefs, db.adaptationProposals, db.adaptationJobs, db.routineRevisionSnapshots, db.adaptationEventJobs],
     async () => {
       await Promise.all([
         db.workouts.clear(),
@@ -128,10 +145,14 @@ export async function importBackup(file: File): Promise<ImportResult> {
         db.foodLog.clear(),
         db.importBatches.clear(),
         db.externalRefs.clear(),
+        db.adaptationProposals.clear(),
+        db.adaptationJobs.clear(),
+        db.routineRevisionSnapshots.clear(),
+        db.adaptationEventJobs.clear(),
       ])
       await Promise.all([
         db.workouts.bulkPut(data.workouts),
-        db.routines.bulkPut(data.routines ?? []),
+        db.routines.bulkPut((data.routines ?? []).map(normalizeRoutine)),
         db.customExercises.bulkPut(data.customExercises ?? []),
         db.folders.bulkPut(data.folders ?? []),
         db.measurements.bulkPut(data.measurements ?? []),
@@ -140,6 +161,22 @@ export async function importBackup(file: File): Promise<ImportResult> {
         db.foodLog.bulkPut(data.foodLog ?? []),
         db.importBatches.bulkPut(data.importBatches ?? []),
         db.externalRefs.bulkPut(data.externalRefs ?? []),
+        db.adaptationProposals.bulkPut((data.adaptationProposals ?? []).map((proposal) => ({
+          ...proposal,
+          status: (proposal.status as string) === 'applied' ? 'accepted' : proposal.status,
+          policyVersion: proposal.policyVersion ?? 'v1',
+          corpusVersion: proposal.corpusVersion ?? 'none',
+          previousValues: proposal.previousValues ?? proposal.candidate.previous,
+          proposedValues: proposal.proposedValues ?? proposal.candidate.next,
+          rule: proposal.rule ?? proposal.candidate.rule,
+          confidence: proposal.confidence ?? proposal.candidate.confidence,
+          citations: proposal.citations ?? [],
+          warnings: proposal.warnings ?? proposal.candidate.warnings,
+          selectedModel: proposal.selectedModel ?? 'deterministic',
+        }))),
+        db.adaptationJobs.bulkPut(data.adaptationJobs ?? []),
+        db.routineRevisionSnapshots.bulkPut(data.routineRevisionSnapshots ?? []),
+        db.adaptationEventJobs.bulkPut(data.adaptationEventJobs ?? []),
       ])
     },
   )

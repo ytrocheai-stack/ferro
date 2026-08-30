@@ -1,5 +1,17 @@
 # Changelog
 
+## En desarrollo — agente adaptativo beta
+
+> No desplegado: faltan cerrar reglas deterministas, routing de escalación, pipeline/evaluación del
+> corpus, configuración real de Clerk/Cloudflare/NVIDIA, privacidad y E2E del coach.
+
+- Consolidado el contrato canónico de adaptación con ocurrencias estables, snapshot prescrito/ejecutado, Dexie v5 aditivo y snapshots completos de revisiones.
+- Añadida cola offline recuperable, reintento explícito de fallidos, cola de eventos y replay idempotente determinista.
+- Endurecido el Worker: CORS/preflight, fail-closed en producción, HMAC separado, validación antes de cuota, retención/Cron y circuitos por modelo.
+- Añadido importador RAG determinista 2048→768/1024 y gates de Recall@5/precisión de citas. Proveedores apagados por defecto.
+- Actualizada la documentación para distinguir capacidades locales, limitaciones conocidas, gates
+  por fase y tareas manuales de la beta.
+
 ## 1.2.0 — 2026-08-09
 
 - Rediseñada la navegación como dock flotante en móvil y rail en escritorio, con safe areas, foco accesible y estado correcto en rutas secundarias.

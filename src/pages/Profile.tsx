@@ -21,6 +21,7 @@ import { IconCheck, IconDownload, IconFlame, IconRuler, IconShare, IconUpload } 
 import { APP_VERSION, DATASET_URL, REST_OPTIONS, restLabel } from '../lib/constants'
 import { useLocalDateKey } from '../lib/useLocalDateKey'
 import { undoImport, type ImportSummary } from '../lib/hevyImport'
+import { useAuth } from '@clerk/react'
 
 const weekKey = (d: Date | number) => format(startOfWeek(d, { weekStartsOn: 1 }), 'yyyy-MM-dd')
 
@@ -113,6 +114,7 @@ export default function Profile() {
 
       <InstallCard />
       <SettingsCard />
+      <CoachPrivacyCard />
       <DataCard workoutsCount={workouts.length} />
 
       <div className="card mt-4 px-4 py-3 text-xs leading-relaxed text-muted">
@@ -127,6 +129,12 @@ export default function Profile() {
       </div>
     </div>
   )
+}
+
+function CoachPrivacyCard() {
+  const { isSignedIn } = useAuth()
+  if (!isSignedIn || !import.meta.env.VITE_ADAPTATION_WORKER_URL) return null
+  return <div className="card mt-4 px-4 py-3 text-xs leading-relaxed text-muted"><div className="pb-1 text-sm font-bold text-text">Privacidad del coach adaptativo</div>Las rutinas, entrenos y feedback se guardan primero en este dispositivo. Para generar propuestas se envía al Worker únicamente la rutina mínima y las exposiciones necesarias; el Worker puede consultar NVIDIA de forma transitoria. El backend no guarda resúmenes, series, feedback, correo ni nombre.</div>
 }
 
 /** Guía de instalación para iOS: ahí no existe `beforeinstallprompt`, así que sin este aviso el

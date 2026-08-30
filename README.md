@@ -13,6 +13,15 @@ Registro de entrenamientos y nutrición personal, inspirado en Hevy. Es una PWA 
 - Importación Hevy por CSV o API Pro: entrenos, rutinas, carpetas, medidas y ejercicios; lotes trazables y deshacer.
 - PWA instalable y usable sin conexión; los snapshots de datos quedan fijados por hash.
 
+## Coach adaptativo (beta cerrada)
+
+La primera fase del coach está integrada en el repositorio, pero permanece desactivada. Incluye un
+motor determinista compartido, propuestas locales confirmables, autenticación con Clerk y un Worker
+aislado para RAG/explicaciones. Todavía no existe un corpus real indexado ni una evaluación de
+recuperación representativa, y los bindings/proveedores de Cloudflare están sin configurar. El
+estado verificado, los riesgos y las tareas manuales están en
+[`docs/ADAPTACION-ENTRENAMIENTO.md`](docs/ADAPTACION-ENTRENAMIENTO.md).
+
 ## Desarrollo
 
 ```bash

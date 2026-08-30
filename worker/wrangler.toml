@@ -1,0 +1,32 @@
+name = "nextrep-adaptation"
+main = "src/index.ts"
+compatibility_date = "2026-08-26"
+
+[triggers]
+crons = ["17 3 * * *"]
+
+[vars]
+ENVIRONMENT = "development"
+FLASH_MODEL = "deepseek-ai/deepseek-v4-flash-0731"
+PRO_MODEL = "deepseek-ai/deepseek-v4-pro-0813"
+EMBEDDING_MODEL = "nvidia/nemotron-3-embed-1b"
+RAG_INDEX_VERSION = "approved-corpus:nvidia-nemotron-3-embed-1b:2048-prefix768-l2:v1"
+ENABLE_EMBEDDINGS = "false"
+ENABLE_FLASH = "false"
+ENABLE_PRO = "false"
+ENABLE_RERANKING = "false"
+ENABLE_PROVIDER_PROBE = "false"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nextrep-adaptation"
+database_id = "b7e25a26-9264-49d2-9ac8-f6cb5b7024e8"
+migrations_dir = "migrations"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "nextrep-adaptation-768"
+
+[[vectorize]]
+binding = "VECTORIZE_EVAL_1024"
+index_name = "nextrep-adaptation-eval-1024"

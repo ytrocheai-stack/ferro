@@ -1,4 +1,5 @@
 export type SetType = 'normal' | 'warmup' | 'failure' | 'drop'
+export type TrainingRole = 'strength' | 'hypertrophy' | 'accessory'
 
 export interface LoggedSet {
   type: SetType
@@ -14,12 +15,27 @@ export interface LoggedSet {
 }
 
 export interface WorkoutExercise {
+  /** Identidad estable de esta ocurrencia, incluso si el ejercicio se repite. */
+  occurrenceId?: string
   exerciseId: string
   notes?: string
   restSec: number
   sets: LoggedSet[]
+  /** Snapshot inmutable de lo prescrito al iniciar el entrenamiento. */
+  prescription?: WorkoutPrescription
+  /** Series ejecutadas; `sets` se conserva como alias de lectura para backups antiguos. */
+  executedSets?: LoggedSet[]
   /** ejercicios con el mismo número forman una superserie */
   supersetGroup?: number
+  role?: TrainingRole
+  trainingRole?: TrainingRole
+  repRangeMin?: number
+  repRangeMax?: number
+  targetRpeMin?: number
+  targetRpeMax?: number
+  loadIncrementKg?: number
+  plannedSets?: number
+  plannedSetTypes?: SetType[]
 }
 
 export type PRKind = 'weight' | 'e1rm' | 'setVolume'
@@ -41,9 +57,23 @@ export interface Workout {
   totalSets: number
   prs: PR[]
   notes?: string
+  routineId?: string
+  routineRevision?: number
+  postWorkoutFeedback?: PostWorkoutFeedback
+}
+
+export interface PostWorkoutFeedback {
+  completed?: boolean
+  generalPain?: boolean
+  exercisePain?: string[]
+  energy?: number
+  difficulty?: number
+  contradictory?: boolean
 }
 
 export interface RoutineExercise {
+  /** Identidad estable por ocurrencia; permite repetir el mismo ejercicio. */
+  occurrenceId?: string
   exerciseId: string
   plannedSets: number
   /** Objetivo detallado por serie cuando la fuente lo proporciona (p. ej. Hevy). */
@@ -54,6 +84,12 @@ export interface RoutineExercise {
   /** rango de reps objetivo para doble progresión (default 8–12) */
   repRangeMin?: number
   repRangeMax?: number
+  trainingRole?: TrainingRole
+  /** @deprecated solo para leer rutinas v4; se normaliza a trainingRole. */
+  role?: TrainingRole
+  targetRpeMin?: number
+  targetRpeMax?: number
+  loadIncrementKg?: number
 }
 
 export interface PlannedSet {
@@ -64,6 +100,20 @@ export interface PlannedSet {
   distanceM?: number
 }
 
+export interface WorkoutPrescription {
+  occurrenceId?: string
+  plannedSets: number
+  setTargets?: PlannedSet[]
+  restSec: number
+  supersetGroup?: number
+  repRangeMin?: number
+  repRangeMax?: number
+  trainingRole?: TrainingRole
+  targetRpeMin?: number
+  targetRpeMax?: number
+  loadIncrementKg?: number
+}
+
 export interface Routine {
   id: string
   name: string
@@ -71,6 +121,95 @@ export interface Routine {
   exercises: RoutineExercise[]
   createdAt: number
   folderId?: string
+  revision: number
+  trainingRole: TrainingRole
+  loadIncrementKg: number
+  coachReviewed: boolean
+}
+
+export type ProposalStatus = 'pending' | 'accepted' | 'edited' | 'rejected' | 'reverted' | 'stale'
+
+export interface RoutineRevisionSnapshot {
+  id: string
+  routineId: string
+  revision: number
+  createdAt: number
+  analysisId?: string
+  routine: Routine
+}
+
+export interface AdaptationCandidateRecord {
+  candidateId: string
+  kind: 'maintain' | 'increase-reps' | 'increase-load' | 'add-set' | 'reduce-load' | 'reduce-set'
+  rule: string
+  exerciseId: string
+  previous: { plannedSets: number; repsMin: number; repsMax: number; loadKg?: number }
+  next: { plannedSets: number; repsMin: number; repsMax: number; loadKg?: number }
+  evidence: {
+    comparableWorkoutIds: string[]
+    comparableCount: number
+    medianWeightKg?: number
+    medianReps?: number
+    completedUpperBoundCount: number
+    discreteIncreaseCount: number
+    currentE1rmKg?: number
+    medianPreviousE1rmKg?: number
+  }
+  confidence: 'low' | 'medium' | 'high'
+  warnings: string[]
+  citations?: string[]
+  explanation: string
+}
+
+export interface AdaptationProposal {
+  id: string
+  analysisId: string
+  baseRoutineId: string
+  baseRoutineRevision: number
+  exerciseId: string
+  status: ProposalStatus
+  createdAt: number
+  candidateId: string
+  candidate: AdaptationCandidateRecord
+  candidateOptions: AdaptationCandidateRecord[]
+  proposalRevision: number
+  policyVersion?: string
+  corpusVersion?: string
+  previousValues?: AdaptationCandidateRecord['previous']
+  proposedValues?: AdaptationCandidateRecord['next']
+  rule?: string
+  confidence?: AdaptationCandidateRecord['confidence']
+  citations?: string[]
+  warnings?: string[]
+  selectedModel?: 'deterministic' | 'flash' | 'pro'
+  occurrenceId?: string
+  supersedesProposalId?: string
+  appliedRoutineRevision?: number
+  routineSnapshotId?: string
+}
+
+export interface AdaptationJob {
+  id: string
+  workoutId: string
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  createdAt: number
+  nextRetryAt?: number
+  attempts?: number
+  analysisId?: string
+  lastError?: string
+  updatedAt?: number
+}
+
+export interface AdaptationEventJob {
+  id: string
+  analysisId: string
+  exerciseId: string
+  candidateId?: string
+  event: 'accepted' | 'rejected' | 'edited' | 'reverted'
+  status: 'pending' | 'sent' | 'failed'
+  createdAt: number
+  attempts: number
+  nextRetryAt?: number
 }
 
 export interface Folder {

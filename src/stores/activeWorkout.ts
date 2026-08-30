@@ -1,12 +1,13 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { db } from '../db/db'
-import type { Routine, SetType, Workout, WorkoutExercise } from '../db/types'
+import type { PostWorkoutFeedback, Routine, SetType, TrainingRole, Workout, WorkoutExercise, WorkoutPrescription } from '../db/types'
 import { recalculateWorkoutHistory } from '../lib/stats'
 import { uid } from '../lib/format'
 import { vibrate } from '../lib/notify'
 import { useSettings } from './settings'
 import { useToasts } from './toasts'
+import { enqueueAdaptationJob } from '../lib/adaptationClient'
 
 export interface ActiveSet {
   type: SetType
@@ -29,6 +30,7 @@ export interface PrevSet {
 
 export interface ActiveExercise {
   uid: string
+  occurrenceId?: string
   exerciseId: string
   restSec: number
   notes: string
@@ -40,6 +42,14 @@ export interface ActiveExercise {
   /** rango de reps objetivo (doble progresión) */
   repRangeMin?: number
   repRangeMax?: number
+  role?: TrainingRole
+  trainingRole?: TrainingRole
+  targetRpeMin?: number
+  targetRpeMax?: number
+  loadIncrementKg?: number
+  plannedSets?: number
+  plannedSetTypes?: SetType[]
+  prescription?: WorkoutPrescription
 }
 
 export interface ActiveSession {
@@ -47,6 +57,8 @@ export interface ActiveSession {
   name: string
   notes: string
   routineId?: string
+  routineRevision?: number
+  postWorkoutFeedback?: PostWorkoutFeedback
   /** si está definido, estamos editando un entreno pasado */
   editingWorkoutId?: string
   originalStartedAt?: number
@@ -67,6 +79,7 @@ interface ActiveState {
   moveExercise: (exUid: string, delta: number) => void
   setName: (name: string) => void
   setWorkoutNotes: (notes: string) => void
+  setPostWorkoutFeedback: (feedback: PostWorkoutFeedback) => void
   setExerciseRest: (exUid: string, sec: number) => void
   setExerciseNotes: (exUid: string, notes: string) => void
   /** agrupa el ejercicio con el siguiente en superserie, o deshace su grupo */
@@ -186,14 +199,44 @@ export const useActive = create<ActiveState>()(
         const history = await recentWorkouts()
         const exercises: ActiveExercise[] = routine.exercises.map((re) => ({
           uid: uid(),
+          occurrenceId: re.occurrenceId,
           exerciseId: re.exerciseId,
           restSec: re.restSec,
           notes: re.notes ?? '',
-          sets: Array.from({ length: Math.max(1, re.plannedSets) }, emptySet),
+          sets: Array.from({ length: Math.max(1, re.plannedSets) }, (_, index) => {
+            const target = re.setTargets?.[index]
+            return {
+              ...emptySet(),
+              ...(target?.weightKg === undefined ? {} : { weightKg: target.weightKg }),
+              ...(target?.reps === undefined ? {} : { reps: target.reps }),
+              ...(target?.durationSec === undefined ? {} : { durationSec: target.durationSec }),
+              ...(target?.distanceM === undefined ? {} : { distanceM: target.distanceM }),
+              ...(target?.type === undefined ? {} : { type: target.type }),
+            }
+          }),
           prev: prevSetsIn(history, re.exerciseId),
           supersetGroup: re.supersetGroup,
           repRangeMin: re.repRangeMin,
           repRangeMax: re.repRangeMax,
+          trainingRole: re.trainingRole ?? re.role ?? routine.trainingRole,
+          targetRpeMin: re.targetRpeMin,
+          targetRpeMax: re.targetRpeMax,
+          loadIncrementKg: re.loadIncrementKg ?? routine.loadIncrementKg,
+          plannedSets: re.plannedSets,
+          plannedSetTypes: re.setTargets?.map((target) => target.type),
+          prescription: {
+            occurrenceId: re.occurrenceId,
+            plannedSets: re.plannedSets,
+            setTargets: re.setTargets,
+            restSec: re.restSec,
+            supersetGroup: re.supersetGroup,
+            repRangeMin: re.repRangeMin,
+            repRangeMax: re.repRangeMax,
+            trainingRole: re.trainingRole ?? re.role ?? routine.trainingRole,
+            targetRpeMin: re.targetRpeMin,
+            targetRpeMax: re.targetRpeMax,
+            loadIncrementKg: re.loadIncrementKg ?? routine.loadIncrementKg,
+          },
         }))
         set({
           session: {
@@ -201,6 +244,7 @@ export const useActive = create<ActiveState>()(
             name: routine.name,
             notes: '',
             routineId: routine.id,
+            routineRevision: routine.revision,
             exercises,
           },
           rest: null,
@@ -211,10 +255,11 @@ export const useActive = create<ActiveState>()(
         const history = await recentWorkouts()
         const exercises: ActiveExercise[] = workout.exercises.map((we) => ({
           uid: uid(),
+          occurrenceId: we.occurrenceId ?? we.prescription?.occurrenceId,
           exerciseId: we.exerciseId,
           restSec: we.restSec,
           notes: we.notes ?? '',
-          sets: we.sets.map((s) => ({
+          sets: (we.executedSets ?? we.sets).map((s) => ({
             type: s.type,
             weightKg: s.weightKg,
             reps: s.reps,
@@ -225,6 +270,15 @@ export const useActive = create<ActiveState>()(
           })),
           prev: prevSetsIn(history, we.exerciseId, workout.startedAt, workout.id),
           supersetGroup: we.supersetGroup,
+          repRangeMin: we.repRangeMin,
+          repRangeMax: we.repRangeMax,
+          trainingRole: we.trainingRole ?? we.role ?? we.prescription?.trainingRole,
+          targetRpeMin: we.prescription?.targetRpeMin ?? we.targetRpeMin,
+          targetRpeMax: we.prescription?.targetRpeMax ?? we.targetRpeMax,
+          loadIncrementKg: we.prescription?.loadIncrementKg ?? we.loadIncrementKg,
+          plannedSets: we.prescription?.plannedSets ?? we.plannedSets,
+          plannedSetTypes: we.prescription?.setTargets?.map((target) => target.type) ?? we.plannedSetTypes,
+          prescription: we.prescription,
         }))
         set({
           session: {
@@ -234,6 +288,9 @@ export const useActive = create<ActiveState>()(
             editingWorkoutId: workout.id,
             originalStartedAt: workout.startedAt,
             originalEndedAt: workout.endedAt,
+            routineId: workout.routineId,
+            routineRevision: workout.routineRevision,
+            postWorkoutFeedback: workout.postWorkoutFeedback,
             exercises,
           },
           rest: null,
@@ -243,6 +300,7 @@ export const useActive = create<ActiveState>()(
       repeatWorkout: async (workout) => {
         const exercises: ActiveExercise[] = workout.exercises.map((we) => ({
           uid: uid(),
+          occurrenceId: we.occurrenceId ?? we.prescription?.occurrenceId,
           exerciseId: we.exerciseId,
           restSec: we.restSec,
           notes: we.notes ?? '',
@@ -257,6 +315,15 @@ export const useActive = create<ActiveState>()(
               distanceM: s.distanceM,
             })),
           supersetGroup: we.supersetGroup,
+          repRangeMin: we.repRangeMin,
+          repRangeMax: we.repRangeMax,
+          trainingRole: we.trainingRole ?? we.role ?? we.prescription?.trainingRole,
+          targetRpeMin: we.prescription?.targetRpeMin ?? we.targetRpeMin,
+          targetRpeMax: we.prescription?.targetRpeMax ?? we.targetRpeMax,
+          loadIncrementKg: we.prescription?.loadIncrementKg ?? we.loadIncrementKg,
+          plannedSets: we.prescription?.plannedSets ?? we.plannedSets,
+          plannedSetTypes: we.prescription?.setTargets?.map((target) => target.type) ?? we.plannedSetTypes,
+          prescription: we.prescription,
         }))
         set({
           session: { startedAt: Date.now(), name: workout.name, notes: '', exercises },
@@ -268,6 +335,7 @@ export const useActive = create<ActiveState>()(
         const history = await recentWorkouts()
         const added: ActiveExercise[] = ids.map((id) => ({
           uid: uid(),
+          occurrenceId: uid(),
           exerciseId: id,
           restSec: defaultRestSec,
           notes: '',
@@ -304,6 +372,11 @@ export const useActive = create<ActiveState>()(
       setWorkoutNotes: (notes) => {
         const s = get().session
         if (s) set({ session: { ...s, notes } })
+      },
+
+      setPostWorkoutFeedback: (feedback) => {
+        const s = get().session
+        if (s) set({ session: { ...s, postWorkoutFeedback: feedback } })
       },
 
       setExerciseRest: (exUid, sec) => {
@@ -520,11 +593,21 @@ async function doFinish(get: Getter, set: Setter): Promise<string | null> {
   if (!s) return null
   const exercises: WorkoutExercise[] = s.exercises
     .map((e) => ({
+      occurrenceId: e.occurrenceId,
       exerciseId: e.exerciseId,
       notes: e.notes.trim() || undefined,
       restSec: e.restSec,
       supersetGroup: e.supersetGroup,
-      sets: e.sets
+      trainingRole: e.trainingRole ?? e.role,
+      repRangeMin: e.repRangeMin,
+      repRangeMax: e.repRangeMax,
+      targetRpeMin: e.targetRpeMin,
+      targetRpeMax: e.targetRpeMax,
+      loadIncrementKg: e.loadIncrementKg,
+      plannedSets: e.plannedSets ?? e.sets.filter((set) => set.type !== 'warmup').length,
+      plannedSetTypes: e.plannedSetTypes,
+      prescription: e.prescription,
+      executedSets: e.sets
         .filter((st) => st.completed)
         .map((st) => ({
           type: st.type,
@@ -535,6 +618,22 @@ async function doFinish(get: Getter, set: Setter): Promise<string | null> {
           durationSec: st.durationSec || undefined,
           distanceM: st.distanceM || undefined,
         })),
+    }))
+    .map((e) => ({
+      ...e,
+      sets: e.executedSets ?? [],
+      prescription: e.prescription ?? {
+        occurrenceId: e.occurrenceId,
+        plannedSets: e.plannedSets ?? e.executedSets?.filter((set) => set.type !== 'warmup').length ?? 0,
+        restSec: e.restSec,
+        supersetGroup: e.supersetGroup,
+        repRangeMin: e.repRangeMin,
+        repRangeMax: e.repRangeMax,
+        trainingRole: e.trainingRole,
+        targetRpeMin: e.targetRpeMin,
+        targetRpeMax: e.targetRpeMax,
+        loadIncrementKg: e.loadIncrementKg,
+      },
     }))
     .filter((e) => e.sets.length > 0)
   if (exercises.length === 0) return null
@@ -552,12 +651,24 @@ async function doFinish(get: Getter, set: Setter): Promise<string | null> {
     totalSets: 0,
     prs: [],
     notes: s.notes.trim() || undefined,
+    routineId: s.routineId,
+    routineRevision: s.routineRevision,
+    postWorkoutFeedback: s.postWorkoutFeedback,
   }
   const all = await db.workouts.toArray()
   const normalized = recalculateWorkoutHistory([...all.filter((item) => item.id !== workout.id), workout])
-  await db.transaction('rw', db.workouts, async () => {
+  await db.transaction('rw', [db.workouts, db.adaptationJobs, db.adaptationProposals], async () => {
     await db.workouts.bulkPut(normalized)
+    if (isEdit) {
+      const job = await db.adaptationJobs.where('workoutId').equals(workout.id).first()
+      if (job) await db.adaptationJobs.update(job.id, { status: 'failed', lastError: 'El entrenamiento fue editado; requiere un nuevo análisis', updatedAt: Date.now() })
+      if (job?.analysisId) {
+        const proposals = await db.adaptationProposals.where('analysisId').equals(job.analysisId).toArray()
+        await db.adaptationProposals.bulkPut(proposals.filter((proposal) => proposal.status === 'pending').map((proposal) => ({ ...proposal, status: 'stale' as const })))
+      }
+    }
   })
+  if (!isEdit) await enqueueAdaptationJob(workout.id)
   set({ session: null, rest: null })
   return workout.id
 }

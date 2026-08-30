@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
+import { useAuth } from '@clerk/react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import type { LoggedSet, PRKind, Workout } from '../db/types'
+import type { AdaptationProposal } from '../db/types'
 import { useCatalog } from '../data/exercises'
 import { useActive } from '../stores/activeWorkout'
 import { useSettings } from '../stores/settings'
@@ -16,6 +18,8 @@ import {
   kgToDisplay,
 } from '../lib/format'
 import { fireConfetti } from '../lib/confetti'
+import { applyAdaptationDecisions, createEditedProposal, revertAdaptationAnalysis, type ProposalDecision } from '../lib/adaptation'
+import { enqueueAdaptationEvent, retryFailedAdaptationJob } from '../lib/adaptationClient'
 import { ExerciseThumb } from '../components/ExerciseThumb'
 import { ActionSheet, Confirm } from '../components/Sheet'
 import {
@@ -60,9 +64,18 @@ export default function WorkoutDetail() {
   const { byId } = useCatalog()
   const session = useActive((s) => s.session)
   const units = useSettings((s) => s.units)
+  const { isSignedIn } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'edit' | 'repeat' | null>(null)
+  const [confirmApply, setConfirmApply] = useState(false)
+  const adaptation = useLiveQuery(async () => {
+    if (!id) return null
+    const job = await db.adaptationJobs.where('workoutId').equals(id).first()
+    if (!job?.analysisId) return { job, proposals: [] as AdaptationProposal[] }
+    return { job, proposals: await db.adaptationProposals.where('analysisId').equals(job.analysisId).toArray() }
+  }, [id], null)
+  const [proposalDecisions, setProposalDecisions] = useState<Record<string, ProposalDecision['decision']>>({})
 
   const hasPRs = !!workout && workout.prs.length > 0
   useEffect(() => {
@@ -104,6 +117,17 @@ export default function WorkoutDetail() {
   const prValue = (kind: PRKind, value: number) =>
     kind === 'setVolume' ? formatVolume(value, units) : formatWeight(value, units)
 
+  const pendingProposals = adaptation?.proposals.filter((proposal) => proposal.status === 'pending') ?? []
+  const allDecided = pendingProposals.length > 0 && pendingProposals.every((proposal) => proposalDecisions[proposal.id])
+  const applyProposals = async () => {
+    const analysisId = adaptation?.job?.analysisId
+    if (!analysisId || !allDecided) return
+    const decisions = pendingProposals.map((proposal) => ({ proposalId: proposal.id, decision: proposalDecisions[proposal.id] === 'accept' ? 'accept' as const : 'reject' as const, candidateId: proposal.candidateId }))
+    await applyAdaptationDecisions(analysisId, decisions)
+    void Promise.all(decisions.map((decision) => enqueueAdaptationEvent({ analysisId, exerciseId: pendingProposals.find((proposal) => proposal.id === decision.proposalId)?.exerciseId ?? 'unknown', candidateId: decision.candidateId, event: decision.decision === 'accept' ? 'accepted' : 'rejected' })))
+    setProposalDecisions({})
+  }
+
   return (
     <div className="px-4 pt-4">
       <header className="flex items-center justify-between pb-3">
@@ -140,6 +164,18 @@ export default function WorkoutDetail() {
         {formatDay(workout.startedAt)} · {formatTime(workout.startedAt)}
       </p>
       {workout.notes && <p className="pt-2 text-sm italic text-muted">“{workout.notes}”</p>}
+
+      {isSignedIn && adaptation?.job && (
+        <div className="card mt-4 px-4 py-3">
+          <div className="font-bold">Coach adaptativo</div>
+          {adaptation.job.status === 'pending' || adaptation.job.status === 'processing' ? <p className="pt-1 text-sm text-muted">Análisis pendiente; se procesará al recuperar conexión.</p> : null}
+          {adaptation.job.status === 'failed' ? <><p className="pt-1 text-sm text-danger">No se pudo completar el análisis.</p><button className="btn btn-surface mt-2 w-full" onClick={() => void retryFailedAdaptationJob(adaptation.job!.id)}>Reintentar análisis</button></> : null}
+          {adaptation.proposals.map((proposal) => <ProposalCard key={proposal.id} proposal={proposal} decision={proposalDecisions[proposal.id]} onDecision={(decision) => setProposalDecisions((current) => ({ ...current, [proposal.id]: decision }))} onEdit={(candidateId) => void createEditedProposal(proposal.id, candidateId).then(() => enqueueAdaptationEvent({ analysisId: proposal.analysisId, exerciseId: proposal.exerciseId, candidateId, event: 'edited' }))} />)}
+          {allDecided && <button className="btn btn-primary mt-3 w-full" onClick={() => setConfirmApply(true)}>Aplicar decisiones</button>}
+          {adaptation.proposals.some((proposal) => proposal.status === 'accepted' && proposal.appliedRoutineRevision !== undefined) && adaptation.job.analysisId && <button className="btn btn-surface mt-2 w-full" onClick={() => void revertAdaptationAnalysis(adaptation.job!.analysisId!).then(() => void enqueueAdaptationEvent({ analysisId: adaptation.job!.analysisId!, exerciseId: 'batch', event: 'reverted' }))}>Revertir lote aplicado</button>}
+          <p className="pt-3 text-[11px] text-muted">Los candidatos son cambios cerrados. Editar crea una nueva revisión y conserva la propuesta original.</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-2 pt-4">
         <Stat
@@ -276,6 +312,15 @@ export default function WorkoutDetail() {
       />
 
       <Confirm
+        open={confirmApply}
+        onClose={() => setConfirmApply(false)}
+        title="¿Aplicar estas propuestas?"
+        message="Se actualizará la rutina con los cambios que aceptaste. Esta acción quedará registrada y podrá revertirse desde este entreno."
+        confirmLabel="Aplicar lote"
+        onConfirm={() => { setConfirmApply(false); void applyProposals() }}
+      />
+
+      <Confirm
         open={confirmAction !== null}
         onClose={() => setConfirmAction(null)}
         title="Entreno en curso"
@@ -290,6 +335,18 @@ export default function WorkoutDetail() {
       />
     </div>
   )
+}
+
+function ProposalCard({ proposal, decision, onDecision, onEdit }: { proposal: AdaptationProposal; decision?: ProposalDecision['decision']; onDecision: (decision: ProposalDecision['decision']) => void; onEdit: (candidateId: string) => void }) {
+  return <div className="mt-3 border-t border-border pt-3 text-sm">
+    <div className="flex items-center justify-between gap-2"><span className="font-semibold">{proposal.exerciseId}</span><span className="text-xs text-muted">{proposal.confidence ?? proposal.candidate.confidence} · {proposal.selectedModel ?? 'deterministic'}</span></div>
+    <p className="pt-1 text-xs text-muted">{proposal.previousValues?.loadKg ?? proposal.candidate.previous.loadKg ?? '—'} kg / {proposal.previousValues?.plannedSets ?? proposal.candidate.previous.plannedSets} series → {proposal.proposedValues?.loadKg ?? proposal.candidate.next.loadKg ?? '—'} kg / {proposal.proposedValues?.plannedSets ?? proposal.candidate.next.plannedSets} series</p>
+    <p className="pt-1 text-muted">{proposal.candidate.explanation}</p>
+    {proposal.candidate.warnings.length > 0 && <p className="pt-1 text-xs text-warning">{proposal.candidate.warnings.join(' · ')}</p>}
+    {(proposal.citations?.length ?? 0) > 0 && <p className="pt-1 text-xs text-primary">Citas: {proposal.citations!.join(' · ')}</p>}
+    <div className="flex gap-2 pt-2"><button className={`btn flex-1 py-2 ${decision === 'accept' ? 'bg-success/20 text-success' : 'btn-surface'}`} onClick={() => onDecision('accept')}>Aceptar</button><button className={`btn flex-1 py-2 ${decision === 'reject' ? 'bg-danger/20 text-danger' : 'btn-surface'}`} onClick={() => onDecision('reject')}>Rechazar</button></div>
+    {proposal.candidateOptions.length > 1 && <div className="flex flex-wrap gap-1 pt-2">{proposal.candidateOptions.map((candidate) => <button key={candidate.candidateId} className="chip" onClick={() => onEdit(candidate.candidateId)}>{candidate.kind}</button>)}</div>}
+  </div>
 }
 
 function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {

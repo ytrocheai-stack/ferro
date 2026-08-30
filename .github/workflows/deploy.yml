@@ -38,6 +38,9 @@ jobs:
         run: npm run fetch-data
 
       - name: Build
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+          VITE_ADAPTATION_WORKER_URL: ${{ vars.VITE_ADAPTATION_WORKER_URL }}
         run: npm run build
 
       - uses: actions/upload-pages-artifact@v3

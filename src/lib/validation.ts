@@ -13,12 +13,31 @@ const loggedSetSchema = z.object({
   distanceM: finite.optional(),
 })
 
+const prescriptionSchema = z.object({
+  occurrenceId: nonEmpty.optional(), plannedSets: finite,
+  setTargets: z.array(z.object({ type: z.enum(['normal', 'warmup', 'failure', 'drop']), weightKg: finite.optional(), reps: finite.optional(), durationSec: finite.optional(), distanceM: finite.optional() }).strict()).optional(),
+  restSec: finite, supersetGroup: finite.optional(), repRangeMin: finite.optional(), repRangeMax: finite.optional(),
+  trainingRole: z.enum(['strength', 'hypertrophy', 'accessory']).optional(), targetRpeMin: finite.optional(), targetRpeMax: finite.optional(), loadIncrementKg: finite.optional(),
+}).strict()
+
 const workoutExerciseSchema = z.object({
+  occurrenceId: nonEmpty.optional(),
   exerciseId: nonEmpty,
   notes: z.string().optional(),
   restSec: finite,
   sets: z.array(loggedSetSchema),
+  executedSets: z.array(loggedSetSchema).optional(),
+  prescription: prescriptionSchema.optional(),
   supersetGroup: finite.optional(),
+  role: z.enum(['strength', 'hypertrophy', 'accessory']).optional(),
+  trainingRole: z.enum(['strength', 'hypertrophy', 'accessory']).optional(),
+  repRangeMin: finite.optional(),
+  repRangeMax: finite.optional(),
+  targetRpeMin: finite.optional(),
+  targetRpeMax: finite.optional(),
+  loadIncrementKg: finite.optional(),
+  plannedSets: finite.optional(),
+  plannedSetTypes: z.array(z.enum(['normal', 'warmup', 'failure', 'drop'])).optional(),
 })
 
 const prSchema = z.object({
@@ -37,14 +56,30 @@ const plannedSetSchema = z.object({
 })
 
 const routineExerciseSchema = z.object({
+  occurrenceId: nonEmpty.optional(),
   exerciseId: nonEmpty,
   plannedSets: finite,
   setTargets: z.array(plannedSetSchema).optional(),
   restSec: finite,
   notes: z.string().optional(),
+  routineId: z.string().optional(),
+  routineRevision: finite.optional(),
+  postWorkoutFeedback: z.object({
+    completed: z.boolean().optional(),
+    generalPain: z.boolean().optional(),
+    exercisePain: z.array(z.string()).optional(),
+    energy: finite.optional(),
+    difficulty: finite.optional(),
+    contradictory: z.boolean().optional(),
+  }).optional(),
   supersetGroup: finite.optional(),
   repRangeMin: finite.optional(),
   repRangeMax: finite.optional(),
+  role: z.enum(['strength', 'hypertrophy', 'accessory']).optional(),
+  trainingRole: z.enum(['strength', 'hypertrophy', 'accessory']).optional(),
+  targetRpeMin: finite.optional(),
+  targetRpeMax: finite.optional(),
+  loadIncrementKg: finite.optional(),
 })
 
 export const workoutSchema = z.object({
@@ -66,6 +101,10 @@ const routineSchema = z.object({
   exercises: z.array(routineExerciseSchema),
   createdAt: finite,
   folderId: z.string().optional(),
+  revision: finite.optional(),
+  trainingRole: z.enum(['strength', 'hypertrophy', 'accessory']).optional(),
+  loadIncrementKg: finite.optional(),
+  coachReviewed: z.boolean().optional(),
 })
 
 const folderSchema = z.object({ id: nonEmpty, name: z.string(), sortOrder: finite })
@@ -180,9 +219,20 @@ const nutritionGoalsSchema = z.object({
   fatG: finite.optional(),
 })
 
+const candidateRecordSchema = z.object({
+  candidateId: nonEmpty,
+  kind: z.enum(['maintain', 'increase-reps', 'increase-load', 'add-set', 'reduce-load', 'reduce-set']),
+  rule: nonEmpty,
+  exerciseId: nonEmpty,
+  previous: z.object({ plannedSets: finite, repsMin: finite, repsMax: finite, loadKg: finite.optional() }).strict(),
+  next: z.object({ plannedSets: finite, repsMin: finite, repsMax: finite, loadKg: finite.optional() }).strict(),
+  evidence: z.object({ comparableWorkoutIds: z.array(nonEmpty), comparableCount: finite, medianWeightKg: finite.optional(), medianReps: finite.optional(), completedUpperBoundCount: finite, discreteIncreaseCount: finite, currentE1rmKg: finite.optional(), medianPreviousE1rmKg: finite.optional() }).strict(),
+  confidence: z.enum(['low', 'medium', 'high']), warnings: z.array(z.string()), citations: z.array(z.string()).optional(), explanation: z.string(),
+}).strict()
+
 export const backupSchema = z.object({
   app: z.literal('ferro'),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
   exportedAt: z.string(),
   settings: settingsSchema.optional(),
   nutritionGoals: nutritionGoalsSchema.optional(),
@@ -196,6 +246,40 @@ export const backupSchema = z.object({
   foodLog: z.array(foodLogSchema).optional(),
   importBatches: z.array(importBatchSchema).optional(),
   externalRefs: z.array(externalRefSchema).optional(),
+  adaptationProposals: z.array(z.object({
+    id: nonEmpty,
+    analysisId: nonEmpty,
+    baseRoutineId: nonEmpty,
+    baseRoutineRevision: finite,
+    exerciseId: nonEmpty,
+    status: z.enum(['pending', 'accepted', 'edited', 'rejected', 'applied', 'stale', 'reverted']),
+    createdAt: finite,
+    candidateId: nonEmpty,
+    candidate: candidateRecordSchema,
+    candidateOptions: z.array(candidateRecordSchema),
+    proposalRevision: finite,
+    policyVersion: nonEmpty.optional(),
+    corpusVersion: z.string().optional(),
+    previousValues: z.object({ plannedSets: finite, repsMin: finite, repsMax: finite, loadKg: finite.optional() }).strict().optional(),
+    proposedValues: z.object({ plannedSets: finite, repsMin: finite, repsMax: finite, loadKg: finite.optional() }).strict().optional(),
+    rule: z.string().optional(), confidence: z.enum(['low', 'medium', 'high']).optional(), citations: z.array(z.string()).optional(), warnings: z.array(z.string()).optional(),
+    selectedModel: z.enum(['deterministic', 'flash', 'pro']).optional(), occurrenceId: nonEmpty.optional(), routineSnapshotId: nonEmpty.optional(),
+    supersedesProposalId: z.string().optional(),
+    appliedRoutineRevision: finite.optional(),
+  }).strict()).optional(),
+  adaptationJobs: z.array(z.object({
+    id: nonEmpty,
+    workoutId: nonEmpty,
+    status: z.enum(['pending', 'processing', 'completed', 'failed']),
+    createdAt: finite,
+    nextRetryAt: finite.optional(),
+    attempts: finite.optional(),
+    analysisId: z.string().optional(),
+    lastError: z.string().optional(),
+    updatedAt: finite.optional(),
+  })).optional(),
+  routineRevisionSnapshots: z.array(z.object({ id: nonEmpty, routineId: nonEmpty, revision: finite, createdAt: finite, analysisId: nonEmpty.optional(), routine: routineSchema })).optional(),
+  adaptationEventJobs: z.array(z.object({ id: nonEmpty, analysisId: nonEmpty, exerciseId: nonEmpty, candidateId: nonEmpty.optional(), event: z.enum(['accepted', 'rejected', 'edited', 'reverted']), status: z.enum(['pending', 'sent', 'failed']), createdAt: finite, attempts: finite, nextRetryAt: finite.optional() })).optional(),
 })
 
 export const photosBackupSchema = z.object({

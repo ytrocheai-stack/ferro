@@ -7,12 +7,14 @@
 ## Qué es
 
 **NextRep** (antes "Ferro") es un clon personal de [Hevy](https://www.hevyapp.com/): registro de
-entrenos de gimnasio + nutrición + medidas, como **PWA 100% offline**. Un solo usuario, sin
-servidor, sin cuentas: todos los datos viven en el dispositivo (IndexedDB + localStorage).
-La usa una persona real en su teléfono a diario — **los datos de producción son irreemplazables**.
+entrenos de gimnasio + nutrición + medidas, como **PWA offline-first**. Los datos finales viven en
+el dispositivo (IndexedDB + localStorage). Clerk y un Worker opcional se están integrando
+exclusivamente para la beta cerrada del agente adaptativo; el registro normal sigue funcionando
+sin ese backend. La usa una persona real en su teléfono a diario — **los datos de producción son
+irreemplazables**.
 
 - **Stack**: Vite 6 · React 18 · TypeScript · Tailwind CSS v4 · Dexie 4 (IndexedDB) · Zustand 5 · Recharts · vite-plugin-pwa (Workbox)
-- **Producción**: `https://ytrocheai-stack.github.io/ferro/` (GitHub Pages, rama `gh-pages`)
+- **Producción**: `https://ytrocheai-stack.github.io/ferro/` (GitHub Pages, workflow desde `main`; beta adaptativa aún cerrada)
 - **Repo**: `github.com/ytrocheai-stack/ferro` (cuenta autenticada en `gh`: `ytrocheai-stack`)
 - **Idioma**: toda la UI, comentarios y docs en español. Nombres de ejercicios en inglés (vienen así del dataset).
 
@@ -25,6 +27,8 @@ La usa una persona real en su teléfono a diario — **los datos de producción 
 | `npm run build` | `tsc && vite build && node scripts/postbuild.mjs` → `dist/` con SW y `404.html`. Base `/ferro/`. |
 | `npm run preview` | Sirve `dist/` en `http://localhost:4173/ferro/`. |
 | `npm run icons` | Regenera iconos PWA con sharp (las salidas van commiteadas). |
+| `npm run check` | Lint, typecheck PWA/Worker, pruebas unitarias y build con comprobación anti-secretos. |
+| `npm run test:e2e` | Smoke/accesibilidad en Chromium y WebKit; no cubre todavía el flujo adaptativo. |
 
 ## ⚠️ Invariantes críticos (romperlos = pérdida de datos o app rota)
 
@@ -34,14 +38,16 @@ La usa una persona real en su teléfono a diario — **los datos de producción 
    - Discriminador `app: 'ferro'` / `'ferro-photos'` dentro de los JSON de backup.
    - `base: '/ferro/'` en vite.config.ts, el nombre del repo y la URL de Pages.
    Renombrar cualquiera de ellos vacía (aparentemente) los datos del usuario o rompe la PWA instalada.
-2. **El deploy real es la rama `gh-pages`** con el build ya compilado ("Deploy from a branch").
-   El workflow de Actions en `.github/workflows/deploy.yml` está **sin commitear y no funciona**
-   (el token de `gh` no tiene scope `workflow`). Flujo completo en [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md).
-   Recuerda commitear el código a `main` aparte — no ocurre solo al desplegar.
+2. **El deploy de la PWA es GitHub Pages mediante Actions desde `main`.**
+   [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) instala dependencias, regenera los
+   datos fijados, compila e inyecta solo las variables públicas de Clerk/Worker. El Worker se
+   despliega por separado y sigue desactivado hasta completar los gates de la beta. Flujo completo
+   en [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md).
 3. **Los pesos se persisten SIEMPRE en kg** (`weightKg`). Las libras son solo presentación
    (`kgToDisplay`/`displayToKg`/`formatWeight` en [src/lib/format.ts](src/lib/format.ts)). Nunca guardes valores en unidades de display.
-4. **Esquema Dexie: cambios solo aditivos.** Para una tabla/índice nuevo: añade `this.version(3).stores({...})`
-   re-declarando TODO el esquema, sin borrar los bloques `version(1)`/`version(2)`, e inclúyela en
+4. **Esquema Dexie: cambios solo aditivos.** Para una tabla/índice nuevo: añade una versión nueva
+   (`v5` es la vigente) re-declarando TODO el esquema, sin borrar ningún bloque histórico
+   `version(1)`…`version(5)`, e inclúyela en
    `exportBackup`/`importBackup` ([src/lib/backup.ts](src/lib/backup.ts)) con validación. Campos nuevos dentro del
    blob de un registro NO necesitan migración (no son índices).
 5. **No uses `loading="lazy"` en imágenes**: Chromium no las carga offline aunque estén en el SW.
@@ -78,14 +84,16 @@ src/
 ├── components/   Sheet/Select/Confirm (modales), ExercisePicker, FoodPicker, DishPicker,
 │                 GymKeypad, BarcodeScanner, TemplateBrowser, ExerciseThumb, Toasts, iconos…
 ├── stores/       Zustand: activeWorkout (sesión en curso), settings, nutrition (objetivos), toasts
-├── db/           db.ts (esquema Dexie v2, 9 tablas) + types.ts (todos los tipos de datos)
+├── db/           db.ts (esquema Dexie v5, 15 tablas) + types.ts (todos los tipos de datos)
 ├── data/         exercises.ts (catálogo), muscleGroups.ts, templates.ts (programas),
 │                 foods.ts + foods.seed.ts (~250 alimentos), translations.ts, measurementLabels.ts
-├── lib/          format, stats (1RM/PRs/volumen), progression (doble progresión), nutrition
+├── lib/          format, stats (1RM/PRs/volumen), progression, adaptación/cliente/colas, nutrition
 │                 (BMR/TDEE/EMA), backup, csv, notify, photos, gifs, openFoodFacts, platform…
 └── App.tsx       Shell: layout, TabBar, RestTimerOverlay global, ActiveBanner, Toasts
-scripts/          fetch-dataset.mjs · postbuild.mjs · generate-icons.mjs
-docs/             ARQUITECTURA.md · DESPLIEGUE.md · AUDITORIA-2026-07.md
+packages/         adaptation-core (motor determinista TypeScript compartido PWA/Worker)
+worker/           Cloudflare Worker, migraciones D1, RAG y pruebas; despliegue independiente
+scripts/          fetch-dataset.mjs · postbuild.mjs · generate-icons.mjs · check-public-bundle.mjs
+docs/             ARQUITECTURA.md · DESPLIEGUE.md · ADAPTACION-ENTRENAMIENTO.md · auditorías
 ```
 
 ## Decisiones/limitaciones conocidas (no son bugs)

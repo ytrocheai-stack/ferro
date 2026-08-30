@@ -11,10 +11,14 @@ import { useNow } from './lib/useNow'
 import { clock } from './lib/format'
 import { beep, notify, unlockAudio, vibrate } from './lib/notify'
 import { IconMinus, IconPlay, IconPlus, IconX } from './components/icons'
+import { AuthControls } from './components/AuthControls'
+import { useAuth } from '@clerk/react'
+import { processPendingAdaptationEvents, processPendingAdaptationJobs } from './lib/adaptationClient'
 
 export default function App() {
   const { pathname } = useLocation()
   const hideTabs = pathname.startsWith('/entreno') || pathname.startsWith('/rutina')
+  const { isSignedIn, getToken } = useAuth()
 
   useEffect(() => {
     void ensurePersistentStorage()
@@ -23,9 +27,23 @@ export default function App() {
     return () => window.removeEventListener('pointerdown', unlockAudio)
   }, [])
 
+  useEffect(() => {
+    if (!isSignedIn) return
+    const process = () => void Promise.all([processPendingAdaptationJobs(getToken), processPendingAdaptationEvents(getToken)])
+    const onVisible = () => { if (document.visibilityState === 'visible') process() }
+    process()
+    window.addEventListener('online', process)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { window.removeEventListener('online', process); document.removeEventListener('visibilitychange', onVisible) }
+  }, [getToken, isSignedIn])
+
   return (
     <div className="mx-auto min-h-dvh w-full max-w-md pt-[env(safe-area-inset-top)]">
       <a className="skip-link" href="#main-content">Saltar al contenido</a>
+      <header className="flex items-center justify-between px-4 pb-1 pt-3">
+        <span className="text-sm font-extrabold tracking-tight text-text">NextRep</span>
+        <AuthControls />
+      </header>
       <main id="main-content" key={pathname} className="page-enter" tabIndex={-1}>
         <Suspense fallback={<PageFallback />}>
           <Outlet />
@@ -38,8 +56,15 @@ export default function App() {
       {!hideTabs && <TabBar />}
       <Toasts hideTabs={hideTabs} />
       <GymKeypadBar />
+      <CoachPrivacyNotice />
     </div>
   )
+}
+
+function CoachPrivacyNotice() {
+  const { isSignedIn } = useAuth()
+  if (!isSignedIn || !import.meta.env.VITE_ADAPTATION_WORKER_URL) return null
+  return <p className="sr-only">El coach guarda tus datos localmente. El análisis se envía de forma transitoria al Worker y NVIDIA; el resumen no se conserva en el backend.</p>
 }
 
 /** Barra "entreno en curso" visible fuera de la pantalla de sesión. */

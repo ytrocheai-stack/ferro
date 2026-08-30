@@ -69,7 +69,11 @@ function TemplateDetail({
         sortOrder: sortOrder++,
         createdAt: Date.now(),
         folderId,
-        exercises: r.exercises.map((e) => ({ ...e, restSec: defaultRestSec })),
+        exercises: r.exercises.map((e, index) => ({ ...e, occurrenceId: `${template.id}:${r.name}:${index}:${e.exerciseId}`, trainingRole: e.trainingRole ?? e.role ?? 'hypertrophy', role: undefined, restSec: defaultRestSec })),
+        revision: 1,
+        trainingRole: 'hypertrophy',
+        loadIncrementKg: 2.5,
+        coachReviewed: false,
       })
     }
     setAdding(false)

@@ -1,0 +1,14 @@
+{
+  "name": "@nextrep/adaptation-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config vitest.config.ts",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@clerk/backend": "^2.33.6",
+    "zod": "^4.4.3"
+  }
+}

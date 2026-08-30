@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import type { SetType } from '../db/types'
+import type { PostWorkoutFeedback } from '../db/types'
 import {
   placeholderFor,
   prevWorkingSetFor,
@@ -20,6 +21,7 @@ import { ExercisePicker } from '../components/ExercisePicker'
 import { ExerciseThumb } from '../components/ExerciseThumb'
 import { PlateCalculatorSheet } from '../components/PlateCalculator'
 import { ActionSheet, Confirm, Sheet } from '../components/Sheet'
+import { Select } from '../components/Select'
 import { useKeypad } from '../components/GymKeypad'
 import {
   IconCheck,
@@ -665,6 +667,8 @@ function FinishSheet({
 }) {
   const session = useActive((s) => s.session)
   const units = useSettings((s) => s.units)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [feedback, setFeedback] = useState<PostWorkoutFeedback>({})
   if (!session) return null
   const isEdit = !!session.editingWorkoutId
   const completedSets = session.exercises.reduce(
@@ -703,9 +707,34 @@ function FinishSheet({
           .
         </p>
       )}
+      {!isEdit && (
+        <>
+          <button className="pressable pb-3 text-left text-sm font-semibold text-primary" onClick={() => setFeedbackOpen((open) => !open)}>
+            {feedbackOpen ? 'Ocultar feedback' : '+ Añadir feedback opcional'}
+          </button>
+          {feedbackOpen && (
+            <div className="flex flex-col gap-3 pb-3">
+              <div className="grid grid-cols-2 gap-2">
+                <Select value={feedback.energy ?? 0} onChange={(value) => setFeedback((current) => ({ ...current, energy: value || undefined }))} options={[{ value: 0, label: 'Energía —' }, ...[1, 2, 3, 4, 5].map((value) => ({ value, label: `Energía ${value}/5` }))]} sheetTitle="Energía" />
+                <Select value={feedback.difficulty ?? 0} onChange={(value) => setFeedback((current) => ({ ...current, difficulty: value || undefined }))} options={[{ value: 0, label: 'Dificultad —' }, ...[1, 2, 3, 4, 5].map((value) => ({ value, label: `Dificultad ${value}/5` }))]} sheetTitle="Dificultad" />
+              </div>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={feedback.generalPain ?? false} onChange={(event) => setFeedback((current) => ({ ...current, generalPain: event.target.checked }))} /> Dolor general</label>
+              <div className="rounded-xl bg-surface-2 px-3 py-2">
+                <p className="pb-2 text-xs font-semibold text-muted">Dolor por ejercicio (opcional)</p>
+                {session.exercises.map((exercise) => {
+                  const selected = feedback.exercisePain?.includes(exercise.exerciseId) ?? false
+                  return <label key={exercise.uid} className="flex items-center gap-2 py-1 text-sm"><input type="checkbox" checked={selected} onChange={(event) => setFeedback((current) => ({ ...current, exercisePain: event.target.checked ? [...new Set([...(current.exercisePain ?? []), exercise.exerciseId])] : (current.exercisePain ?? []).filter((id) => id !== exercise.exerciseId) }))} /> {exercise.exerciseId}</label>
+                })}
+                {(feedback.generalPain || (feedback.exercisePain?.length ?? 0) > 0) && <p className="pt-2 text-xs text-warning">Mantén la carga; si el dolor persiste, consulta a un profesional.</p>}
+              </div>
+            </div>
+          )}
+        </>
+      )}
       <button
         className="btn btn-primary mb-2 w-full"
         onClick={() => {
+          if (!isEdit) useActive.getState().setPostWorkoutFeedback({ ...feedback, completed: incomplete === 0 })
           onClose()
           onFinish()
         }}

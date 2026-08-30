@@ -165,7 +165,7 @@ function mapWorkout(input: HevyWorkout, exerciseMap: Map<string, string>): Worko
 }
 
 function mapRoutine(input: HevyRoutine, exerciseMap: Map<string, string>, folderMap: Map<string, string>): Routine {
-  const exercises: RoutineExercise[] = (input.exercises ?? []).sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((exercise) => {
+  const exercises: RoutineExercise[] = (input.exercises ?? []).sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((exercise, index) => {
     const targets = (exercise.sets ?? []).sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((s) => ({
       type: setType(s.type),
       ...(s.weight_kg == null ? {} : { weightKg: Number(s.weight_kg) }),
@@ -174,6 +174,7 @@ function mapRoutine(input: HevyRoutine, exerciseMap: Map<string, string>, folder
       ...(s.distance_meters == null ? {} : { distanceM: Number(s.distance_meters) }),
     }))
     return {
+      occurrenceId: `hevy:${input.id}:${index}:${exercise.exercise_template_id ?? exercise.title ?? 'exercise'}`,
       exerciseId: exerciseMap.get(asId(exercise.exercise_template_id, normalize(exercise.title ?? 'exercise'))) ?? `hevy-exercise-${asId(exercise.exercise_template_id, normalize(exercise.title ?? 'exercise'))}`,
       plannedSets: Math.max(1, targets.length || 3),
       setTargets: targets.length ? targets : undefined,
@@ -189,6 +190,10 @@ function mapRoutine(input: HevyRoutine, exerciseMap: Map<string, string>, folder
     createdAt: asTime(input.created_at ?? input.updated_at),
     folderId: input.folder_id == null ? undefined : folderMap.get(String(input.folder_id)) ?? `hevy-folder-${input.folder_id}`,
     exercises,
+    revision: 1,
+    trainingRole: 'hypertrophy',
+    loadIncrementKg: 2.5,
+    coachReviewed: false,
   }
 }
 
