@@ -1,5 +1,7 @@
 export const ADAPTATION_POLICY_VERSION = 'v1' as const
 
+export * from './agent.ts'
+
 /** Epley es una señal informativa; la política v1 nunca decide únicamente por e1RM. */
 export function epley1RM(weightKg: number, reps: number): number {
   if (!Number.isFinite(weightKg) || !Number.isFinite(reps) || weightKg <= 0 || reps <= 0) return 0
@@ -17,6 +19,8 @@ export interface AdaptationSet {
   reps: number
   completed: boolean
   rpe?: number
+  /** RIR registrado; nunca se calcula a partir de RPE. */
+  rir?: number
 }
 
 export interface AdaptationFeedback {
@@ -66,6 +70,7 @@ export interface CandidateChange {
   kind: CandidateKind
   rule: `${typeof ADAPTATION_POLICY_VERSION}:${string}`
   exerciseId: string
+  occurrenceId?: string
   previous: {
     plannedSets: number
     repsMin: number
@@ -94,6 +99,8 @@ export interface ExerciseDecision {
   comparableWorkoutIds: string[]
   warnings: string[]
 }
+
+export type { AnalysisResponse, AnalysisSource } from './contract.ts'
 
 export interface AdaptationAnalysis {
   policyVersion: typeof ADAPTATION_POLICY_VERSION
@@ -209,20 +216,22 @@ function feedbackBlocks(exposure: Exposure): string[] {
 }
 
 function isDrop(current: Exposure, previous: Exposure[]): boolean {
-  const comparable = previous.slice(0, 1)
-  if (comparable.length < 1) return false
+  const comparable = previous.slice(0, 3)
+  if (comparable.length < 3) return false
   const currentSets = workingSets(current)
   const currentWeight = median(currentSets.map((set) => set.weightKg)) ?? 0
   const currentReps = median(currentSets.map((set) => set.reps)) ?? 0
-  const previousWeight = median(workingSets(comparable[0]).map((set) => set.weightKg)) ?? 0
-  const previousReps = median(workingSets(comparable[0]).map((set) => set.reps)) ?? 0
-  return (previousWeight > 0 && currentWeight <= previousWeight * 0.95 && currentReps >= previousReps) ||
-    (previousReps > 0 && currentReps <= previousReps * 0.95 && currentWeight >= previousWeight * 0.95)
+  const previousWeight = median(comparable.map((exposure) => median(workingSets(exposure).map((set) => set.weightKg)) ?? 0)) ?? 0
+  const previousReps = median(comparable.map((exposure) => median(workingSets(exposure).map((set) => set.reps)) ?? 0)) ?? 0
+  const loadDrop = previousWeight > 0 && currentWeight <= previousWeight * 0.95
+  const repsDrop = previousReps > 0 && currentReps <= previousReps * 0.95
+  return loadDrop || repsDrop
 }
 
 function repeatedDrop(current: Exposure, comparable: Exposure[]): boolean {
-  if (comparable.length < 2 || !isDrop(current, comparable)) return false
-  return isDrop(comparable[0], comparable.slice(1))
+  // La caída solo se considera accionable cuando existe la ventana completa de
+  // tres exposiciones. La mediana ya amortigua una mala sesión aislada.
+  return comparable.length >= 3 && isDrop(current, comparable)
 }
 
 function fnv1a64(value: string): string {
@@ -254,6 +263,7 @@ function buildCandidate(input: ExerciseAnalysisInput, kind: CandidateKind, next:
     kind,
     rule: `${ADAPTATION_POLICY_VERSION}:${rule}`,
     exerciseId: input.exerciseId,
+    occurrenceId: input.occurrenceId,
     previous,
     next,
     evidence,

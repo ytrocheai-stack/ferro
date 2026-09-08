@@ -8,7 +8,7 @@ function csvEscape(v: string | number): string {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
-/** Exporta todas las series registradas a CSV: fecha, entreno, ejercicio, serie, tipo, kg, reps, RPE. */
+/** Exporta todas las series registradas a CSV, distinguiendo RPE y RIR. */
 export async function exportWorkoutsCsv(): Promise<void> {
   const [workouts, { loadExercises }] = await Promise.all([
     db.workouts.orderBy('startedAt').toArray(),
@@ -21,7 +21,7 @@ export async function exportWorkoutsCsv(): Promise<void> {
     /* sin conexión la primera vez: se usa el id crudo */
   }
 
-  const header = ['fecha', 'entreno', 'ejercicio', 'serie', 'tipo', 'kg', 'reps', 'rpe']
+  const header = ['fecha', 'entreno', 'ejercicio', 'serie', 'tipo', 'kg', 'reps', 'rpe', 'rir']
   const rows: string[] = [header.join(',')]
 
   for (const w of workouts) {
@@ -41,6 +41,7 @@ export async function exportWorkoutsCsv(): Promise<void> {
             s.weightKg,
             s.reps,
             s.rpe ?? '',
+            s.rir ?? '',
           ].join(','),
         )
       }

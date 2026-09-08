@@ -20,6 +20,8 @@ import {
   IconPlus,
   IconTarget,
 } from '../components/icons'
+import { invalidateStaleAdaptationJobsInTransaction } from '../lib/adaptationContext'
+import { getCoachAccountId } from '../lib/coachAccount'
 import { uid } from '../lib/format'
 import { useLocalDateKey } from '../lib/useLocalDateKey'
 
@@ -108,6 +110,10 @@ export default function Home() {
       >
         <IconTarget size={17} />
         Explorar plantillas de programas
+      </button>
+
+      <button className="btn btn-surface mt-2.5 w-full" onClick={() => navigate('/coach')}>
+        Coach privado · Kimi K3
       </button>
 
       <div className="flex items-center justify-between pb-3 pt-7">
@@ -239,7 +245,10 @@ export default function Home() {
         danger
         onConfirm={() => {
           const snapshot = confirmDelete!
-          void db.routines.delete(snapshot.id)
+          void db.transaction('rw', [db.routines, db.workouts, db.adaptationJobs, db.adaptationProposals], async () => {
+            await db.routines.delete(snapshot.id)
+            await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
+          })
           toastUndo('Rutina eliminada', () => void db.routines.put(snapshot))
         }}
       />

@@ -1,0 +1,12 @@
+{
+  "schema": "coach-release-approval-v1",
+  "status": "pending",
+  "humanApproved": false,
+  "smokeManualApproved": false,
+  "approvedAt": "",
+  "reviewer": "",
+  "evidence": "La persona responsable debe identificar el expediente exacto, resolver discrepancias y conservar la justificación fuera de Git; no incluir secretos.",
+  "corpusVersion": "",
+  "candidateFingerprint": "",
+  "smokeFingerprint": ""
+}

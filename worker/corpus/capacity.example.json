@@ -1,0 +1,13 @@
+{
+  "accessVerified": false,
+  "budgetVerified": false,
+  "maxAdditionalCost": 0,
+  "verifiedAt": "",
+  "reviewer": "",
+  "evidence": "Registrar cuota, plan, consumo existente y coste cero; no incluir secretos.",
+  "accountId": "",
+  "existingDimensionsStored": 0,
+  "estimatedDimensionsStored": 4159488,
+  "estimatedDimensionsQueried": 76800,
+  "legacyIndexVectorCount": 0
+}

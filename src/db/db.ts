@@ -15,7 +15,12 @@ import type {
   AdaptationJob,
   RoutineRevisionSnapshot,
   AdaptationEventJob,
+  CoachRunRecord,
+  CoachMessage,
+  CoachProfile,
+  CoachConsentRecord,
 } from './types'
+import { CONTEXT_INVALIDATED_MESSAGE } from '../lib/adaptationErrors'
 
 class FerroDB extends Dexie {
   workouts!: Table<Workout, string>
@@ -33,6 +38,10 @@ class FerroDB extends Dexie {
   adaptationJobs!: Table<AdaptationJob, string>
   routineRevisionSnapshots!: Table<RoutineRevisionSnapshot, string>
   adaptationEventJobs!: Table<AdaptationEventJob, string>
+  coachRuns!: Table<CoachRunRecord, string>
+  coachMessages!: Table<CoachMessage, string>
+  coachProfiles!: Table<CoachProfile, string>
+  coachConsents!: Table<CoachConsentRecord, string>
 
   constructor() {
     super('ferro')
@@ -150,6 +159,101 @@ class FerroDB extends Dexie {
         job.attempts ??= 0
         job.updatedAt ??= job.createdAt
       })
+    })
+    // v6: propietario persistente del coach. Los registros heredados quedan sin
+    // propietario y se ignoran hasta que se creen de nuevo bajo una sesión válida.
+    this.version(6).stores({
+      workouts: 'id, startedAt, routineId, routineRevision',
+      routines: 'id, sortOrder, folderId, revision, coachReviewed',
+      customExercises: 'id',
+      folders: 'id, sortOrder',
+      measurements: 'id, date, kind, [kind+date]',
+      photos: 'id, date',
+      foods: 'id, name, source, usedAt, offCode, usdaFdcId',
+      dishes: 'id, name',
+      foodLog: 'id, date, [date+meal]',
+      importBatches: 'id, source, createdAt, status',
+      externalRefs: '&key, source, entity, localId, batchId',
+      adaptationProposals: 'id, analysisId, baseRoutineId, baseRoutineRevision, status, createdAt, candidateId, occurrenceId, supersedesProposalId, ownerId',
+      adaptationJobs: 'id, workoutId, status, createdAt, nextRetryAt, updatedAt, ownerId',
+      routineRevisionSnapshots: 'id, routineId, revision, createdAt, analysisId',
+      adaptationEventJobs: 'id, analysisId, status, createdAt, nextRetryAt, ownerId',
+    })
+    // v7: identidad acreditable del contexto y leasing de ejecuciones locales.
+    this.version(7).stores({
+      workouts: 'id, startedAt, routineId, routineRevision',
+      routines: 'id, sortOrder, folderId, revision, coachReviewed',
+      customExercises: 'id',
+      folders: 'id, sortOrder',
+      measurements: 'id, date, kind, [kind+date]',
+      photos: 'id, date',
+      foods: 'id, name, source, usedAt, offCode, usdaFdcId',
+      dishes: 'id, name',
+      foodLog: 'id, date, [date+meal]',
+      importBatches: 'id, source, createdAt, status',
+      externalRefs: '&key, source, entity, localId, batchId',
+      adaptationProposals: 'id, analysisId, baseRoutineId, baseRoutineRevision, status, createdAt, candidateId, occurrenceId, supersedesProposalId, ownerId, workoutId, requestId',
+      adaptationJobs: 'id, workoutId, status, createdAt, nextRetryAt, updatedAt, ownerId, requestId, leaseExpiresAt',
+      routineRevisionSnapshots: 'id, routineId, revision, createdAt, analysisId',
+      adaptationEventJobs: 'id, analysisId, status, createdAt, nextRetryAt, ownerId',
+    }).upgrade((tx) => {
+      tx.table<AdaptationProposal>('adaptationProposals').toCollection().modify((proposal) => {
+        if (proposal.ownerId && proposal.status === 'pending' && (!proposal.workoutId || !proposal.requestId || !proposal.contextKey)) {
+          proposal.status = 'stale'
+        }
+      })
+      tx.table<AdaptationJob>('adaptationJobs').toCollection().modify((job) => {
+        job.runId = undefined
+        job.leaseExpiresAt = undefined
+        if (!job.ownerId || (job.requestId && job.contextKey && job.payload)) return
+        job.status = 'failed'
+        job.errorCode = 'context-invalidated'
+        job.lastError = CONTEXT_INVALIDATED_MESSAGE
+        job.nextRetryAt = undefined
+        job.updatedAt ??= job.createdAt
+      })
+    })
+    // v8: ejecuciones durables y conversación del agente privado. Aditiva.
+    this.version(8).stores({
+      workouts: 'id, startedAt, routineId, routineRevision',
+      routines: 'id, sortOrder, folderId, revision, coachReviewed',
+      customExercises: 'id',
+      folders: 'id, sortOrder',
+      measurements: 'id, date, kind, [kind+date]',
+      photos: 'id, date',
+      foods: 'id, name, source, usedAt, offCode, usdaFdcId',
+      dishes: 'id, name',
+      foodLog: 'id, date, [date+meal]',
+      importBatches: 'id, source, createdAt, status',
+      externalRefs: '&key, source, entity, localId, batchId',
+      adaptationProposals: 'id, analysisId, baseRoutineId, baseRoutineRevision, status, createdAt, candidateId, occurrenceId, supersedesProposalId, ownerId, workoutId, requestId',
+      adaptationJobs: 'id, workoutId, status, createdAt, nextRetryAt, updatedAt, ownerId, requestId, leaseExpiresAt',
+      routineRevisionSnapshots: 'id, routineId, revision, createdAt, analysisId',
+      adaptationEventJobs: 'id, analysisId, status, createdAt, nextRetryAt, ownerId',
+      coachRuns: 'id, ownerId, eventId, status, createdAt, updatedAt, contextVersion',
+      coachMessages: 'id, ownerId, runId, createdAt, [runId+createdAt]',
+    })
+    // v9: perfil mínimo, consentimiento versionado y programación/retirada de sesiones.
+    this.version(9).stores({
+      workouts: 'id, startedAt, routineId, routineRevision',
+      routines: 'id, sortOrder, folderId, revision, coachReviewed, scheduledAt, retiredAt',
+      customExercises: 'id',
+      folders: 'id, sortOrder',
+      measurements: 'id, date, kind, [kind+date]',
+      photos: 'id, date',
+      foods: 'id, name, source, usedAt, offCode, usdaFdcId',
+      dishes: 'id, name',
+      foodLog: 'id, date, [date+meal]',
+      importBatches: 'id, source, createdAt, status',
+      externalRefs: '&key, source, entity, localId, batchId',
+      adaptationProposals: 'id, analysisId, baseRoutineId, baseRoutineRevision, status, createdAt, candidateId, occurrenceId, supersedesProposalId, ownerId, workoutId, requestId',
+      adaptationJobs: 'id, workoutId, status, createdAt, nextRetryAt, updatedAt, ownerId, requestId, leaseExpiresAt',
+      adaptationEventJobs: 'id, analysisId, status, createdAt, nextRetryAt, ownerId',
+      routineRevisionSnapshots: 'id, routineId, revision, createdAt, analysisId',
+      coachRuns: 'id, ownerId, eventId, status, createdAt, updatedAt, contextVersion',
+      coachMessages: 'id, ownerId, runId, createdAt, [runId+createdAt]',
+      coachProfiles: 'id, ownerId, revision, updatedAt',
+      coachConsents: 'id, ownerId, deviceId, version, enabled, revision, updatedAt',
     })
   }
 }

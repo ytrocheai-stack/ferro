@@ -1,0 +1,1509 @@
+{
+  "version": "hevy-science-es-en-50-v1",
+  "status": "frozen-draft",
+  "corpusVersion": null,
+  "reviewStatus": "Evidence read and labels authored by Codex; independent human review pending; not an approval.",
+  "labelScope": "50 narrow queries grounded in 25 inspected abstract chunks. Relevant sets are explicit judged positives, not exhaustive all-source labels. Full corpus remains mandatory for retrieval.",
+  "queries": [
+    {
+      "queryId": "q01",
+      "text": "¿Añadir restricción de flujo a las pesas mejora hipertrofia en deportes de equipo?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13430605_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13152783_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Comparison of low load blood flow restriction and high load resistance training of the finger flexors in advanced level climbers: a pilot study. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "deportistas de equipo; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q01-c1",
+          "text": "En el metaanálisis de deportistas de equipo, añadir BFR mejoró modestamente hipertrofia y fuerza frente a pesas solas.",
+          "supportedChunkIds": [
+            "PMC13430605_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13430605_0001",
+          "sha256": "09f3e56121042abede5774fca15715fbd41e93345b54bb1ee61cd60f8deab55d",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q02",
+      "text": "¿La mejora muscular con BFR garantiza mayor salto o sprint en jugadores de equipo?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13430605_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13152783_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Comparison of low load blood flow restriction and high load resistance training of the finger flexors in advanced level climbers: a pilot study. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "deportistas de equipo; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q02-c1",
+          "text": "No se observaron diferencias estadísticamente significativas en salto o sprint al añadir BFR.",
+          "supportedChunkIds": [
+            "PMC13430605_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13430605_0001",
+          "sha256": "09f3e56121042abede5774fca15715fbd41e93345b54bb1ee61cd60f8deab55d",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q03",
+      "text": "¿Los métodos avanzados producen más hipertrofia que las series tradicionales en adultos entrenados?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC12922048_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13388742_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Acute and Chronic Effects of Accentuated Eccentric Loading vs. Constant-Load Resistance Training: A Systematic Review and Meta-analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "adultos entrenados recreativamente de 18–45 años; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q03-c1",
+          "text": "La superioridad global de los métodos avanzados para hipertrofia no estuvo respaldada.",
+          "supportedChunkIds": [
+            "PMC12922048_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC12922048_0001",
+          "sha256": "e77043a28927bee92a205a19389fca3f481548055464c0115481fc2c2ad36d02",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q04",
+      "text": "¿Drop sets y tempo superan a series tradicionales si igualo volumen y esfuerzo?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC12922048_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13388742_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Acute and Chronic Effects of Accentuated Eccentric Loading vs. Constant-Load Resistance Training: A Systematic Review and Meta-analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "adultos entrenados recreativamente de 18–45 años; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q04-c1",
+          "text": "Drop sets, tempo y protocolos cluster produjeron adaptaciones comparables al igualar volumen y esfuerzo.",
+          "supportedChunkIds": [
+            "PMC12922048_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC12922048_0001",
+          "sha256": "e77043a28927bee92a205a19389fca3f481548055464c0115481fc2c2ad36d02",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q05",
+      "text": "¿Tomar proteína durante las pesas aporta más hipertrofia si ya entreno alimentado?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13414563_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC12730271_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effect of Proximity to Failure in Resistance Training on Circulating Levels of Neuroprotective Biomarkers. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "17 hombres jóvenes físicamente activos; ensayo exploratorio de ocho semanas sin ayuno; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q05-c1",
+          "text": "No se detectó beneficio adicional de proteína intraentrenamiento frente a carbohidratos isoenergéticos en este ensayo pequeño.",
+          "supportedChunkIds": [
+            "PMC13414563_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13414563_0001",
+          "sha256": "849de915bdc23bce0bedf5113cea80db9dda8e72395b877fe9e508fca43a2161",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q06",
+      "text": "¿El estudio pequeño sin ayuno descarta cualquier efecto modesto de proteína intraentrenamiento?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13414563_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC12730271_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effect of Proximity to Failure in Resistance Training on Circulating Levels of Neuroprotective Biomarkers. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "17 hombres jóvenes físicamente activos; ensayo exploratorio de ocho semanas sin ayuno; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q06-c1",
+          "text": "El tamaño muestral pequeño y la variabilidad no permiten excluir efectos modestos.",
+          "supportedChunkIds": [
+            "PMC13414563_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13414563_0001",
+          "sha256": "849de915bdc23bce0bedf5113cea80db9dda8e72395b877fe9e508fca43a2161",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q07",
+      "text": "¿Dos o tres sesiones de fuerza mejoran distinto la calidad muscular en mujeres mayores con igual volumen?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13065378_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC9265918_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: The Relationship between Resistance Training Frequency and Muscle Quality in Adolescents. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "45 mujeres mayores; doce semanas con volumen semanal igualado; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q07-c1",
+          "text": "Dos y tres sesiones semanales produjeron mejoras similares del índice de calidad muscular.",
+          "supportedChunkIds": [
+            "PMC13065378_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13065378_0001",
+          "sha256": "2aea5634e25a1206ca986a3771d64bcb3424d94bec85b075848125790603623b",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q08",
+      "text": "¿Aumentó el ángulo de fase al entrenar dos o tres días en mujeres mayores?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13065378_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC9265918_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: The Relationship between Resistance Training Frequency and Muscle Quality in Adolescents. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "45 mujeres mayores; doce semanas con volumen semanal igualado; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q08-c1",
+          "text": "No se detectaron cambios grupales del ángulo de fase.",
+          "supportedChunkIds": [
+            "PMC13065378_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13065378_0001",
+          "sha256": "2aea5634e25a1206ca986a3771d64bcb3424d94bec85b075848125790603623b",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q09",
+      "text": "¿Qué ocurrió al aumentar el volumen tras un mesociclo de fuerza en jugadores juveniles de rugby?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13119994_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13430605_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Muscle hypertrophy and strength improvements following blood flow restriction combined with resistance training in team-athletes: a systematic review and meta-analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "18 jugadores masculinos juveniles de rugby entrenados en fuerza; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q09-c1",
+          "text": "El aumento de volumen se asoció con más daño muscular y diferencias modestas en rendimiento de campo.",
+          "supportedChunkIds": [
+            "PMC13119994_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13119994_0001",
+          "sha256": "9210a05a3cced31cadeca0e2365a6dbd3c47d87d299e648343cfb31cfcddda64",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q10",
+      "text": "¿Es prudente vigilar dolor muscular y rendimiento al cambiar a mayor volumen en rugby juvenil?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13119994_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13430605_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Muscle hypertrophy and strength improvements following blood flow restriction combined with resistance training in team-athletes: a systematic review and meta-analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "18 jugadores masculinos juveniles de rugby entrenados en fuerza; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q10-c1",
+          "text": "Los autores recomiendan monitorizar las respuestas agudas durante fluctuaciones del volumen.",
+          "supportedChunkIds": [
+            "PMC13119994_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13119994_0001",
+          "sha256": "9210a05a3cced31cadeca0e2365a6dbd3c47d87d299e648343cfb31cfcddda64",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q11",
+      "text": "¿Carga alta y volumen alto causaron respuestas mitocondriales diferentes en hombres entrenados?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13131064_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13414563_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effect of Intra-Workout Protein–Carbohydrate Co-Ingestion Versus Isocaloric Carbohydrate During Resistance Training on Muscle Fibre Hypertrophy and Oxidative Capacities in Young Men: A Randomized Controlled Trial. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "hombres universitarios entrenados; biopsias musculares en dos estudios pequeños; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q11-c1",
+          "text": "No hubo diferencias entre los protocolos de carga alta y volumen alto en las respuestas mitocondriales estudiadas.",
+          "supportedChunkIds": [
+            "PMC13131064_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13131064_0001",
+          "sha256": "c938d0a14039285abc1e15b6638e002fc61eed4d9be156ad13f4169894be47fb",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q12",
+      "text": "¿Cambió la actividad de citrato sintasa de forma diferente entre piernas con carga alta y volumen alto?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13131064_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13414563_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effect of Intra-Workout Protein–Carbohydrate Co-Ingestion Versus Isocaloric Carbohydrate During Resistance Training on Muscle Fibre Hypertrophy and Oxidative Capacities in Young Men: A Randomized Controlled Trial. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "hombres universitarios entrenados; biopsias musculares en dos estudios pequeños; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q12-c1",
+          "text": "La actividad de citrato sintasa disminuyó tras entrenamiento crónico, sin interacción entre protocolos.",
+          "supportedChunkIds": [
+            "PMC13131064_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13131064_0001",
+          "sha256": "c938d0a14039285abc1e15b6638e002fc61eed4d9be156ad13f4169894be47fb",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q13",
+      "text": "¿Repartir fuerza en más días mejora claramente la fuerza máxima de personas bien entrenadas?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC8363540_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC6214533_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Frequency of resistance training does not affect inhibitory control or improve strength in well-trained young adults. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "poblaciones bien entrenadas; intervenciones de seis a doce semanas; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q13-c1",
+          "text": "No hubo diferencias claras de desarrollo de fuerza máxima entre frecuencias durante seis a doce semanas.",
+          "supportedChunkIds": [
+            "PMC8363540_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC8363540_0001",
+          "sha256": "b47cb695e52649581a7e6b5827f94c791913da5c818a6a16554cd2ba70b72bea",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q14",
+      "text": "¿Puedo distribuir el trabajo de fuerza en sesiones breves durante una temporada congestionada?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC8363540_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC6214533_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Frequency of resistance training does not affect inhibitory control or improve strength in well-trained young adults. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "poblaciones bien entrenadas; intervenciones de seis a doce semanas; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q14-c1",
+          "text": "La revisión plantea distribuir volumen en sesiones más cortas y frecuentes para acomodar la competición.",
+          "supportedChunkIds": [
+            "PMC8363540_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC8363540_0001",
+          "sha256": "b47cb695e52649581a7e6b5827f94c791913da5c818a6a16554cd2ba70b72bea",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q15",
+      "text": "¿El NEAT siguió bajando entre semanas 16 y 32 con tres sesiones aeróbicas y tres de fuerza?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13380546_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13065378_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Muscle quality index and phase angle responses to matched-volume resistance training at different frequencies in older women. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "mujeres sedentarias de 60–74 años; entrenamiento combinado semanas 16–32; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q15-c1",
+          "text": "El NEAT aumentó en el grupo de tres más tres sesiones entre semanas 16 y 32.",
+          "supportedChunkIds": [
+            "PMC13380546_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13380546_0001",
+          "sha256": "9a3fef0a94c9086677c972833fff759bbf3f670c95109f92ee89fe5b971124c5",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q16",
+      "text": "¿Qué frecuencia combinada conservó mayor NEAT global en las mujeres mayores estudiadas?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13380546_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13065378_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Muscle quality index and phase angle responses to matched-volume resistance training at different frequencies in older women. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "mujeres sedentarias de 60–74 años; entrenamiento combinado semanas 16–32; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q16-c1",
+          "text": "El grupo de dos más dos sesiones mantuvo el mayor NEAT global.",
+          "supportedChunkIds": [
+            "PMC13380546_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13380546_0001",
+          "sha256": "9a3fef0a94c9086677c972833fff759bbf3f670c95109f92ee89fe5b971124c5",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q17",
+      "text": "¿Qué relación hubo entre dos días semanales de fuerza y calidad muscular adolescente?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC9265918_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC8363540_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effects of Variations in Resistance Training Frequency on Strength Development in Well-Trained Populations and Implications for In-Season Athlete Training: A Systematic Review and Meta-analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "605 adolescentes de 12–15 años; asociación observacional; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q17-c1",
+          "text": "Los datos sugieren una frecuencia mínima de dos días asociada con calidad muscular en adolescentes.",
+          "supportedChunkIds": [
+            "PMC9265918_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC9265918_0001",
+          "sha256": "65f411e51915cde4e716563eb57b5eaf8fa00713a16a20687ee2333db825a50e",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q18",
+      "text": "¿Una sesión semanal se asoció con mejor calidad muscular que ninguna en adolescentes?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC9265918_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC8363540_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effects of Variations in Resistance Training Frequency on Strength Development in Well-Trained Populations and Implications for In-Season Athlete Training: A Systematic Review and Meta-analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "605 adolescentes de 12–15 años; asociación observacional; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q18-c1",
+          "text": "No hubo diferencias de calidad muscular entre una sesión semanal y ningún entrenamiento.",
+          "supportedChunkIds": [
+            "PMC9265918_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC9265918_0001",
+          "sha256": "65f411e51915cde4e716563eb57b5eaf8fa00713a16a20687ee2333db825a50e",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q19",
+      "text": "¿Más días de pesas mejoran el control inhibitorio si el volumen permanece igual?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC6214533_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC12730271_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effect of Proximity to Failure in Resistance Training on Circulating Levels of Neuroprotective Biomarkers. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "36 hombres jóvenes con experiencia; 24 semanas y volumen igualado; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q19-c1",
+          "text": "Aumentar frecuencia con volumen igualado no pareció potenciar el control inhibitorio cognitivo.",
+          "supportedChunkIds": [
+            "PMC6214533_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC6214533_0001",
+          "sha256": "a1e64bdd7fc18f75e71f61645aecbc8057efd432fb983bb0a2fb0998e77aaea6",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q20",
+      "text": "¿El ensayo del test Stroop permite prometer ventaja cognitiva por pasar de uno a tres días?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC6214533_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC12730271_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effect of Proximity to Failure in Resistance Training on Circulating Levels of Neuroprotective Biomarkers. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "36 hombres jóvenes con experiencia; 24 semanas y volumen igualado; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q20-c1",
+          "text": "No se observaron interacciones tiempo por grupo significativas en precisión ni tiempo de respuesta del Stroop.",
+          "supportedChunkIds": [
+            "PMC6214533_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC6214533_0001",
+          "sha256": "a1e64bdd7fc18f75e71f61645aecbc8057efd432fb983bb0a2fb0998e77aaea6",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q21",
+      "text": "¿La sobrecarga excéntrica acentuada demostró superioridad crónica en fuerza o arquitectura muscular?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13388742_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC12922048_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effects of Advanced Resistance Training Systems on Muscle Hypertrophy and Strength in Recreationally Trained Adults: A Systematic Review and Meta-Analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "49 estudios con 773 participantes; protocolos heterogéneos de carga excéntrica acentuada; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q21-c1",
+          "text": "No se encontró evidencia de superioridad crónica sobre carga constante en fuerza o arquitectura muscular.",
+          "supportedChunkIds": [
+            "PMC13388742_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13388742_0001",
+          "sha256": "1029bc9fadd0cf7f44a0fe708a9813759c40058d2095b14d921e2451708304a7",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q22",
+      "text": "¿La carga excéntrica acentuada eleva esfuerzo percibido y estrés metabólico?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13388742_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC12922048_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effects of Advanced Resistance Training Systems on Muscle Hypertrophy and Strength in Recreationally Trained Adults: A Systematic Review and Meta-Analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "49 estudios con 773 participantes; protocolos heterogéneos de carga excéntrica acentuada; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q22-c1",
+          "text": "La revisión encontró aumentos de esfuerzo percibido y estrés metabólico con carga excéntrica acentuada.",
+          "supportedChunkIds": [
+            "PMC13388742_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13388742_0001",
+          "sha256": "1029bc9fadd0cf7f44a0fe708a9813759c40058d2095b14d921e2451708304a7",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q23",
+      "text": "¿La conclusión sobre carga excéntrica acentuada pide considerar recuperación entre sesiones?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13388742_0002"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC11679007_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: The Acute Effect of Different Cluster Set Intra-Set Rest Interval Configurations on Mechanical Power Measures During a Flywheel Resistance Training Session. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "revisión de carga excéntrica acentuada; conclusión, no receta individual; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q23-c1",
+          "text": "La conclusión plantea considerar descansos entre series más largos y frecuentes y más recuperación entre sesiones.",
+          "supportedChunkIds": [
+            "PMC13388742_0002"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13388742_0002",
+          "sha256": "aa03bc051bdf209a35d3cddb70f458b47054feb421549ad681919566b0e7a6f3",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q24",
+      "text": "¿La conclusión recomienda cautela al escoger sobrecarga excéntrica por supuestas ventajas crónicas?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13388742_0002"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC11679007_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: The Acute Effect of Different Cluster Set Intra-Set Rest Interval Configurations on Mechanical Power Measures During a Flywheel Resistance Training Session. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "revisión de carga excéntrica acentuada; conclusión, no receta individual; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q24-c1",
+          "text": "La conclusión aconseja considerar la ausencia de evidencia de beneficios crónicos superiores.",
+          "supportedChunkIds": [
+            "PMC13388742_0002"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13388742_0002",
+          "sha256": "aa03bc051bdf209a35d3cddb70f458b47054feb421549ad681919566b0e7a6f3",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q25",
+      "text": "¿El piloto de Kho-Kho prueba superioridad definitiva del entrenamiento isométrico sobre dinámico?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13410516_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13152783_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Comparison of low load blood flow restriction and high load resistance training of the finger flexors in advanced level climbers: a pilot study. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "17 deportistas universitarios de Kho-Kho; piloto de cinco semanas; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q25-c1",
+          "text": "La superioridad definitiva del isométrico no puede concluirse de este piloto exploratorio.",
+          "supportedChunkIds": [
+            "PMC13410516_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13410516_0001",
+          "sha256": "9bf3d97f22ad64635d9c3bef94995e060f0c9fb4a37fae08be6d94fe4fa3ea9a",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q26",
+      "text": "¿En qué resultados específicos destacó el isométrico regulado por esfuerzo en Kho-Kho?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13410516_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13152783_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Comparison of low load blood flow restriction and high load resistance training of the finger flexors in advanced level climbers: a pilot study. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "17 deportistas universitarios de Kho-Kho; piloto de cinco semanas; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q26-c1",
+          "text": "Los resultados preliminares sugieren beneficios específicos del ángulo articular y de la aceleración inicial.",
+          "supportedChunkIds": [
+            "PMC13410516_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13410516_0001",
+          "sha256": "9bf3d97f22ad64635d9c3bef94995e060f0c9fb4a37fae08be6d94fe4fa3ea9a",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q27",
+      "text": "¿BFR con carga baja fue superior a carga alta para escaladores avanzados?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13152783_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13430605_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Muscle hypertrophy and strength improvements following blood flow restriction combined with resistance training in team-athletes: a systematic review and meta-analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "22 escaladores avanzados; cinco semanas y dos sesiones por semana; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q27-c1",
+          "text": "No hubo diferencias entre grupos en los tests tras cinco semanas.",
+          "supportedChunkIds": [
+            "PMC13152783_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13152783_0001",
+          "sha256": "b9e23b28e004297cdc87d8222c4f5f2056e7034b6d51bcf6517efb61280d7804",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q28",
+      "text": "¿Mejoró la resistencia de dedos con carga alta o BFR en el piloto de escalada?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13152783_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13430605_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Muscle hypertrophy and strength improvements following blood flow restriction combined with resistance training in team-athletes: a systematic review and meta-analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "22 escaladores avanzados; cinco semanas y dos sesiones por semana; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q28-c1",
+          "text": "No se observaron mejoras pre-post en el test de resistencia, aunque mejoraron otras medidas.",
+          "supportedChunkIds": [
+            "PMC13152783_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13152783_0001",
+          "sha256": "b9e23b28e004297cdc87d8222c4f5f2056e7034b6d51bcf6517efb61280d7804",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q29",
+      "text": "¿Por qué un diseño de hipertrofia al fallo podría ocultar diferencias experimentales?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13171636_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC12730271_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effect of Proximity to Failure in Resistance Training on Circulating Levels of Neuroprotective Biomarkers. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "perspectiva metodológica; no ensayo de eficacia individual; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q29-c1",
+          "text": "La perspectiva argumenta que el fallo podría saturar respuestas y reducir sensibilidad a variables de entrenamiento.",
+          "supportedChunkIds": [
+            "PMC13171636_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13171636_0001",
+          "sha256": "2656f4ce295663d052fd8032f0e4d9656856dc50edf9f27623cd4e063f5bad4e",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q30",
+      "text": "¿Cómo propone anclar prescripciones submáximas la perspectiva metodológica?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13171636_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC12730271_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effect of Proximity to Failure in Resistance Training on Circulating Levels of Neuroprotective Biomarkers. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "perspectiva metodológica; no ensayo de eficacia individual; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q30-c1",
+          "text": "Propone pretests empíricos de capacidad máxima de repeticiones para mejorar reproducibilidad e interpretación.",
+          "supportedChunkIds": [
+            "PMC13171636_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13171636_0001",
+          "sha256": "2656f4ce295663d052fd8032f0e4d9656856dc50edf9f27623cd4e063f5bad4e",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q31",
+      "text": "¿Es necesario llegar al fallo para elevar los biomarcadores cerebrales medidos en ese ensayo?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC12730271_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13171636_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Rethinking task failure in resistance training research: a framework for submaximal exercise prescription. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "38 hombres entrenados; ocho semanas; biomarcadores sanguíneos; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q31-c1",
+          "text": "Los grupos mostraron aumentos similares de moléculas relacionadas con salud cerebral, incluso lejos del fallo.",
+          "supportedChunkIds": [
+            "PMC12730271_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC12730271_0001",
+          "sha256": "fdf3c9ff5ecd9fdba58348c030c25121d9bd054c564238e48d814168a5278606",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q32",
+      "text": "¿Qué significa realizar ocho repeticiones con dos RIR según el resumen del estudio?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC12730271_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13171636_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Rethinking task failure in resistance training research: a framework for submaximal exercise prescription. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "38 hombres entrenados; ocho semanas; biomarcadores sanguíneos; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q32-c1",
+          "text": "Dos RIR significa percibir que se podrían completar dos repeticiones adicionales.",
+          "supportedChunkIds": [
+            "PMC12730271_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC12730271_0001",
+          "sha256": "fdf3c9ff5ecd9fdba58348c030c25121d9bd054c564238e48d814168a5278606",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q33",
+      "text": "¿Descansos de más de sesenta segundos pueden favorecer algo la hipertrofia?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC11349676_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC10328417_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effects of rest interval and training intensity on jumping performance: a systematic review and meta-analysis investigating post-activation performance enhancement. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "adultos sanos; nueve estudios; hipertrofia y descanso entre series; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q33-c1",
+          "text": "El metaanálisis sugiere un beneficio pequeño con descansos superiores a sesenta segundos.",
+          "supportedChunkIds": [
+            "PMC11349676_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC11349676_0001",
+          "sha256": "3c0b1e4946a04674567827758516ef7b313d49a98787c0f1409f04c88888e4e7",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q34",
+      "text": "¿El metaanálisis detectó más hipertrofia al descansar por encima de noventa segundos?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC11349676_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC10328417_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effects of rest interval and training intensity on jumping performance: a systematic review and meta-analysis investigating post-activation performance enhancement. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "adultos sanos; nueve estudios; hipertrofia y descanso entre series; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q34-c1",
+          "text": "No detectó diferencias apreciables de hipertrofia cuando se descansaba más de noventa segundos.",
+          "supportedChunkIds": [
+            "PMC11349676_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC11349676_0001",
+          "sha256": "3c0b1e4946a04674567827758516ef7b313d49a98787c0f1409f04c88888e4e7",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q35",
+      "text": "¿Saltar inmediatamente después de sentadilla favorece la potenciación del rendimiento?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC10328417_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC11349676_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Give it a rest: a systematic review with Bayesian meta-analysis on the effect of inter-set rest interval duration on muscle hypertrophy. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "19 estudios de respuesta aguda del salto tras sentadilla; PAPE; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q35-c1",
+          "text": "Los intervalos de cero a un minuto perjudicaron el salto en el análisis de subgrupos.",
+          "supportedChunkIds": [
+            "PMC10328417_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC10328417_0001",
+          "sha256": "56638201dcbde54a491dbf2f69c7e8e2c9767f1325db999e91b101d152a03c05",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q36",
+      "text": "¿Qué intervalo favoreció el salto tras sentadilla en el análisis de potenciación aguda?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC10328417_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC11349676_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Give it a rest: a systematic review with Bayesian meta-analysis on the effect of inter-set rest interval duration on muscle hypertrophy. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "19 estudios de respuesta aguda del salto tras sentadilla; PAPE; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q36-c1",
+          "text": "Los intervalos de cuatro a nueve minutos favorecieron el salto; cuatro a siete parecieron los mejores.",
+          "supportedChunkIds": [
+            "PMC10328417_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC10328417_0001",
+          "sha256": "56638201dcbde54a491dbf2f69c7e8e2c9767f1325db999e91b101d152a03c05",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q37",
+      "text": "¿Quince segundos entre bloques cluster igualan el rendimiento de treinta o cuarenta y cinco en volante?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC11679007_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC10328417_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effects of rest interval and training intensity on jumping performance: a systematic review and meta-analysis investigating post-activation performance enhancement. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "12 atletas varones aficionados; sesión aguda de volante inercial; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q37-c1",
+          "text": "Los descansos de treinta a cuarenta y cinco segundos permitieron mayor rendimiento que quince segundos.",
+          "supportedChunkIds": [
+            "PMC11679007_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC11679007_0001",
+          "sha256": "5a0a4b0251decf6f8b2fc02c178960820998af181b3603a7b01854f57cfee8c3",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q38",
+      "text": "¿El ensayo agudo de cluster con volante demuestra adaptaciones a largo plazo?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC11679007_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC10328417_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Effects of rest interval and training intensity on jumping performance: a systematic review and meta-analysis investigating post-activation performance enhancement. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "12 atletas varones aficionados; sesión aguda de volante inercial; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q38-c1",
+          "text": "Las implicaciones para intervenciones más largas requieren investigación adicional.",
+          "supportedChunkIds": [
+            "PMC11679007_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC11679007_0001",
+          "sha256": "5a0a4b0251decf6f8b2fc02c178960820998af181b3603a7b01854f57cfee8c3",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q39",
+      "text": "¿Hacer movilidad en el descanso de contraste alteró el rendimiento frente al reposo pasivo?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC11057618_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC11679007_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: The Acute Effect of Different Cluster Set Intra-Set Rest Interval Configurations on Mechanical Power Measures During a Flywheel Resistance Training Session. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "17 varones recreativamente activos; respuesta aguda al entrenamiento complejo-contraste; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q39-c1",
+          "text": "No se encontraron diferencias significativas de rendimiento entre reposo, movilidad y press durante el descanso.",
+          "supportedChunkIds": [
+            "PMC11057618_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC11057618_0001",
+          "sha256": "d236d396ed572f00fe1d18033df4e7e074dda9a6f58df5b0ec33a584484dd767",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q40",
+      "text": "¿Insertar press de banca durante el descanso de contraste elevó el esfuerzo percibido?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC11057618_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC11679007_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: The Acute Effect of Different Cluster Set Intra-Set Rest Interval Configurations on Mechanical Power Measures During a Flywheel Resistance Training Session. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "17 varones recreativamente activos; respuesta aguda al entrenamiento complejo-contraste; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q40-c1",
+          "text": "La condición con fuerza fue percibida como más intensa que reposo pasivo y movilidad.",
+          "supportedChunkIds": [
+            "PMC11057618_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC11057618_0001",
+          "sha256": "d236d396ed572f00fe1d18033df4e7e074dda9a6f58df5b0ec33a584484dd767",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q41",
+      "text": "¿Se pierde toda la movilidad al dejar de estirar durante dos a seis semanas?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC12638565_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC11393112_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Static Stretch Training versus Foam Rolling Training Effects on Range of Motion: A Systematic Review and Meta-Analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "participantes sanos de distintas edades; 13 estudios de estiramiento y desentrenamiento; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q41-c1",
+          "text": "El rango disminuyó ligeramente respecto al final del programa pero permaneció por encima del nivel inicial.",
+          "supportedChunkIds": [
+            "PMC12638565_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC12638565_0001",
+          "sha256": "9aa63a4f3dfea4ee2ed3827ac845e7e4efb244b405d53d0b9feeadc5975447df",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q42",
+      "text": "¿Qué confianza hubo en la conservación de movilidad tras dejar de estirar?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC12638565_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC11393112_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Static Stretch Training versus Foam Rolling Training Effects on Range of Motion: A Systematic Review and Meta-Analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "participantes sanos de distintas edades; 13 estudios de estiramiento y desentrenamiento; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q42-c1",
+          "text": "La confianza acumulada fue baja para mantenimiento tras desentrenamiento y alta para ganancias de movilidad.",
+          "supportedChunkIds": [
+            "PMC12638565_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC12638565_0001",
+          "sha256": "9aa63a4f3dfea4ee2ed3827ac845e7e4efb244b405d53d0b9feeadc5975447df",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q43",
+      "text": "¿Foam rolling y estiramiento estático pueden mejorar movilidad articular a largo plazo?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC11393112_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC12638565_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Detraining Effects Following Chronic Stretching Training on Range of Motion: A Systematic Review and Meta-Analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "85 estudios; movilidad articular con estiramiento estático o foam rolling; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q43-c1",
+          "text": "Ambos métodos aumentaron movilidad sin diferencia global significativa entre condiciones.",
+          "supportedChunkIds": [
+            "PMC11393112_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC11393112_0001",
+          "sha256": "bc2f80243256a613b630e34c1db886915c9679eb4caa58a35a595704b9dfbd50",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q44",
+      "text": "¿Qué método tuvo ventaja para ganar movilidad en programas de cuatro semanas o menos?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC11393112_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC12638565_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Detraining Effects Following Chronic Stretching Training on Range of Motion: A Systematic Review and Meta-Analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "85 estudios; movilidad articular con estiramiento estático o foam rolling; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q44-c1",
+          "text": "El estiramiento estático mostró ventaja sobre foam rolling en programas de cuatro semanas o menos.",
+          "supportedChunkIds": [
+            "PMC11393112_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC11393112_0001",
+          "sha256": "bc2f80243256a613b630e34c1db886915c9679eb4caa58a35a595704b9dfbd50",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q45",
+      "text": "¿El entrenamiento con cargas externas puede mejorar flexibilidad?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC9935664_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC11393112_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Static Stretch Training versus Foam Rolling Training Effects on Range of Motion: A Systematic Review and Meta-Analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "participantes sanos; 55 estudios de fuerza y rango de movimiento; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q45-c1",
+          "text": "El entrenamiento de fuerza con cargas externas puede mejorar rango de movimiento.",
+          "supportedChunkIds": [
+            "PMC9935664_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC9935664_0001",
+          "sha256": "1d22add3b63e22ac06f0c0289c85702ecbd7ba1bf5f2f32bdc3f9a5606d444c1",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q46",
+      "text": "¿Las personas sedentarias mejoraron movilidad más que las activas con entrenamiento de fuerza?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC9935664_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC11393112_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Static Stretch Training versus Foam Rolling Training Effects on Range of Motion: A Systematic Review and Meta-Analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "participantes sanos; 55 estudios de fuerza y rango de movimiento; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q46-c1",
+          "text": "Las personas no entrenadas y sedentarias mostraron mejoras de rango de movimiento de mayor magnitud.",
+          "supportedChunkIds": [
+            "PMC9935664_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC9935664_0001",
+          "sha256": "1d22add3b63e22ac06f0c0289c85702ecbd7ba1bf5f2f32bdc3f9a5606d444c1",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q47",
+      "text": "¿La fuerza multimodal mejoró densidad ósea en el piloto de mujeres con osteopenia?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13383042_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC9935664_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Resistance Training Induces Improvements in Range of Motion: A Systematic Review and Meta-Analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "20 mujeres mayores con osteopenia; piloto no aleatorizado de 16 semanas; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q47-c1",
+          "text": "El piloto encontró evidencia preliminar de mejoras de densidad ósea lumbar y del cuello femoral.",
+          "supportedChunkIds": [
+            "PMC13383042_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13383042_0001",
+          "sha256": "ab25c749b4a9c494b211bc330f8e3088075269e844c981d2736ecad872cfe435",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q48",
+      "text": "¿Puede tratarse como concluyente el piloto de fuerza multimodal y osteopenia?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC13383042_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC9935664_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: Resistance Training Induces Improvements in Range of Motion: A Systematic Review and Meta-Analysis. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "20 mujeres mayores con osteopenia; piloto no aleatorizado de 16 semanas; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q48-c1",
+          "text": "El tamaño muestral limita los hallazgos y respalda realizar un ensayo definitivo.",
+          "supportedChunkIds": [
+            "PMC13383042_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC13383042_0001",
+          "sha256": "ab25c749b4a9c494b211bc330f8e3088075269e844c981d2736ecad872cfe435",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q49",
+      "text": "¿Qué factores además de elegir ejercicio se vinculan a lesiones en gimnasios?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC9565175_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13119994_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: The Acute Effect of Increasing Resistance Training Workload Volume on Muscle Damage Markers and Performance in Heavy Resistance-Trained Youth Athletes. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "revisión integrativa de 39 artículos sobre personas que entrenan en gimnasios; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q49-c1",
+          "text": "La revisión describe causas multifactoriales, incluido sobreuso, poca recuperación, cargas altas y técnica inadecuada.",
+          "supportedChunkIds": [
+            "PMC9565175_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC9565175_0001",
+          "sha256": "97cb782f3e38538e7bd1a1ffb6a653738116d4dec2dae8180b7f1a3dfbf70e0f",
+          "section": "Abstract"
+        }
+      ]
+    },
+    {
+      "queryId": "q50",
+      "text": "¿Qué zonas se lesionan con frecuencia según la revisión de selección de ejercicios?",
+      "language": "es",
+      "evidenceLanguage": "en",
+      "relevantChunkIds": [
+        "PMC9565175_0001"
+      ],
+      "hardNegativeChunkIds": [
+        "PMC13119994_0001"
+      ],
+      "hardNegativeRationale": "Comparador temático: The Acute Effect of Increasing Resistance Training Workload Volume on Muscle Damage Markers and Performance in Heavy Resistance-Trained Youth Athletes. No respalda la afirmación específica ni sustituye la población/desenlace de esta consulta.",
+      "populationApplicability": "revisión integrativa de 39 artículos sobre personas que entrenan en gimnasios; no extrapolar automáticamente a otras poblaciones ni convertir un resultado grupal en prescripción individual.",
+      "claims": [
+        {
+          "claimId": "q50-c1",
+          "text": "La revisión identifica hombros, codos, columna y rodillas entre las zonas más afectadas.",
+          "supportedChunkIds": [
+            "PMC9565175_0001"
+          ]
+        }
+      ],
+      "evidenceAnchors": [
+        {
+          "chunkId": "PMC9565175_0001",
+          "sha256": "97cb782f3e38538e7bd1a1ffb6a653738116d4dec2dae8180b7f1a3dfbf70e0f",
+          "section": "Abstract"
+        }
+      ]
+    }
+  ]
+}

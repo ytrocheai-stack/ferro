@@ -56,4 +56,8 @@ describe('validación de respaldos', () => {
   it('acepta un backup v2 válido sin tablas introducidas en v3', () => {
     expect(validateBackup(base)).toBeNull()
   })
+
+  it('acepta el formato v7 que conserva la identidad del contexto', () => {
+    expect(validateBackup({ ...base, version: 7 })).toBeNull()
+  })
 })

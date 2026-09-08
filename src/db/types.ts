@@ -1,3 +1,5 @@
+import type { AgentDecision, CoachRunRequest } from '../../packages/adaptation-core/src/contract'
+
 export type SetType = 'normal' | 'warmup' | 'failure' | 'drop'
 export type TrainingRole = 'strength' | 'hypertrophy' | 'accessory'
 
@@ -8,6 +10,8 @@ export interface LoggedSet {
   completed: boolean
   /** RPE 6–10 (medios permitidos); solo si el usuario activa el registro */
   rpe?: number
+  /** Repeticiones en reserva registradas explícitamente (0 = fallo). */
+  rir?: number
   /** cardio: duración en segundos */
   durationSec?: number
   /** cardio: distancia en metros */
@@ -125,6 +129,8 @@ export interface Routine {
   trainingRole: TrainingRole
   loadIncrementKg: number
   coachReviewed: boolean
+  scheduledAt?: number
+  retiredAt?: number
 }
 
 export type ProposalStatus = 'pending' | 'accepted' | 'edited' | 'rejected' | 'reverted' | 'stale'
@@ -143,6 +149,7 @@ export interface AdaptationCandidateRecord {
   kind: 'maintain' | 'increase-reps' | 'increase-load' | 'add-set' | 'reduce-load' | 'reduce-set'
   rule: string
   exerciseId: string
+  occurrenceId?: string
   previous: { plannedSets: number; repsMin: number; repsMax: number; loadKg?: number }
   next: { plannedSets: number; repsMin: number; repsMax: number; loadKg?: number }
   evidence: {
@@ -163,6 +170,11 @@ export interface AdaptationCandidateRecord {
 
 export interface AdaptationProposal {
   id: string
+  /** Propietario Clerk; evita mostrar o aplicar propuestas de otra cuenta local. */
+  ownerId?: string
+  workoutId?: string
+  requestId?: string
+  contextKey?: string
   analysisId: string
   baseRoutineId: string
   baseRoutineRevision: number
@@ -186,11 +198,26 @@ export interface AdaptationProposal {
   supersedesProposalId?: string
   appliedRoutineRevision?: number
   routineSnapshotId?: string
+  sources?: import('../../packages/adaptation-core/src/contract').AnalysisSource[]
+}
+
+export type AdaptationJobErrorCode = 'session-expired' | 'unauthorized' | 'quota-exhausted' | 'temporary' | 'invalid-response' | 'conflict' | 'context-invalidated'
+
+export interface FrozenAdaptationRequest {
+  inputs: import('../../packages/adaptation-core/src/index').ExerciseAnalysisInput[]
+  consentVersion: string
+  deviceId: string
 }
 
 export interface AdaptationJob {
   id: string
+  /** Propietario Clerk. Los jobs heredados sin propietario no se procesan. */
+  ownerId?: string
   workoutId: string
+  requestId?: string
+  contextKey?: string
+  runId?: string
+  leaseExpiresAt?: number
   status: 'pending' | 'processing' | 'completed' | 'failed'
   createdAt: number
   nextRetryAt?: number
@@ -198,10 +225,14 @@ export interface AdaptationJob {
   analysisId?: string
   lastError?: string
   updatedAt?: number
+  payload?: FrozenAdaptationRequest
+  errorCode?: AdaptationJobErrorCode
+  pendingExplanation?: boolean
 }
 
 export interface AdaptationEventJob {
   id: string
+  ownerId?: string
   analysisId: string
   exerciseId: string
   candidateId?: string
@@ -210,6 +241,59 @@ export interface AdaptationEventJob {
   createdAt: number
   attempts: number
   nextRetryAt?: number
+}
+
+export interface CoachRunRecord {
+  id: string
+  ownerId: string
+  eventId: string
+  contextVersion: string
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+  request: CoachRunRequest
+  decision?: AgentDecision
+  error?: string
+  usage?: { inputTokens?: number; outputTokens?: number }
+  createdAt: number
+  updatedAt: number
+  startedAt?: number
+  endedAt?: number
+  appliedAt?: number
+}
+
+export interface CoachMessage {
+  id: string
+  ownerId: string
+  runId: string
+  role: 'user' | 'assistant'
+  content: string
+  createdAt: number
+  contextVersion: string
+}
+
+export interface CoachProfile {
+  id: string
+  ownerId: string
+  population: string[]
+  populationConfirmed: boolean
+  experience?: 'novice' | 'intermediate' | 'advanced'
+  goals: string[]
+  injuriesOrPain: string[]
+  unavailableEquipment: string[]
+  excludedExercises: string[]
+  nutritionConstraints: string[]
+  revision: number
+  updatedAt: number
+}
+
+export interface CoachConsentRecord {
+  id: string
+  ownerId: string
+  deviceId: string
+  version: string
+  enabled: boolean
+  revision: number
+  acceptedAt: number
+  updatedAt: number
 }
 
 export interface Folder {

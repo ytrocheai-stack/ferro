@@ -2,10 +2,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { resolve as resolvePath } from 'node:path'
 
 // Base '/ferro/' en producción (GitHub Pages) y en `vite preview`; '/' en dev
-export default defineConfig(({ command, isPreview }) => ({
+export default defineConfig(({ command, isPreview, mode }) => ({
   base: command === 'build' || isPreview ? '/ferro/' : '/',
+  resolve: mode === 'e2e' || process.env.VITE_E2E_AGENT === 'true' ? { alias: { '@clerk/react': resolvePath('e2e/clerk-mock.tsx') } } : undefined,
   plugins: [
     react(),
     tailwindcss(),

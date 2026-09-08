@@ -55,9 +55,9 @@ describe('adaptation-core', () => {
     expect(decision.candidates.map((candidate) => candidate.kind)).toEqual(['maintain'])
   })
 
-  it('reduces one increment only after repeated five-percent drops', () => {
+  it('uses the median of three previous exposures and catches simultaneous load/repetition drops', () => {
     const make = (id: string, startedAt: number, weightKg: number) => previous(id, startedAt, { role: 'hypertrophy', sets: [1, 2, 3].map(() => ({ type: 'normal' as const, weightKg, reps: 8, completed: true, rpe: 8 })) })
-    const decision = analyzeExercise({ ...base, role: 'hypertrophy', sets: [1, 2, 3].map(() => ({ type: 'normal' as const, weightKg: 90, reps: 8, completed: true, rpe: 8 })), previousExposures: [make('one', 3, 95), make('two', 2, 100), make('three', 1, 105)] })
+    const decision = analyzeExercise({ ...base, role: 'hypertrophy', sets: [1, 2, 3].map(() => ({ type: 'normal' as const, weightKg: 90, reps: 7, completed: true, rpe: 8 })), previousExposures: [make('one', 3, 100), make('two', 2, 100), make('three', 1, 140)] })
     expect(decision.candidates.map((candidate) => candidate.kind)).toContain('reduce-load')
   })
 })

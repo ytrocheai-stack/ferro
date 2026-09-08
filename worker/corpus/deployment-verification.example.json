@@ -1,0 +1,97 @@
+{
+  "schema": "coach-deployment-verification-v1",
+  "environment": "production",
+  "verifiedAt": "",
+  "corpusVersion": "",
+  "candidateFingerprint": "",
+  "approvalFingerprint": "",
+  "smokeFingerprint": "",
+  "allowlistAccountId": "",
+  "allowlistCount": 1,
+  "pwaVersion": "",
+  "workerVersion": "",
+  "pwaDeployedAt": "",
+  "workerDeployedAt": "",
+  "definitiveEnabledAt": "",
+  "readinessOk": false,
+  "temporaryActivation": {
+    "approved": false,
+    "startedAt": "",
+    "endedAt": "",
+    "allowlistAccountId": "",
+    "allowlistCount": 1,
+    "flags": {
+      "ENABLE_BETA": true,
+      "ENABLE_EMBEDDINGS": true,
+      "ENABLE_FLASH": true,
+      "ENABLE_PRO": false,
+      "ENABLE_RERANKING": false,
+      "ENABLE_PROVIDER_PROBE": false
+    }
+  },
+  "rollback": {
+    "temporaryFlagsOff": false
+  },
+  "canaryJourney": {
+    "fromPages": false,
+    "loginMfa": false,
+    "consent": false,
+    "analysis": false,
+    "remoteRetrieval": false,
+    "flashGeneration": false,
+    "citations": false,
+    "proposal": false,
+    "explicitApplication": false,
+    "persistence": false,
+    "replayIdempotent": false,
+    "cancellation": false,
+    "accountChangeRejected": false,
+    "abstention": false,
+    "offline": false,
+    "pwaUpdate": false,
+    "chromiumAndroid": false,
+    "webkitIphone": false
+  },
+  "requestGuards": {
+    "originValidated": false,
+    "jwtValidated": false,
+    "consentValidated": false,
+    "deviceValidated": false,
+    "unauthorizedOriginRejected": false,
+    "invalidJwtRejected": false,
+    "invalidConsentRejected": false,
+    "deviceMismatchRejected": false
+  },
+  "accountIsolation": {
+    "allowlistSingleAccount": false,
+    "unauthorizedAccountRejected": false
+  },
+  "flags": {
+    "ENABLE_BETA": false,
+    "ENABLE_EMBEDDINGS": false,
+    "ENABLE_FLASH": false,
+    "ENABLE_PRO": false,
+    "ENABLE_RERANKING": false,
+    "ENABLE_PROVIDER_PROBE": false
+  },
+  "monitoring24h": {
+    "complete": false,
+    "artificialTraffic": false,
+    "startedAt": "",
+    "endedAt": "",
+    "checks": {
+      "errors": false,
+      "reservations": false,
+      "consumption": false,
+      "abstentions": false,
+      "citations": false,
+      "cron": false
+    }
+  },
+  "rollbackEvidence": {
+    "configurationRestorable": false,
+    "indexedDbPreserved": false,
+    "migrationsAdditive": false,
+    "candidateDeletionScoped": false
+  }
+}

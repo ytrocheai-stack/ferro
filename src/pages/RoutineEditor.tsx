@@ -19,6 +19,8 @@ import {
 } from '../components/icons'
 import { parseDec, uid } from '../lib/format'
 import { REST_OPTIONS, restLabel } from '../lib/constants'
+import { invalidateStaleAdaptationJobsInTransaction } from '../lib/adaptationContext'
+import { getCoachAccountId } from '../lib/coachAccount'
 
 export default function RoutineEditor() {
   const { id } = useParams()
@@ -69,22 +71,25 @@ export default function RoutineEditor() {
   const save = async () => {
     if (!canSave) return
     const existing = isNew ? undefined : await db.routines.get(id!)
-    await db.routines.put({
-      id: existing?.id ?? uid(),
-      name: name.trim(),
-      sortOrder: existing?.sortOrder ?? Date.now(),
-      createdAt: existing?.createdAt ?? Date.now(),
-      exercises: exercises.map((exercise, index) => ({
-        ...exercise,
-        occurrenceId: exercise.occurrenceId ?? `${existing?.id ?? 'new'}:${index}:${exercise.exerciseId}`,
-        trainingRole: exercise.trainingRole ?? exercise.role ?? existing?.trainingRole ?? 'hypertrophy',
-        role: undefined,
-      })),
-      folderId,
-      revision: existing ? (dirty ? (existing.revision ?? 1) + 1 : existing.revision ?? 1) : 1,
-      trainingRole: exercises[0]?.trainingRole ?? exercises[0]?.role ?? existing?.trainingRole ?? 'hypertrophy',
-      loadIncrementKg: exercises[0]?.loadIncrementKg ?? existing?.loadIncrementKg ?? 2.5,
-      coachReviewed: confirmCoach,
+    await db.transaction('rw', [db.routines, db.workouts, db.adaptationJobs, db.adaptationProposals], async () => {
+      await db.routines.put({
+        id: existing?.id ?? uid(),
+        name: name.trim(),
+        sortOrder: existing?.sortOrder ?? Date.now(),
+        createdAt: existing?.createdAt ?? Date.now(),
+        exercises: exercises.map((exercise, index) => ({
+          ...exercise,
+          occurrenceId: exercise.occurrenceId ?? `${existing?.id ?? 'new'}:${index}:${exercise.exerciseId}`,
+          trainingRole: exercise.trainingRole ?? exercise.role ?? existing?.trainingRole ?? 'hypertrophy',
+          role: undefined,
+        })),
+        folderId,
+        revision: existing ? (dirty ? (existing.revision ?? 1) + 1 : existing.revision ?? 1) : 1,
+        trainingRole: exercises[0]?.trainingRole ?? exercises[0]?.role ?? existing?.trainingRole ?? 'hypertrophy',
+        loadIncrementKg: exercises[0]?.loadIncrementKg ?? existing?.loadIncrementKg ?? 2.5,
+        coachReviewed: confirmCoach,
+      })
+      await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
     })
     navigate('/', { replace: true })
   }

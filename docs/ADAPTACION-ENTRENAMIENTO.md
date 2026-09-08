@@ -1,179 +1,254 @@
 # Adaptación de entrenamiento v1 (beta cerrada)
 
-> Auditoría del repositorio: 2026-08-30. Estado real: código e infraestructura publicados y
-> comprobables remotamente. La beta cerrada **todavía no está habilitada**: el corpus real no está
-> indexado, la calidad RAG no está evaluada y todos los proveedores permanecen apagados.
+> Revisión del plan: 2026-08-30. **Correcciones verificadas por hallazgo; beta no aprobada para apertura.**
+> El checkout incluye cambios locales sin publicar. Las regresiones permanentes cubren la cola,
+> presupuesto, generación mixta, corpus, readiness e idempotencia; aún faltan gates remotos,
+> corpus aprobado, sesión real y pruebas en dispositivos.
+> Ver [auditoría y evidencia](AUDITORIA-COACH-2026-08-30.md).
 
-## Estado verificado
+## Objetivo e invariantes
 
-| Área | Estado real | Evidencia principal |
+Preparar un coach para un grupo privado de hasta cinco adultos, con corpus científico primero
+y sin gasto adicional. Abrir primero una cuenta; ampliar solo tras revisar fuentes, fallback y rollback.
+
+- Conservar IndexedDB `ferro`, claves `ferro-*`, identificadores existentes y ruta `/ferro/`.
+- Guardar pesos en kg; cualquier cambio de esquema debe ser aditivo.
+- El motor determinista heredado define candidatos cerrados. La IA no puede inventarlos ni modificar
+  sus valores; la capa de agentes con autonomía por dominio todavía no está integrada.
+- RIR es un registro explícito independiente de RPE; no se infiere ni se convierte automáticamente.
+- En el coach heredado cada modificación requiere confirmación; se preservan revisión, transacción y
+  snapshot completo. Esto no representa aún la política de autonomía futura.
+- No persistir el payload bruto, entrenamientos completos, feedback, prompts, JWT, correo ni nombre en
+  el backend. D1 sí conserva por siete días la respuesta derivada canónica —incluidos identificadores
+  de exposiciones comparables— para replay idempotente.
+- Mantener beta y proveedores apagados durante las correcciones. No llamar modelos si no se puede
+  garantizar que la operación se ajusta al presupuesto/límites de servicio disponibles sin gasto adicional.
+
+## Estado comprobado
+
+| Área | Estado del checkout | Limitación |
 |---|---|---|
-| Motor determinista | Implementado y probado localmente | `packages/adaptation-core` |
-| Datos offline-first | Dexie v5 aditivo y backup v5 | `src/db/db.ts`, `src/lib/backup.ts` |
-| Flujo de usuario | Feedback, cola, propuestas, confirmación y reversión | `src/pages/WorkoutDetail.tsx`, `src/lib/adaptation.ts` |
-| Autenticación | Clerk opcional en PWA y JWT/allowlist en Worker | `src/components/AuthControls.tsx`, `worker/src/index.ts` |
-| Worker | Auth, CORS, cuota 10/semana, idempotencia, retención y fallback | `worker/src/index.ts`, migraciones `0001`–`0003` |
-| RAG | Puertos, recuperación, importador como función y evaluación sintética | `worker/src/rag.ts`, `worker/src/evaluation.ts` |
-| NVIDIA | Adaptadores y modelos configurados; llamadas apagadas | `worker/wrangler.toml` |
-| Cloudflare real | Creado y desplegado | D1 remoto con migraciones aplicadas, índices Vectorize 768/1024 y Worker activo |
-| Corpus real | No importado | no hay manifiesto, chunks aprobados ni reporte de evaluación |
-| Beta privada | No habilitada | faltan corpus/evaluación, smoke autenticado y pruebas end-to-end del coach |
+| Motor compartido | Comparabilidad, candidatos cerrados y mediana de tres exposiciones | Faltan casos límite de caída y prescripción |
+| Persistencia local | Dexie v9, backup v9, propietario de coach, perfil, conversación, propuestas, transacciones y snapshots | Sincronización remota y cobertura histórica incompleta |
+| Contrato | Entrada/salida compartidas y reconciliación local | Falta canario CORS entre orígenes reales |
+| Aplicación | Candidato único como fuente de verdad, transacción y snapshot | Falta prueba visual completa de conflicto `stale` |
+| Consentimiento | Revocación aborta trabajos, invalida runs locales y revalida antes/después de esperas; `coachConsents` serializa aplicación entre pestañas | Falta sincronización remota |
+| Cola | Payload congelado, propietario persistente, filtros por cuenta, wake-up y temporizador de `nextRetryAt` | Falta coordinación entre pestañas |
+| Worker | JWT, allowlist, origen, beta, presupuesto real/conservador, concurrencia, 40 RPM D1, ledger de intentos durables y conversación privada vinculada | Falta verificar migraciones/recuperación en D1 remoto |
+| Generación | Flash/Pro comparten cobertura de accionables, unicidad, candidatos y citas; `maintain` se conserva | Falta taxonomía persistida de motivos de escalamiento |
+| Fuentes en UI | Autor/título/enlace cuando hay metadatos y citas coincidentes | Validación de respaldo y coherencia después de editar pendientes |
+| Corpus | Manifiesto versionado, namespace por vector, checkpoint y rollback con IDs del índice | Ninguna fuente aprobada; faltan fragmentos y operación remota |
+| Evaluación | Recall@5 y claims con respaldo; CLI exige 50 consultas, 2048 dimensiones e IDs del corpus | La evaluación real aún no existe |
+| Producción | TOML explícito conserva Worker, D1 e índices actuales | Este checkout no acredita el estado remoto ni su despliegue |
 
-### Comprobaciones remotas de esta revisión
+### Verificaciones de esta revisión
 
-- `main` apunta a `86115ed` y el workflow de GitHub Pages [`33299809907`](https://github.com/ytrocheai-stack/ferro/actions/runs/33299809907) terminó correctamente.
-- La PWA pública es `https://ytrocheai-stack.github.io/ferro/`; carga Clerk y el Worker configurados.
-- `GET /health` del Worker devuelve HTTP 200. Un análisis sin JWT devuelve HTTP 401, por lo que la
-  ruta alcanza el gate de autenticación de producción.
-- D1 `nextrep-adaptation` existe, tiene sus migraciones aplicadas y conserva las tablas operativas.
-  Los índices `nextrep-adaptation-768` y `nextrep-adaptation-eval-1024` existen.
-- Están configurados los nombres de los secretos Clerk, seudonimización y NVIDIA. Los flags de
-  embeddings, Flash, Pro, reranking y probe siguen en `false`.
+- `npm run check`: suite, lint, tipos, build y comprobación anti-secretos correctos; la suite pasó
+  96 pruebas en esta revisión.
+- `npm run test:worker`: 34/34 pruebas, incluidas propiedad de cola, decisiones mixtas, reserva
+  concurrente, presupuesto, readiness sin fragmentos, namespaces, rollback e integridad de la CLI.
+- `npm run test:e2e`: 12/12 casos generales; `playwright.config.ts` fuerza un build offline sin
+  Clerk/Worker para estos escenarios, mientras el workflow de publicación conserva las variables
+  públicas y el gate de autenticación. No cubren el recorrido del coach autenticado.
+- Los diagnósticos históricos en `.cache` se conservan como referencia local, pero la autoridad es la
+  suite permanente versionada. Detalles y límites en [AUDITORIA-COACH-2026-08-30.md](AUDITORIA-COACH-2026-08-30.md);
+  la bitácora está en [PLAN-SDD-COACH-2026-08.md](PLAN-SDD-COACH-2026-08.md).
+- PWA pública y `GET /health`: HTTP 200. No se renovó la comprobación remota de JWT real,
+  readiness autenticado, migraciones, Cron, flags ni presupuesto/créditos remotos.
+- No se desplegó ni se invocó NVIDIA. Los flags de los dos TOML locales siguen en `false`.
 
-La configuración fijada coincide, a la fecha de esta auditoría, con los catálogos oficiales de
-NVIDIA para
-[`deepseek-ai/deepseek-v4-flash-0731`](https://build.nvidia.com/deepseek-ai/deepseek-v4-flash-0731),
-[`deepseek-ai/deepseek-v4-pro-0813`](https://build.nvidia.com/deepseek-ai/deepseek-v4-pro-0813) y
-[`nvidia/nemotron-3-embed-1b`](https://build.nvidia.com/models?q=embed). Son endpoints gratuitos
-de prototipo/evaluación, no una garantía de capacidad o continuidad para producción.
+El build avisa de un chunk principal de unos 583 kB minificados. Es una tarea de rendimiento
+pendiente; no sustituye los bloqueos funcionales anteriores.
 
-## Alcance ya implementado
+## Qué existe y qué falta por fase
 
-- `packages/adaptation-core`: tipos serializables, comparabilidad por ocurrencia/rol/rango/tipo de
-  serie/RPE, doble progresión, estancamiento, confianza, e1RM secundario y lista cerrada de
-  candidatos. No importa React, Dexie ni APIs de red.
-- `src`: `RoutineExercise` con rol/incremento, rutinas versionadas, workouts con snapshot y
-  feedback, Dexie v5, migraciones v3/v4→v5, backup compatible con v1–v5, colas offline recuperables,
-  propuestas inmutables editables y snapshots completos para aplicar/revertir.
-- `worker`: `/health`, `/v1/adaptations/analyze`, `/v1/adaptations/events` y probe protegido;
-  Clerk JWT con `authorizedParties`, allowlist, HMAC-SHA256, CORS exacto, cuota semanal,
-  idempotencia ligada al hash del request, retención y circuit breaker por proveedor.
-- Embeddings: validación del vector de 2048 dimensiones, prefijo configurable y renormalización L2;
-  `passage` al indexar y `query` al recuperar; índices versionados separados para 768/1024.
-- Recuperación: 20 resultados iniciales, hasta ocho fragmentos y máximo dos por fuente. Los chunks
-  se tratan como contenido no confiable y no se mezclan con instrucciones del sistema.
-- Aplicación local: exige decisión para todas las propuestas activas, compara la revisión base,
-  marca el análisis completo como `stale` ante conflicto y revierte desde un snapshot completo.
+### 1. PWA → Worker → propuesta
 
-Las rutinas anteriores se normalizan con `revision: 1`, rol `hypertrophy`, incremento `2.5` kg y
-`coachReviewed: false`. El usuario debe revisar cada rutina antes de que pueda generar evidencia
-para el coach. El nombre de IndexedDB sigue siendo `ferro`, las claves `ferro-*` no cambiaron y los
-pesos continúan almacenándose en kilogramos.
+El esquema de respuesta ya acepta evidencia, advertencias, ocurrencia y fuentes. La PWA recalcula
+los candidatos y comprueba que la selección pertenece a la ocurrencia. Se conserva confirmación,
+detección de revisión obsoleta y reversión desde un snapshot.
 
-## Diferencias pendientes respecto al diseño objetivo
+Ya están corregidos CORS, el contrato con historia, los objetivos por serie, la presentación tras
+editar, el payload congelado, la cancelación, el propietario por cuenta y el scheduler de reintentos.
+Perfil aún debe distinguir
+consentimiento local, autorización remota, beta cerrada, falta de conexión y requisitos pendientes
+antes de la apertura.
 
-Estas partes existen solo parcialmente o requieren corrección antes de llamar a la fase completa:
+La regla de caída ya compara con la mediana de tres exposiciones y cubre caída simultánea de
+carga/repeticiones. No debe seguir documentándose como «comparación con la exposición anterior».
+Faltan pruebas de cambios compensados de carga/repeticiones y sesiones aisladas.
 
-1. **Detección de caída.** La política actual compara la exposición con la inmediatamente anterior,
-   no contra la mediana de las tres comparables previas. Además, una caída simultánea de carga y
-   repeticiones puede no clasificarse. Hay que corregirlo y añadir casos de prueba límite.
-2. **Selección/aplicación de candidato.** La UI crea correctamente una nueva revisión al editar,
-   pero la función de dominio acepta un `candidateId` opcional y después aplica el candidato ya
-   almacenado en la propuesta. Conviene eliminar esa ambigüedad o aplicar exactamente la selección
-   validada.
-3. **Escalación a Pro.** El router contempla baja recuperación, contradicción e invalidez de Flash,
-   pero el flujo real valida el JSON después del routing; una respuesta inválida de Flash no llega
-   hoy a Pro. `requiresEscalation` tampoco controla una segunda llamada. Un 429/timeout sí cae, de
-   forma correcta, al resultado determinista sin usar Pro.
-4. **Reranking.** Existe el puerto y el feature flag, no un adaptador operativo ni evidencia que
-   justifique activarlo.
-5. **Telemetría.** El esquema permite latencia, tokens y errores, pero el adaptador de generación
-   solo devuelve texto: los tokens quedan sin poblar y faltan códigos de fallo consistentes por
-   proveedor. No debe añadirse ningún payload de entrenamiento para resolverlo.
-6. **Health/readiness.** `/health` solo confirma que el Worker responde y la versión de política;
-   no verifica bindings, índice, proveedor ni corpus. El probe autenticado informa flags/modelos,
-   pero tampoco constituye un smoke completo.
-7. **Importación RAG.** `importCorpus` es una función probada con fixtures; todavía no hay CLI o job
-   operable, reanudación/checkpoint, lotes de hasta 1.000 vectores ni validación explícita del límite
-   de 10 KiB de metadata por vector. El upsert único actual no sirve para un corpus grande. Estos
-   límites constan en la [documentación oficial de Vectorize](https://developers.cloudflare.com/vectorize/platform/limits/).
-8. **Evaluación.** Los fixtures actuales son sintéticos y de cuatro dimensiones. Faltan consultas
-   etiquetadas del dominio, negativos difíciles, comparación 768/1024 y reporte reproducible.
-9. **Citas en UI.** La PWA muestra IDs de cita y algunos IDs internos de ejercicio; falta resolverlos
-   a autor/título/URL y probar que cada afirmación visible tenga una fuente válida.
-10. **Privacidad y pruebas de flujo.** Falta publicar la política de privacidad solicitada y crear
-    pruebas E2E del recorrido Clerk → análisis → confirmación → stale/reversión. Las pruebas E2E
-    actuales cubren la PWA general, no el coach.
-11. **Rendimiento del cliente.** El build pasa, pero Vite avisa que el chunk principal supera
-    500 KiB minificado. No bloquea la fase local; conviene medir arranque/caché y separar Clerk o
-    código adaptativo antes de ampliar la beta.
+### 2. Privacidad y operación
 
-## Plan por fases restante
+Existen consentimiento versionado, autenticación Clerk, allowlist, gate de beta y un presupuesto
+de consumo por tokens con concurrencia limitada. D1 almacena HMAC/identificadores operativos,
+reserva de presupuesto, estados de idempotencia, la respuesta canónica derivada durante siete días,
+telemetría y corpus; no el payload bruto de entrenamiento.
+La retención de telemetría está fijada en 30 días y el Cron declarado es `17 3 * * *`.
 
-### Fase 1 — cerrar la autoridad determinista
+Quedan sincronización completa de datos por cuenta, coordinación multi-pestaña, recuperación de
+reservas abandonadas y verificaciones reales de D1/Cron. Readiness autenticado prueba ahora consultas D1,
+Vectorize con al menos un fragmento y coherencia del corpus activo, sin modelos. El aviso de privacidad
+declara la retención de la respuesta derivada y el procesamiento transitorio por proveedores; ambos
+deben revisarse antes de datos reales.
 
-- Corregir la regla de caída contra la mediana de tres exposiciones y cubrir caídas combinadas.
-- Unificar el contrato de selección/aplicación y añadir pruebas de concurrencia, edición, stale y
-  reversión para varias propuestas del mismo análisis.
-- Añadir fixtures históricos/migraciones que prueben upgrades reales v1→v5 y backups v1–v5.
+### 3. Corpus científico y evaluación
 
-**Gate:** el mismo input produce el mismo candidato en PWA y Worker; ningún camino permite aplicar
-un valor que no pertenezca a la lista cerrada recalculada.
+La propuesta inicial mantiene el consenso de hipertrofia de IUSCA y la revisión sobre
+autorregulación de carga/volumen. La auditoría identifica correcciones bibliográficas y enlaces
+a las licencias declaradas por las revistas. La revisión enlazada es de Hickmott, Chilibeck, Shaw y
+Butcher (2022); el manifiesto ya refleja esa autoría y la fecha de publicación, manteniendo la
+fuente sin aprobar hasta revisar permisos.
 
-### Fase 2 — completar el Worker sin proveedores
+Jeff Nippard, Renaissance Periodization y Dr. de la Rosa siguen seleccionados. Sus transcripciones
+solo se incorporarán con licencia compatible o permiso documentado, sin bloquear el corpus científico.
 
-- Terminar la escalación por salida inválida, el uso de `requiresEscalation`, timeouts y errores
-  estructurados; mantener el fallback determinista para 429/timeout.
-- Añadir telemetría de tokens/códigos sin registrar payloads y readiness autenticado.
-- Probar CORS, JWT real de una instancia Clerk de prueba, allowlist, cuota, replay concurrente,
-  retención y aislamiento de secretos.
-- Publicar la política de privacidad y el texto de consentimiento de la beta.
+Completar aprobación y localización por fragmento, metadatos y versión; ejecutar la CLI/importador
+en un entorno autorizado y validar rollback. Se han añadido lotes de hasta 1.000, checkpoint
+persistente, namespaces, aislamiento de filas y validación de 10 KiB de metadata.
 
-**Gate:** suite local y smoke remoto con proveedores apagados; ningún resumen aparece en D1/logs.
+Las 50 consultas siguen siendo una plantilla sin chunks etiquetados ni negativos difíciles
+verificados. `corpus:evaluate` exige las 50 consultas, vectores 2048, IDs pertenecientes al corpus,
+claims no vacíos y respaldo explícito; rechaza versiones que no coinciden. El gate exige Recall@5 ≥80%
+y precisión de las afirmaciones. Sin citas o claims no se aprueba. Mantener 512
+como dimensión base; cualquier comparación con 1024 exige mejorar al menos tres puntos
+porcentuales sin deteriorar precisión. Evaluar embeddings por separado, con RAG de usuarios apagado
+y presupuesto garantizado.
 
-### Fase 3 — corpus y RAG evaluable
+### 4. Generación, publicación y apertura
 
-- Conservar la estrategia de videos y la selección de creadores propuesta; esta tarea no las cambia.
-- Definir un manifiesto autorizado por chunk con licencia/permiso, nivel de evidencia, idioma, URL,
-  fecha, timestamp y `corpusVersion`.
-- Convertir el importador en una herramienta reanudable, con lotes, límites y reporte de errores.
-- Construir el set de evaluación real y medir Recall@5/precisión de citas en 768 y 1024.
+Ya hay fallback determinista ante errores de generación, validación completa de Flash/Pro por
+ocurrencia accionable y deadline también para la lectura completa de la respuesta. Pro nunca sustituye a
+Flash ante 429, timeout o circuito abierto. Si el consumo real supera el límite, la respuesta vuelve a
+determinista; si el proveedor no informa usage, se cobra la estimación reservada. Falta una taxonomía
+persistida de motivos de escalamiento y ejecución con proveedor real.
 
-**Gate:** Recall@5 ≥80% y precisión de citas ≥90%. Mantener 768 salvo que 1024 mejore al menos
-3 puntos porcentuales absolutos. Nunca mezclar versiones/dimensiones/normalizaciones en un índice.
+Tras las correcciones: publicar primero la PWA compatible y después el Worker, con beta cerrada;
+comprobar el flujo con datos ficticios. Activar embeddings, Flash y Pro por separado tras sus
+pruebas. Reranking permanece apagado. Procedimiento en [DESPLIEGUE.md](DESPLIEGUE.md).
 
-### Fase 4 — integración NVIDIA controlada
+## Criterios de apertura pendientes
 
-- Probar primero embeddings, después Flash y al final Pro, activando un flag por vez.
-- Verificar salida estructurada, límites reales, latencia, costo/cuota y degradación ante fallos.
-- Mantener Pro solo para ambigüedad permitida y dejar explicación avanzada pendiente ante 429 o
-  timeout de Flash.
+- Migraciones 0001–0008 y backups v1–v7; ejercicios repetidos; candidatos alterados; varias propuestas;
+  edición concurrente; aplicación y reversión sin pérdida de datos.
+- JWT válido/vencido, CORS real de navegador, allowlist, consentimiento, presupuesto, reserva concurrente/
+  expirada, cancelación, retención/Cron y revisión de artefactos/telemetría.
+- Clerk → consentimiento → rutina revisada → entrenamiento → análisis → aceptar/editar/rechazar
+  → conflicto/reversión en Chromium Android y WebKit iPhone, más sesión real con datos ficticios.
+- Corpus aprobado, evaluación reproducible, presupuesto sin gasto adicional, fallback y rollback.
+- Prueba en PWA instalada y aprobación del responsable antes de la primera cuenta.
 
-**Gate:** pruebas canarias con datos ficticios y presupuesto acotado; cero secretos en el bundle.
+## Responsabilidades
 
-### Fase 5 — beta privada y observación
+El desarrollo incluye correcciones, pruebas técnicas, configuración, CLI/importación, evaluación
+y despliegues. No corresponde al usuario implementar el importador ni ejecutar el trabajo técnico.
 
-- Ejecutar E2E del flujo completo con menos de seis adultos sanos y escenarios de dolor/fatiga.
-- Mostrar fuentes legibles, consentimiento y fallback offline; no diagnosticar lesiones.
-- Activar usuarios uno por uno y revisar semanalmente rechazos, ediciones, stales y fallos.
+El usuario debe elegir participantes y proporcionar sus IDs de Clerk; completar login/MFA sin
+compartir JWT ni contraseñas; revisar fuentes y consentimiento y aportar permisos de videos cuando
+proceda; probar la PWA instalada tras exportar backup; revisar rol, incremento y RPE/RIR de sus rutinas;
+y autorizar el primer recorrido y la apertura del grupo.
 
-**Gate:** aceptación manual del responsable, rollback probado y capacidad de apagar cualquier
-proveedor sin cambiar dominio ni UI.
+Iniciar sesión no garantiza una recomendación: hacen falta historial comparable suficiente,
+rutina revisada, consentimiento vigente y servicio autorizado.
 
-## Acciones manuales requeridas
+## Referencia funcional del agente original — laboratorio v1
 
-1. Entregar los IDs exactos de los usuarios beta y ejecutar un smoke con un JWT real de Clerk,
-   comprobando `authorizedParties`, allowlist y el origen de GitHub Pages.
-2. Ejecutar las pruebas remotas de CORS, cuota, idempotencia, replay, retención y rollback con datos
-   ficticios; comprobar también el Cron diario.
-3. Revisar legalmente el corpus y proporcionar los archivos/chunks y metadatos autorizados. No se
-   ha modificado la selección de creadores ni la estrategia de videos.
-4. Convertir el importador en una operación reanudable, indexar el corpus aprobado y producir el
-   reporte Recall@5/precisión de citas antes de activar embeddings.
-5. Aprobar el texto de privacidad/consentimiento y decidir la retención operativa antes del primer
-   análisis real.
-6. Activar providers de forma gradual: embeddings, Flash y después Pro. Mantener reranking apagado
-   hasta contar con evidencia de mejora.
+Esta sección convierte la especificación del coach en una referencia comprobable. Cada estado tiene
+un significado distinto:
 
-## Verificación local
+| Estado | Significado |
+|---|---|
+| Objetivo acordado | Comportamiento que se quiere validar con datos ficticios. |
+| Implementación actual | Código disponible en este checkout; no implica que esté conectado a la PWA. |
+| Evaluado en laboratorio | Cubierto por escenarios congelados y una rúbrica reproducible. |
+| Disponible en producción | Solo puede marcarse tras proveedores, corpus, permisos, despliegue y smoke autenticado. |
 
-`npm run check` ejecuta lint, typecheck de PWA y Worker, pruebas unitarias/integración y build. El
-build incluye `scripts/check-public-bundle.mjs`, que rechaza nombres de secretos o claves NVIDIA en
-los artefactos públicos. `npm run test:e2e` se ejecuta aparte y, hasta añadir los casos indicados,
-no valida el coach adaptativo.
+El recorrido canónico es:
 
-Resultado de esta auditoría: `npm run check` pasó con 47/47 pruebas y `npm run test:e2e` pasó con
-12/12 casos en Chromium Android y WebKit iPhone. El build también pasó la comprobación de que el
-bundle público no contiene secretos ni claves NVIDIA. La verificación remota de esta revisión cubre
-la publicación, `/health`, el gate de auth sin token, D1, migraciones, índices y nombres de secretos;
-no sustituye todavía el smoke autenticado ni la evaluación del corpus real.
+`evento → contexto versionado → métricas verificables → consulta de evidencia → decisión del agente → validación → propuesta o abstención`
+
+La IA decide el ajuste deportivo; el código valida la forma del resultado, unidades kg, referencias,
+restricciones, cuenta, permisos y vigencia del contexto. Una propuesta nunca se aplica en el
+laboratorio y la ausencia del proveedor conserva el plan vigente. El laboratorio usa únicamente
+datos ficticios, no abre IndexedDB, no escribe D1/Vectorize y no invoca proveedores.
+
+### Matriz de los 26 casos
+
+Las pruebas `agent-lab` son unitarias y deterministas. `D` significa escenario de desarrollo de la
+primera entrega; `A` significa los dos escenarios de aceptación (satisfactorio/adverso) congelados
+por caso; `R` y `S` son suites de recuperación y seguridad. Los casos 2, 4, 7–11, 16, 17, 20, 21 y
+26 quedan preparados como rutas posteriores y no se presentan como disponibles en producción.
+
+| # | Disparador | Datos necesarios | Comportamiento esperado y límite | Satisfactorio / adverso | Prueba |
+|---:|---|---|---|---|---|
+| 1 | `session-finished` | Sesión, prescripción, series, RIR, historial | Proponer progresión pequeña; no aplicar ni diagnosticar dolor | Rendimiento en límite / dolor declarado | `A01`, `D01` |
+| 2 | `session-prepared` o consulta previa | Energía, RIR, objetivos y prescripción del día | Pedir datos faltantes; no anticipar una carga con evidencia insuficiente | RIR completo / RIR ausente | `A02` |
+| 3 | `session-finished` | Tres exposiciones comparables y tendencia | Identificar estancamiento como estimación; no forzar volumen | Tendencia estable / dolor o sesión incompleta | `A03`, `D03` |
+| 4 | `set-completed` | Serie recién completada, objetivo y RIR | Sugerencia educativa entre series, sin reescribir la rutina | RIR válido / objetivo contradictorio | `A04` |
+| 5 | `session-finished` | Récords de peso, repeticiones y e1RM | Informar récord y distinguir cálculo de hecho observado | Récord nuevo / dato insuficiente | `A05`, `D05` |
+| 6 | `session-finished` | Plan futuro completo y catálogo | Generar siguiente sesión con orden y objetivos por serie | Plan válido / sesión no terminada | `A06`, `D06` |
+| 7 | `nutrition-logged` | Ingesta, objetivo, tendencia de peso y adherencia | Proponer calorías como estimación; no convertirla en prescripción médica | Tendencia estable / objetivo contradictorio | `A07` |
+| 8 | `nutrition-logged` | Variación de peso, ventana temporal y adherencia | Abstenerse de recortar más ante pérdida acelerada | Pérdida dentro de rango / pérdida abrupta | `A08` |
+| 9 | `nutrition-logged` | Proteína registrada, objetivo y comidas | Pedir aclaración si la adherencia no se puede medir | Registro suficiente / días faltantes | `A09` |
+| 10 | Consulta técnica | Ejercicio, objetivo, fragmentos RAG aprobados | Responder técnica educativa con citas; nunca analizar videos personales | Fragmento aplicable / sin evidencia | `A10`, `S01` |
+| 11 | `equipment-unavailable` | Catálogo, equipo disponible y ocurrencia | Proponer sustitución compatible; nunca inventar un ejercicio | Alternativa compatible / catálogo vacío | `A11` |
+| 12 | `session-finished` | Volumen por grupo, recuperación y tendencia | Marcar volumen problemático como señal, no como diagnóstico | Recuperación suficiente / fatiga o dolor | `A12`, `D12` |
+| 13 | `session-finished` | Series efectivas, historial y objetivos | Proponer ajuste de volumen limitado por contexto | Tendencia estable / RIR ausente | `A13`, `D13` |
+| 14 | Consulta de evidencia | Pregunta, corpus aprobado y localización | Research Agent recupera evidencia; sin fuente, abstención de la afirmación | Fuente aplicable / cita inexistente | `A14`, `D14`, `R01` |
+| 15 | Resultado de agente | Observaciones, estimaciones, evidencia y ChangeSet | Explicar la decisión en español y separar hechos de inferencias | Evidencia trazable / cita inválida | `A15`, `D15` |
+| 16 | Consulta comparativa | Dos o más fuentes aprobadas y población | Comparar alcance y limitaciones; no elegir por autoridad informal | Fuentes comparables / poblaciones distintas | `A16` |
+| 17 | Consulta con conflicto | Fuentes, fechas, población y claims | Exponer desacuerdo y pedir revisión; no fabricar consenso | Conflicto explícito / fuente inaplicable | `A17` |
+| 18 | Consulta de investigación | Nivel de evidencia, fecha y aplicación | Priorizar evidencia científica pertinente; conservar incertidumbre | Revisión aplicable / creador sin permiso | `A18`, `D18` |
+| 19 | Evento de entrenamiento | Contexto de entrenamiento y herramientas permitidas | Training Agent calcula métricas y propone libremente dentro del contrato | Historial completo / permisos insuficientes | `A19`, `D19` |
+| 20 | Evento de nutrición | Diario ficticio, objetivos y restricciones | Nutrition Agent posterior; mientras tanto no crear cambio de nutrición | Diario suficiente / gasto o datos faltantes | `A20` |
+| 21 | Consulta técnica | Ejercicio y pregunta textual | Técnica educativa mediante RAG, sin análisis de videos personales | Pregunta concreta / petición de video | `A21`, `S04` |
+| 22 | Pregunta de investigación | Corpus aprobado y consulta | Research Agent devuelve fragmentos y localización exacta | Fragmentos relevantes / corpus en propuesta | `A22`, `D22` |
+| 23 | `session-finished` | Evento, contexto, historial, plan, permisos y evidencia | Orquestador coordina Training + Research y valida salida discriminada | Propuesta trazable / contexto obsoleto | `A23`, `D23` |
+| 24 | `session-finished` | Identidad del evento y sesión terminada | Ejecutar una sola vez de forma idempotente en el laboratorio | Evento nuevo / evento repetido | `A24`, `D24` |
+| 25 | `session-finished` | Sesión completa, feedback y métricas | Analizar al terminar; si falla el proveedor, mantener el plan | Feedback completo / sesión incompleta | `A25`, `D25` |
+| 26 | Eventos de entrenamiento y nutrición | Consentimiento global, cuentas, sincronización y política | Integración autónoma posterior; esta fase solo valida contratos, no aplica | Permisos completos / consentimiento revocado | `A26` |
+
+La suite de aceptación contiene exactamente 52 escenarios (uno satisfactorio y uno adverso por
+caso) y se ejecuta tres veces. La rúbrica puntúa fidelidad al contexto, evidencia, coherencia y
+manejo de incertidumbre. Los resultados simulados llevan `qualityEvidence: false`: sirven para
+depurar instrucciones, no para afirmar calidad real.
+
+### Contrato del laboratorio
+
+`packages/adaptation-core` conserva los contratos preparatorios y ahora representa `futurePlan`:
+sesiones futuras completas, orden de ejercicios y objetivos por serie. `packages/agent-lab` expone
+un ejecutor reutilizable que recibe evento, contexto, perfil ficticio, historial, planificación,
+restricciones, catálogo y permisos simulados. Sus salidas son discriminadas:
+
+`propose(ChangeSet) | maintain | ask | abstain | unavailable`.
+
+`propose` incluye observaciones, estimaciones, evidencia y un `ChangeSet`; `ask` puede probar una
+continuación ficticia; `abstain` cubre contexto obsoleto, permisos o datos insuficientes; y
+`unavailable` cubre proveedor o presupuesto no disponible. La PWA no consume este módulo todavía.
+
+### Corpus y evaluación
+
+El manifiesto actual conserva cinco fuentes propuestas, ninguna aprobada y cero fragmentos. La
+propuesta científica inicial queda limitada al posicionamiento IUSCA y a Hickmott et al.; los tres
+creadores permanecen fuera del manifiesto aprobado hasta resolver derechos. No se importan
+transcripciones sin permisos. La importación futura usará embeddings Nemotron de 2048 dimensiones,
+prefijos normalizados 512/1024 y artefactos locales versionados por huella.
+
+La evaluación RAG conserva el universo exigido de 50 consultas y añade diez consultas separadas sin
+respuesta o con instrucciones maliciosas. Las etiquetas esperadas viven fuera de los prompts y no
+se generan a partir de las respuestas del agente. El gate requiere Recall@5 ≥80 %, precisión de
+citas ≥90 %, cero violaciones de restricciones y tres repeticiones; 1024 solo se adopta si mejora
+al menos tres puntos sin bajar la precisión. Hasta completar permisos, fragmentos, indexado y
+revisión, el corpus no está disponible en producción.
+
+### Comandos reproducibles
+
+```text
+npm run agent:lab       # ejecuta el primer escenario de desarrollo con datos ficticios
+npm run agent:evaluate  # 52 escenarios, tres repeticiones y reporte de variabilidad
+npm run agent:rag       # valida el universo RAG local; no invoca embeddings ni proveedores
+npm test -- --run packages/agent-lab/src/index.test.ts
+```
+
+Estos comandos no escriben en servicios remotos, no leen IndexedDB y no cuentan como evaluación de
+calidad de un modelo real. La fase termina con evidencia reproducible de decisión; no abre la beta.

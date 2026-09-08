@@ -22,6 +22,7 @@ import { APP_VERSION, DATASET_URL, REST_OPTIONS, restLabel } from '../lib/consta
 import { useLocalDateKey } from '../lib/useLocalDateKey'
 import { undoImport, type ImportSummary } from '../lib/hevyImport'
 import { useAuth } from '@clerk/react'
+import { COACH_CONSENT_VERSION, getCoachConsent, grantCoachConsent, revokeCoachConsent, saveCoachProfile, type CoachConsent } from '../lib/coachConsent'
 
 const weekKey = (d: Date | number) => format(startOfWeek(d, { weekStartsOn: 1 }), 'yyyy-MM-dd')
 
@@ -114,6 +115,8 @@ export default function Profile() {
 
       <InstallCard />
       <SettingsCard />
+      <CoachBetaCard />
+      <CoachProfileCard />
       <CoachPrivacyCard />
       <DataCard workoutsCount={workouts.length} />
 
@@ -131,10 +134,66 @@ export default function Profile() {
   )
 }
 
+function CoachProfileCard() {
+  const { isSignedIn, userId } = useAuth()
+  const stored = useLiveQuery(async () => userId ? await db.coachProfiles.get(userId) : undefined, [userId], undefined)
+  const [population, setPopulation] = useState('')
+  const [goals, setGoals] = useState('')
+  const [pain, setPain] = useState('')
+  const [equipment, setEquipment] = useState('')
+  const [confirmed, setConfirmed] = useState(false)
+  useEffect(() => {
+    if (!stored) return
+    setPopulation(stored.population.join(', ')); setGoals(stored.goals.join(', ')); setPain(stored.injuriesOrPain.join(', ')); setEquipment(stored.unavailableEquipment.join(', ')); setConfirmed(stored.populationConfirmed)
+  }, [stored])
+  if (!isSignedIn || !userId || !import.meta.env.VITE_ADAPTATION_WORKER_URL) return null
+  const split = (value: string) => value.split(',').map((item) => item.trim()).filter(Boolean)
+  const save = async () => {
+    await saveCoachProfile({ id: userId, ownerId: userId, population: split(population), populationConfirmed: confirmed, goals: split(goals), injuriesOrPain: split(pain), unavailableEquipment: split(equipment), excludedExercises: stored?.excludedExercises ?? [], nutritionConstraints: stored?.nutritionConstraints ?? [] })
+  }
+  return <section className="card mt-4 px-4 py-3" aria-labelledby="coach-profile-title"><h2 id="coach-profile-title" className="text-sm font-bold">Contexto mínimo del coach</h2><p className="mt-1 text-xs leading-relaxed text-muted">Solo se usará si lo confirmas. Escribe población aplicable (por ejemplo, adulto general), objetivos, dolor/restricciones y equipo no disponible. “No informado” no significa “sin restricciones”.</p><label className="mt-3 block text-xs font-semibold" htmlFor="coach-population">Población confirmada</label><input id="coach-population" className="input mt-1 w-full" value={population} onChange={(event) => setPopulation(event.target.value)} placeholder="adult-general" /><label className="mt-2 flex items-center gap-2 text-xs"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> Confirmo que la población escrita es aplicable</label><label className="mt-3 block text-xs font-semibold" htmlFor="coach-goals">Objetivos</label><input id="coach-goals" className="input mt-1 w-full" value={goals} onChange={(event) => setGoals(event.target.value)} placeholder="fuerza, adherencia" /><label className="mt-2 block text-xs font-semibold" htmlFor="coach-pain">Dolor o restricciones</label><input id="coach-pain" className="input mt-1 w-full" value={pain} onChange={(event) => setPain(event.target.value)} placeholder="dejar vacío si no informado" /><label className="mt-2 block text-xs font-semibold" htmlFor="coach-equipment">Equipo no disponible</label><input id="coach-equipment" className="input mt-1 w-full" value={equipment} onChange={(event) => setEquipment(event.target.value)} placeholder="barra, discos" /><button className="btn btn-surface mt-3 w-full py-2 text-xs" type="button" onClick={() => void save()}>Guardar contexto del coach</button></section>
+}
+
 function CoachPrivacyCard() {
   const { isSignedIn } = useAuth()
   if (!isSignedIn || !import.meta.env.VITE_ADAPTATION_WORKER_URL) return null
-  return <div className="card mt-4 px-4 py-3 text-xs leading-relaxed text-muted"><div className="pb-1 text-sm font-bold text-text">Privacidad del coach adaptativo</div>Las rutinas, entrenos y feedback se guardan primero en este dispositivo. Para generar propuestas se envía al Worker únicamente la rutina mínima y las exposiciones necesarias; el Worker puede consultar NVIDIA de forma transitoria. El backend no guarda resúmenes, series, feedback, correo ni nombre.</div>
+  return <div className="card mt-4 px-4 py-3 text-xs leading-relaxed text-muted"><div className="pb-1 text-sm font-bold text-text">Privacidad del coach adaptativo</div>Las rutinas, entrenos y feedback se guardan primero en este dispositivo. Para generar propuestas se envía al Worker únicamente la rutina mínima y las exposiciones necesarias. El Worker usa un identificador derivado de tu cuenta y conserva durante un máximo de siete días la respuesta canónica del análisis —incluye ejercicio, carga, repeticiones, decisiones, citas e identificadores de exposiciones comparables— para repetir de forma idempotente una solicitud equivalente sin regenerarla. La telemetría operativa se conserva hasta 30 días. NVIDIA puede procesar la solicitud de forma transitoria; no guardamos JWT, correo, nombre, prompt bruto ni el payload original completo.</div>
+}
+
+function CoachBetaCard() {
+  const { isSignedIn, userId } = useAuth()
+  const jobs = useLiveQuery(() => db.adaptationJobs.where('ownerId').equals(userId ?? '__no-account__').toArray(), [userId], [])
+  const routines = useLiveQuery(() => db.routines.toArray(), [], [])
+  const [consent, setConsent] = useState<CoachConsent | null>(() => getCoachConsent(userId))
+  useEffect(() => setConsent(getCoachConsent(userId)), [userId])
+  const configured = Boolean(import.meta.env.VITE_ADAPTATION_WORKER_URL)
+  const reviewed = routines.filter((routine) => routine.coachReviewed).length
+  const pending = jobs.filter((job) => job.status === 'pending' || job.status === 'processing').length
+
+  if (!configured) return null
+  return (
+    <section className="card mt-4 px-4 py-3" aria-labelledby="coach-beta-title">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 id="coach-beta-title" className="text-sm font-bold">Coach adaptativo · beta cerrada</h2>
+          <p className="pt-1 text-xs text-muted">El coach está apagado hasta que lo actives expresamente en esta cuenta y dispositivo.</p>
+        </div>
+        <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${consent ? 'bg-success/10 text-success' : 'bg-surface-2 text-muted'}`}>{consent ? 'Activo' : 'Apagado'}</span>
+      </div>
+      <div className="mt-3 space-y-1 text-xs text-muted">
+        <p>{isSignedIn ? '✓ Sesión iniciada' : '• Inicia sesión para solicitar acceso'}</p>
+        <p>{consent ? '✓ Consentimiento vigente' : '• Falta aceptar el consentimiento de beta'}</p>
+        <p>{reviewed} rutina{reviewed === 1 ? '' : 's'} revisada{reviewed === 1 ? '' : 's'} · {pending} solicitud{pending === 1 ? '' : 'es'} pendiente{pending === 1 ? '' : 's'}</p>
+      </div>
+      {isSignedIn && userId && !consent && (
+        <div className="mt-3 rounded-xl bg-surface-2 px-3 py-2.5 text-xs leading-relaxed text-muted">
+          Al activar, autorizas enviar de forma transitoria al Worker tu perfil editable, objetivos, rutinas, conversación y hasta seis entrenamientos recientes terminados de esta cuenta. Los datos no se comparten con otras cuentas; puedes desactivar el coach cuando quieras. Versión de consentimiento: {COACH_CONSENT_VERSION}. Si cambia esta versión tendrás que aceptar de nuevo.
+          <button className="btn btn-primary mt-2 w-full py-2" type="button" onClick={() => setConsent(grantCoachConsent(userId))}>Aceptar y activar coach</button>
+        </div>
+      )}
+      {consent && <button className="btn btn-surface mt-3 w-full py-2 text-xs" type="button" onClick={() => { revokeCoachConsent(consent.userId); setConsent(null) }}>Desactivar coach y detener nuevos envíos</button>}
+    </section>
+  )
 }
 
 /** Guía de instalación para iOS: ahí no existe `beforeinstallprompt`, así que sin este aviso el
@@ -206,6 +265,9 @@ function SettingsCard() {
       </Row>
       <Row label="Registrar RPE por serie">
         <Toggle checked={s.trackRpe} onChange={(v) => s.update({ trackRpe: v })} />
+      </Row>
+      <Row label="Registrar RIR por serie">
+        <Toggle checked={s.trackRir} onChange={(v) => s.update({ trackRir: v })} />
       </Row>
       <Row label="Objetivo semanal de entrenos">
         <Select

@@ -5,7 +5,7 @@ Registro de entrenamientos y nutrición personal, inspirado en Hevy. Es una PWA 
 ## Qué incluye
 
 - Biblioteca de ejercicios con imágenes/GIFs, catálogo complementario de wger y ejercicios personalizados.
-- Rutinas, superseries, calentamientos, RPE, cardio, progresión y PRs recalculados cronológicamente.
+- Rutinas, superseries, calentamientos, RPE/RIR, cardio, progresión y PRs recalculados cronológicamente.
 - Historial editable, medidas, fotos y análisis comparativo de carga, constancia, fuerza y dosis muscular.
 - Diario nutricional con alimentos base, USDA FoodData Central, Open Food Facts, escáner y platos.
 - Tendencias nutricionales con adherencia, cobertura, gasto energético estimado y confianza basada en datos.
@@ -15,12 +15,40 @@ Registro de entrenamientos y nutrición personal, inspirado en Hevy. Es una PWA 
 
 ## Coach adaptativo (beta cerrada)
 
-La primera fase del coach está integrada y publicada, pero permanece desactivada para la beta privada.
-Incluye un motor determinista compartido, propuestas locales confirmables, autenticación con Clerk y un
-Worker aislado para RAG/explicaciones. La infraestructura Cloudflare ya está creada y el Worker responde,
-pero todavía no existe un corpus real indexado ni una evaluación de recuperación representativa; los
-providers NVIDIA permanecen apagados. El estado verificado, los riesgos y las tareas manuales están en
-[`docs/ADAPTACION-ENTRENAMIENTO.md`](docs/ADAPTACION-ENTRENAMIENTO.md).
+El coach tiene una implementación local parcial: motor determinista compartido, contratos de eventos
+y cambios, propuestas locales, autenticación con Clerk y un Worker para RAG/explicaciones. La revisión
+del 30 de agosto corrigió aislamiento de cola, presupuesto, decisiones mixtas, calentamientos,
+reintentos, namespaces, rollback, evaluación y readiness; **todavía no está listo para abrir la beta**.
+El paquete científico local ya se prepara reproduciblemente (88 fuentes, 2.708 fragmentos y 47
+autores recuperados), pero los embeddings, la carga remota y la evaluación Flash permanecen
+bloqueados hasta disponer de autorización de coste cero. Los flags de beta y proveedores siguen
+apagados; el HTTP 200 del Worker no acredita el despliegue de estos cambios.
+
+Consulta el [estado y criterios de apertura](docs/ADAPTACION-ENTRENAMIENTO.md) y la
+[auditoría con pruebas y hallazgos](docs/AUDITORIA-COACH-2026-08-30.md), junto con el
+[registro final de correcciones](docs/CORRECCION-HALLAZGOS-2026-08-31.md). La suite general y el
+Worker se verifican localmente; aún no cubren el recorrido remoto completo ni aprueban la apertura.
+El canario `.cache` es solo una referencia local fuera de Git.
+
+### Laboratorio reproducible del agente
+
+La primera entrega del agente original vive en `packages/agent-lab` y trabaja exclusivamente con
+escenarios ficticios. Coordina `session-finished`, Training Agent y Research Agent, consulta solo
+un corpus aprobado que se le entregue explícitamente y devuelve propuestas sin aplicarlas. Sus
+ejecuciones simuladas no se consideran evidencia de calidad de un modelo real.
+
+```bash
+npm run agent:lab       # una decisión explicable sobre un escenario ficticio
+npm run agent:evaluate  # 28 casos de aceptación + 10 de seguridad × 3 repeticiones
+npm run agent:rag       # valida resultados reales; falla si faltan vectores/citas/revisión
+npm run corpus:prepare -- --input C:\\Users\\yehos\\Downloads\\Hevy_Corpus
+npm run corpus:embed   # plan local; requiere --execute + autorización para llamar a NVIDIA
+npm run corpus:upload   # plan local; requiere --execute --apply-migrations + capacidad/backup/credenciales
+npm run corpus:status
+```
+
+El resultado esperado de la fase es evidencia local reproducible sobre cómo decide el agente; no es
+una apertura de beta ni un despliegue.
 
 ## Desarrollo
 
@@ -30,6 +58,7 @@ npm run fetch-data   # dataset de ejercicios + snapshots USDA/wger
 npm run dev          # http://localhost:5173
 npm run check        # lint, typecheck, tests y build
 npm run test:e2e     # Playwright (Chromium + WebKit)
+npm run test:e2e:coach # flujo del agente con Clerk y Worker simulados
 ```
 
 El build usa `/ferro/` como basename para mantener compatibilidad con el sitio publicado y con IndexedDB `ferro`. No cambies esos identificadores sin una migración explícita.

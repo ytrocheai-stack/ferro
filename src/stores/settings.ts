@@ -10,6 +10,8 @@ export interface SettingsValues {
   keepAwake: boolean
   /** registrar RPE por serie */
   trackRpe: boolean
+  /** registrar RIR por serie, separado de RPE */
+  trackRir: boolean
   /** entrenos objetivo por semana */
   weeklyGoal: number
   /** calculadora de discos */
@@ -31,6 +33,7 @@ export const useSettings = create<SettingsState>()(
       restNotification: true,
       keepAwake: true,
       trackRpe: false,
+      trackRir: false,
       weeklyGoal: 4,
       barWeightKg: 20,
       platesKg: [25, 20, 15, 10, 5, 2.5, 1.25],

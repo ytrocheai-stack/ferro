@@ -8,6 +8,9 @@ import { vibrate } from '../lib/notify'
 import { useSettings } from './settings'
 import { useToasts } from './toasts'
 import { enqueueAdaptationJob } from '../lib/adaptationClient'
+import { invalidateStaleAdaptationJobsInTransaction } from '../lib/adaptationContext'
+import { getCoachAccountId } from '../lib/coachAccount'
+import { queueCoachSessionFinished } from '../lib/coachClient'
 
 export interface ActiveSet {
   type: SetType
@@ -15,6 +18,7 @@ export interface ActiveSet {
   reps: number | null
   completed: boolean
   rpe?: number
+  rir?: number
   /** cardio */
   durationSec?: number | null
   distanceM?: number | null
@@ -135,6 +139,7 @@ function prevSetsIn(
           type: s.type,
           durationSec: s.durationSec,
           distanceM: s.distanceM,
+          rir: s.rir,
         }))
     }
   }
@@ -265,6 +270,7 @@ export const useActive = create<ActiveState>()(
             reps: s.reps,
             completed: s.completed,
             rpe: s.rpe,
+            rir: s.rir,
             durationSec: s.durationSec ?? null,
             distanceM: s.distanceM ?? null,
           })),
@@ -313,6 +319,7 @@ export const useActive = create<ActiveState>()(
               type: s.type,
               durationSec: s.durationSec,
               distanceM: s.distanceM,
+              rir: s.rir,
             })),
           supersetGroup: we.supersetGroup,
           repRangeMin: we.repRangeMin,
@@ -615,6 +622,7 @@ async function doFinish(get: Getter, set: Setter): Promise<string | null> {
           reps: st.reps ?? 0,
           completed: true,
           rpe: st.rpe,
+          rir: st.rir,
           durationSec: st.durationSec || undefined,
           distanceM: st.distanceM || undefined,
         })),
@@ -660,15 +668,13 @@ async function doFinish(get: Getter, set: Setter): Promise<string | null> {
   await db.transaction('rw', [db.workouts, db.adaptationJobs, db.adaptationProposals], async () => {
     await db.workouts.bulkPut(normalized)
     if (isEdit) {
-      const job = await db.adaptationJobs.where('workoutId').equals(workout.id).first()
-      if (job) await db.adaptationJobs.update(job.id, { status: 'failed', lastError: 'El entrenamiento fue editado; requiere un nuevo análisis', updatedAt: Date.now() })
-      if (job?.analysisId) {
-        const proposals = await db.adaptationProposals.where('analysisId').equals(job.analysisId).toArray()
-        await db.adaptationProposals.bulkPut(proposals.filter((proposal) => proposal.status === 'pending').map((proposal) => ({ ...proposal, status: 'stale' as const })))
-      }
+      await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
     }
   })
-  if (!isEdit) await enqueueAdaptationJob(workout.id)
+  if (!isEdit) {
+    await enqueueAdaptationJob(workout.id)
+    await queueCoachSessionFinished(workout.id)
+  }
   set({ session: null, rest: null })
   return workout.id
 }

@@ -2,20 +2,29 @@ name = "nextrep-adaptation"
 main = "src/index.ts"
 compatibility_date = "2026-08-26"
 
+[[workflows]]
+name = "nextrep-coach-run"
+binding = "COACH_WORKFLOW"
+class_name = "CoachRunWorkflow"
+
 [triggers]
 crons = ["17 3 * * *"]
 
 [vars]
+NVIDIA_REQUESTS_PER_MINUTE = "40"
+NVIDIA_ACCOUNTING_MODE = "requests"
 ENVIRONMENT = "development"
-FLASH_MODEL = "deepseek-ai/deepseek-v4-flash-0731"
+FLASH_MODEL = "moonshotai/kimi-k3"
 PRO_MODEL = "deepseek-ai/deepseek-v4-pro-0813"
 EMBEDDING_MODEL = "nvidia/nemotron-3-embed-1b"
-RAG_INDEX_VERSION = "approved-corpus:nvidia-nemotron-3-embed-1b:2048-prefix768-l2:v1"
+RAG_INDEX_VERSION = "sha256:1d17531bbdcd614616bbf35bd0eb4a80e978a0af9c8fb50417be7d1201519c1f"
 ENABLE_EMBEDDINGS = "false"
 ENABLE_FLASH = "false"
 ENABLE_PRO = "false"
 ENABLE_RERANKING = "false"
 ENABLE_PROVIDER_PROBE = "false"
+ENABLE_BETA = "false"
+REQUIRED_CONSENT_VERSION = "coach-beta-v1"
 
 [[d1_databases]]
 binding = "DB"
@@ -25,6 +34,10 @@ migrations_dir = "migrations"
 
 [[vectorize]]
 binding = "VECTORIZE"
+index_name = "nextrep-adaptation-512"
+
+[[vectorize]]
+binding = "VECTORIZE_LEGACY_768"
 index_name = "nextrep-adaptation-768"
 
 [[vectorize]]

@@ -1,10 +1,10 @@
 # Arquitectura de NextRep
 
-> La arquitectura adaptativa en desarrollo está documentada en [ADAPTACION-ENTRENAMIENTO.md](ADAPTACION-ENTRENAMIENTO.md). La beta permanece desactivada por defecto.
+> La arquitectura adaptativa en desarrollo está documentada en [ADAPTACION-ENTRENAMIENTO.md](ADAPTACION-ENTRENAMIENTO.md). La beta permanece desactivada por defecto y su apertura está bloqueada por los hallazgos de [AUDITORIA-COACH-2026-08-30.md](AUDITORIA-COACH-2026-08-30.md).
 
 > Documento de referencia para entender cómo funciona la app por dentro. Complementa a
 > [../CLAUDE.md](../CLAUDE.md) (invariantes y convenciones) y [DESPLIEGUE.md](DESPLIEGUE.md) (build y deploy).
-> Última actualización: 2026-08-30 (Dexie v5, Clerk, Worker desplegado y beta adaptativa cerrada).
+> Última actualización: 2026-09-08 (Dexie v9, coach conversacional durable, conversación privada vinculada y beta adaptativa cerrada).
 
 ## Visión general
 
@@ -15,12 +15,15 @@ Actualmente tiene cuatro dominios funcionales:
 2. **Nutrición** — diario de comidas (4 vías de registro + platos), objetivos, tendencia de peso.
 3. **Medidas** — peso/medidas corporales y fotos de progreso.
 4. **Coach adaptativo (beta cerrada, desactivado)** — analiza un entrenamiento mediante un Worker
-   autenticado y guarda localmente una propuesta que requiere confirmación explícita.
+  autenticado y guarda localmente una propuesta que requiere confirmación explícita. Cuando el
+  coach está configurado, toda la app queda detrás de Clerk.
 
 Persistencia dual: los **datos finales** viven en Dexie/IndexedDB (base `ferro`); el **estado de
 sesión** (entreno en curso, ajustes, objetivos) vive en Zustand con `persist` en localStorage.
-Nada importante existe solo en memoria. Cuando el coach está habilitado, un resumen mínimo viaja
-transitoriamente al Worker y al proveedor de IA; el backend no persiste entrenamientos ni feedback.
+Nada importante existe solo en memoria. Cuando el coach está habilitado, el contexto consentido
+incluye perfil, objetivos, restricciones, rutinas, conversación y hasta seis entrenamientos
+recientes terminados; se limita al tamaño permitido antes de enviarse. D1 retiene temporalmente
+la ejecución y su decisión para hacerla durable y replayable, pero no JWT, correo ni nombre.
 
 ## Esquema de datos (Dexie, base `ferro`)
 
@@ -30,7 +33,7 @@ La PK habitual es `id` (string de `uid()`); `externalRefs` usa `key` como PK ún
 | Tabla | Índices | Contenido | Versión |
 |---|---|---|---|
 | `workouts` | `startedAt`, `routineId`, `routineRevision` | Entrenos terminados: ejecución, snapshot de prescripción, feedback, volumen y PRs | v1 (+coach v4/v5) |
-| `routines` | `sortOrder`, `folderId`, `revision`, `coachReviewed` | Plantillas versionadas; rol e incremento se conservan por ocurrencia de ejercicio | v1 (+coach v4/v5) |
+| `routines` | `sortOrder`, `folderId`, `revision`, `coachReviewed`, `scheduledAt`, `retiredAt` | Plantillas versionadas; rol, programación, retirada e incremento se conservan por ocurrencia | v1 (+coach v4/v5/v9) |
 | `customExercises` | — | Ejercicios propios (id `custom-…`) | v1 |
 | `folders` | `sortOrder` | Carpetas de rutinas | v2 |
 | `measurements` | `date`, `kind`, `[kind+date]` | Peso, % graso, perímetros (15 tipos) | v2 |
@@ -41,13 +44,16 @@ La PK habitual es `id` (string de `uid()`); `externalRefs` usa `key` como PK ún
 | `importBatches` | `source`, `createdAt`, `status` | Lotes trazables de importación Hevy | v3 |
 | `externalRefs` | `source`, `entity`, `localId`, `batchId` | Correspondencia entre IDs externos y locales | v3 |
 | `routineRevisionSnapshots` | `routineId`, `revision` | Snapshot completo para aplicación/reversión atómica | v5 |
-| `adaptationProposals` | `analysisId`, `baseRoutineId`, `baseRoutineRevision`, `status`, `candidateId`, `occurrenceId` | Propuestas inmutables y revisables | v4/v5 |
-| `adaptationJobs` | `workoutId`, `status`, `nextRetryAt`, `updatedAt` | Cola offline de análisis | v4/v5 |
-| `adaptationEventJobs` | `analysisId`, `status`, `nextRetryAt` | Cola offline de eventos de auditoría | v5 |
+| `adaptationProposals` | `analysisId`, `baseRoutineId`, `baseRoutineRevision`, `status`, `candidateId`, `occurrenceId`, `ownerId` | Propuestas inmutables y revisables por cuenta | v4/v5/v6 |
+| `adaptationJobs` | `workoutId`, `status`, `nextRetryAt`, `updatedAt`, `ownerId` | Cola offline de análisis por cuenta | v4/v5/v6 |
+| `adaptationEventJobs` | `analysisId`, `status`, `nextRetryAt`, `ownerId` | Cola offline de eventos de auditoría por cuenta | v5/v6 |
+| `coachRuns` / `coachMessages` | `ownerId`, `eventId`, `status`, `createdAt` | Ejecuciones durables y conversación local completa; cada evento nuevo incluye conversación estable | v8/v9 |
+| `coachProfiles` / `coachConsents` | `ownerId`, `revision`, `enabled` | Perfil mínimo editable y consentimiento serializable entre pestañas | v9 |
 
 Notas:
-- Los campos añadidos con el tiempo (`rpe`, `durationSec`/`distanceM` de cardio, `supersetGroup`,
+- Los campos añadidos con el tiempo (`rpe`, `rir`, `durationSec`/`distanceM` de cardio, `supersetGroup`,
   `repRangeMin/Max`) viven dentro del blob del registro, no son índices → no exigieron migración.
+  RIR se valida como entero 0–10 y no se convierte desde RPE.
 - Los índices `[kind+date]`, `[date+meal]` y los secundarios de `foods` están declarados pero las
   consultas actuales no los usan (filtran por el campo simple); disponibles para futuras queries.
 - `ensurePersistentStorage()` pide `navigator.storage.persist()` al arrancar.
@@ -60,18 +66,48 @@ estricta → propuesta pendiente en IndexedDB → decisión explícita → trans
 rutina. El Worker nunca confía en candidatos numéricos enviados por el navegador y la UI no aplica
 cambios sin confirmación.
 
-El código está integrado y publicado, y el Worker tiene D1 e índices Vectorize reales. La función aún
-no está habilitada para la beta: los proveedores están apagados, no hay corpus real indexado ni
-evaluación representativa. El despliegue activo usa producción; el `worker/wrangler.toml` local mantiene
-flags de desarrollo para impedir activaciones accidentales. El inventario exacto de trabajo pendiente y
-los gates están en [ADAPTACION-ENTRENAMIENTO.md](ADAPTACION-ENTRENAMIENTO.md).
+Este recorrido ya incorpora las correcciones locales verificadas por hallazgo: CORS autoriza las cabeceras del cliente,
+el input con historial se valida con un único esquema compartido, la revocación cancela lotes, la
+idempotencia reclama filas expiradas atómicamente, la aplicación actualiza objetivos por serie,
+preserva calentamientos, conserva decisiones `maintain`, limita el consumo real y la tarjeta presenta
+el mismo candidato que se aplicará. La suite permanente cubre estas garantías; el canario real y la
+publicación siguen pendientes.
+
+El contrato compartido también expone `CoachEvent`, `AgentRun`, `ChangeSet`, `EvidenceReference`,
+`AutonomyPolicy` y `MemoryFact` para la siguiente entrega de agentes. Las operaciones autorizables
+se limitan a planificación futura, sustitución de ejercicios y objetivos nutricionales; no existe
+una operación para alterar silenciosamente un entrenamiento terminado.
+
+El consentimiento `coach-beta-v1` se refleja en localStorage y en `coachConsents` por cuenta/dispositivo; el payload de
+análisis se guarda en `adaptationJobs` congelado por identidad y con `ownerId`. La cola cancela el
+contexto activo al cambiar sesión o revocar consentimiento, despierta el procesador al encolar o
+reintentar y programa un temporizador para `nextRetryAt`. Jobs sin propietario heredados no se
+procesan. Las ejecuciones conversacionales usan `coachRuns`/Workflow, un ledger de intentos y una
+revisión de consentimiento dentro de la transacción de aplicación. La sincronización remota del
+historial personal y los gates operativos de apertura siguen pendientes.
+
+El límite operativo ya no es una cuota fija de llamadas: `worker/migrations/0005_budgets.sql` reserva
+tokens estimados y ejecuciones concurrentes por cuenta/semana, liquida tokens reales al finalizar y
+rechaza una respuesta que supere el límite; si no hay `usage`, cobra la estimación conservadora.
+
+Hay infraestructura declarada y el Worker remoto responde, pero no se acreditó que los cambios
+locales estén publicados. `worker/wrangler.production.toml` configura producción explícita y
+`worker/wrangler.toml` desarrollo; ambos apuntan al mismo Worker y mantienen flags en `false`.
+El corpus sigue como propuesta, sin evaluación representativa; cada vector lleva su namespace y
+un ID físico versionado, las claves de filas están versionadas y `rollbackCorpusVersion` borra IDs mediante un adaptador
+explícito antes de eliminar D1.
+
+El motor compartido del agente ya ejecuta el protocolo de herramientas/decisión en modo ficticio o
+privado-real; `AutonomyPolicy` y `MemoryFact` siguen siendo contratos preparatorios y no se habilita
+autonomía automática. La matriz de 26 casos no se declara cerrada porque faltan los gates remotos.
+Los gates y el detalle comprobado están en [ADAPTACION-ENTRENAMIENTO.md](ADAPTACION-ENTRENAMIENTO.md).
 
 ## Stores Zustand (localStorage)
 
 | Store | Clave persist | Contenido |
 |---|---|---|
 | [activeWorkout.ts](../src/stores/activeWorkout.ts) | `ferro-active` | Solo `{session, rest}` (partialize). La sesión activa sobrevive a recargas/cierres. Un `rest` ya vencido se descarta en el `merge` de rehidratación (evita avisos fantasma). |
-| [settings.ts](../src/stores/settings.ts) | `ferro-settings` | Unidades, descanso por defecto, sonido/vibración/notificación, wake lock, RPE, objetivo semanal, barra y discos. |
+| [settings.ts](../src/stores/settings.ts) | `ferro-settings` | Unidades, descanso por defecto, sonido/vibración/notificación, wake lock, RPE/RIR independientes, objetivo semanal, barra y discos. |
 | [nutrition.ts](../src/stores/nutrition.ts) | `ferro-nutrition-goals` | Objetivos de kcal/macros + parámetros del wizard (sexo, edad, altura, actividad, objetivo). |
 | [toasts.ts](../src/stores/toasts.ts) | (sin persist) | Toasts efímeros, máx 3, autodismiss 5 s, patrón `toastUndo`. |
 
@@ -99,7 +135,7 @@ los gates están en [ADAPTACION-ENTRENAMIENTO.md](ADAPTACION-ENTRENAMIENTO.md).
 - **Finalizar** (`finish`): descarta series incompletas y ejercicios vacíos; calcula `volumeKg`
   (series de trabajo), `totalSets` y `prs` (`detectPRs` contra el historial anterior). Guard de
   reentrada: un doble toque no duplica el entreno. Al editar, regenera los PRs de ESE entreno
-  (los de entrenos posteriores no se recalculan — decisión conocida).
+  (la edición del historial se normaliza cronológicamente antes de guardar).
 - **Superseries**: `supersetGroup` numérico compartido. "Último del grupo" = por **adyacencia**
   (el siguiente ejercicio no comparte grupo), de modo que reordenar y partir un grupo no rompe el
   disparo del descanso.
@@ -225,3 +261,25 @@ quede bajo el teclado · EXIF de fotos · Web Share para exportar · metas Apple
 - **Navegación**: dock flotante inferior en móvil y rail vertical desde 768 px. `TabBar` calcula el
   estado activo explícitamente para que `/analisis` y `/medidas` conserven Perfil como contexto.
   El sistema visual completo vive en [../design-system/nextrep/MASTER.md](../design-system/nextrep/MASTER.md).
+
+## Laboratorio del agente original
+
+`packages/agent-lab` es un módulo TypeScript reutilizable y aislado. Solo recibe `LabInput` con
+evento, contexto versionado, perfil ficticio, historial, planificación, restricciones, catálogo y
+permisos simulados. Sus herramientas (`readHistory`, `readGoals`, `readRestrictions`, `readCatalog`,
+`calculateRecords`, `calculateVolume`, `calculateTrends` y `searchEvidence`) son funciones puras:
+no abren Dexie, no escriben servicios y no tienen acceso a datos reales.
+
+El orquestador de la primera entrega reacciona a `session-finished`, coordina Training Agent y
+Research Agent y valida una salida discriminada `propose | maintain | ask | abstain | unavailable`.
+La IA puede proponer un ajuste deportivo; el código valida estructura, cuenta, contexto, unidades,
+restricciones, citas y que `futurePlan` mantenga el orden de ejercicios y los objetivos de cada
+serie. El `ChangeSet` se muestra como diferencia, pero el laboratorio nunca lo aplica. Nutrition,
+Technique y autonomía por dominio tienen contratos/rutas reservadas para entregas posteriores;
+Technique conserva el límite de educación textual, sin análisis de videos personales.
+
+Las versiones del laboratorio (`agent-lab-v1`, instrucciones, herramientas y configuración Flash)
+se registran en cada ejecución. El modo simulado marca `qualityEvidence: false`; provider mode
+permanece apagado y no cambia automáticamente de modelo ante timeout, 429 o presupuesto agotado.
+El corpus y la evaluación son artefactos versionados separados de los prompts. La matriz funcional
+completa y sus 26 casos están en [ADAPTACION-ENTRENAMIENTO.md](ADAPTACION-ENTRENAMIENTO.md).

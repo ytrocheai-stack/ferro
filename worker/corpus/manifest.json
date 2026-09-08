@@ -1,0 +1,66 @@
+{
+  "corpusVersion": "approved-corpus:nvidia-nemotron-3-embed-1b:2048-prefix512-l2:v1",
+  "status": "proposal",
+  "sources": [
+    {
+      "id": "iusca-hypertrophy-consensus-2021",
+      "author": "Brad J. Schoenfeld et al. (IUSCA authors)",
+      "title": "The IUSCA position stand on hypertrophy training",
+      "url": "https://journal.iusca.org/index.php/Journal/article/view/81",
+      "license": "CC BY 4.0; revisar material de terceros",
+      "evidenceLevel": 3,
+      "language": "en",
+      "approvedAt": 0,
+      "publishedAt": "2021-08-16",
+      "location": "Artículo original, página de publicación IUSCA",
+      "approved": false
+    },
+    {
+      "id": "autoregulation-load-volume-review-2021",
+      "author": "Hickmott, Chilibeck, Shaw y Butcher",
+      "title": "Autoregulation of resistance training volume and load",
+      "url": "https://link.springer.com/article/10.1186/s40798-021-00404-9",
+      "license": "CC BY 4.0; revisar material de terceros",
+      "evidenceLevel": 2,
+      "language": "en",
+      "approvedAt": 0,
+      "location": "article",
+      "publishedAt": "2022-01-15",
+      "approved": false
+    },
+    {
+      "id": "creator-jeff-nippard",
+      "author": "Jeff Nippard",
+      "title": "Creator material — pending permission",
+      "url": "https://jeffnippard.com/",
+      "license": "permission-required",
+      "evidenceLevel": 4,
+      "language": "en",
+      "approvedAt": 0,
+      "approved": false
+    },
+    {
+      "id": "creator-renaissance-periodization",
+      "author": "Renaissance Periodization",
+      "title": "Creator material — pending permission",
+      "url": "https://rpstrength.com/",
+      "license": "permission-required",
+      "evidenceLevel": 4,
+      "language": "en",
+      "approvedAt": 0,
+      "approved": false
+    },
+    {
+      "id": "creator-dr-de-la-rosa",
+      "author": "Dr. de la Rosa",
+      "title": "Creator material — pending permission",
+      "url": "https://www.youtube.com/",
+      "license": "permission-required",
+      "evidenceLevel": 4,
+      "language": "es",
+      "approvedAt": 0,
+      "approved": false
+    }
+  ],
+  "chunks": []
+}

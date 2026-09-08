@@ -1,12 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { handleRequest, normalizeEmbedding, validateModelDecision, IsolateCircuitBreaker, routeGeneration, ProviderError, type Env } from './index'
-import { evaluateRecallAt5, SYNTHETIC_FIXTURES } from './evaluation'
+import { corpusMetadataKey, vectorPhysicalId } from '../../packages/corpus-identity/src/index.mjs'
+import { accountGenerationAttempts, budgetUsageWithinLimit, handleRequest, mergeModelDecisions, normalizeEmbedding, normalizeGenerationUsage, reserveIdempotency, validateModelDecision, validateModelDecisionList, IsolateCircuitBreaker, routeGeneration, ProviderError, withDeadline, VectorizeRetriever, type Env } from './index'
+import { evaluateCitationPrecision, evaluateRecallAt5, passesDimensionGate, SYNTHETIC_FIXTURES } from './evaluation'
 
 const env: Env = { CLERK_JWT_KEY: 'test-key', ALLOWED_CLERK_IDS: 'user_1' }
 const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
 const headers = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json' }
 
 describe('adaptation worker', () => {
+  it('aplica al índice remoto los mismos filtros de evidencia y población', async () => {
+    let receivedFilter: unknown
+    const retriever = new VectorizeRetriever({ query: async (_vector, options) => { receivedFilter = options?.filter; return { matches: [
+      { id: vectorPhysicalId('v1', 'excluded'), score: 0.99, metadata: { chunkId: 'excluded', sourceId: 'source-1', corpusKey: corpusMetadataKey('v1'), corpusVersion: 'v1', retrievalClass: 'evidence', populationReviewed: 'false' } },
+      { id: vectorPhysicalId('v1', 'allowed'), score: 0.8, metadata: { chunkId: 'allowed', sourceId: 'source-1', corpusKey: corpusMetadataKey('v1'), corpusVersion: 'v1', retrievalClass: 'evidence', populationReviewed: 'true' } },
+      { id: vectorPhysicalId('v1', 'admin'), score: 1, metadata: { chunkId: 'admin', sourceId: 'source-1', corpusKey: corpusMetadataKey('v1'), corpusVersion: 'v1', retrievalClass: 'administrative', populationReviewed: 'true' } },
+    ] } } }, 'v1')
+    expect(await retriever.retrieve([1], 20)).toEqual([{ id: vectorPhysicalId('v1', 'allowed'), score: 0.8, metadata: { chunkId: 'allowed', sourceId: 'source-1', corpusKey: corpusMetadataKey('v1'), corpusVersion: 'v1', retrievalClass: 'evidence', populationReviewed: 'true' } }])
+    expect(receivedFilter).toEqual({ corpusKey: corpusMetadataKey('v1'), retrievalClass: 'evidence', populationReviewed: 'true' })
+    expect(await retriever.retrieve([1], 20, { mode: 'research' })).toHaveLength(2)
+  })
+
   it('keeps health cheap and unauthenticated', async () => {
     const response = await handleRequest(new Request('https://worker.test/health'), env)
     expect(response.status).toBe(200)
@@ -27,6 +40,13 @@ describe('adaptation worker', () => {
     expect(production.status).toBe(503)
   })
 
+  it('permite en CORS las cabeceras de consentimiento y dispositivo de la PWA', async () => {
+    const response = await handleRequest(new Request('https://worker.test/v1/adaptations/analyze', { method: 'OPTIONS', headers: { Origin: headers.Origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type,authorization,idempotency-key,x-nextrep-consent-version,x-nextrep-device-id' } }), env)
+    expect(response.status).toBe(204)
+    expect(response.headers.get('Access-Control-Allow-Headers')?.toLowerCase()).toContain('x-nextrep-consent-version')
+    expect(response.headers.get('Access-Control-Allow-Headers')?.toLowerCase()).toContain('x-nextrep-device-id')
+  })
+
   it('returns deterministic candidates with auth and does not require D1', async () => {
     const input = { workoutId: 'w0', startedAt: 3, exerciseId: 'squat', role: 'strength', repRangeMin: 5, repRangeMax: 8, loadIncrementKg: 2.5, plannedSets: 3, sets: [{ type: 'normal', weightKg: 100, reps: 5, completed: true }], previousExposures: [] }
     const response = await handleRequest(new Request('https://worker.test/v1/adaptations/analyze', { method: 'POST', headers, body: JSON.stringify({ inputs: [input] }) }), env, deps)
@@ -37,8 +57,10 @@ describe('adaptation worker', () => {
 
   it('validates embedding dimensions and strict model decisions', () => {
     expect(() => normalizeEmbedding([1, 2])).toThrow(/2048/)
+    expect(normalizeEmbedding(new Array(2048).fill(1)).length).toBe(512)
     expect(() => validateModelDecision({ exerciseId: 'x', candidateId: 'unknown', explanation: '', citationIds: [], warnings: [], confidence: 'low', requiresEscalation: false }, new Set(), new Set())).toThrow(/Candidato/)
     expect(() => validateModelDecision({ exerciseId: 'x', candidateId: null, explanation: '', citationIds: [], warnings: [], confidence: 'low', requiresEscalation: false, extra: 1 }, new Set(), new Set())).toThrow()
+    expect(() => validateModelDecisionList([], new Set(), new Set(), [{ exerciseId: 'x', candidateIds: new Set(['candidate']) }])).toThrow(/cubre exactamente/)
   })
 
   it('uses the isolate circuit breaker and never escalates a Flash 429', async () => {
@@ -47,10 +69,167 @@ describe('adaptation worker', () => {
     expect(() => breaker.beforeRequest()).toThrow(/abierto/)
     const result = await routeGeneration({ prompt: '{}', deterministic: '{"candidateId":null}' }, { generate: async () => { throw new ProviderError('rate limit', 429) } }, { flash: 'flash', pro: 'pro' }, { flash: true, pro: true })
     expect(result.model).toBe('deterministic')
+    expect(result.attempts).toMatchObject([{ model: 'flash', sent: true, error: { status: 429 } }])
+  })
+
+  it('conserva cero explícito y no marca como enviado un circuito abierto', async () => {
+    const measured = await routeGeneration({ prompt: '{}', deterministic: 'fallback' }, { generate: async () => ({ content: 'valid', usage: { inputTokens: 0, outputTokens: 0 } }) }, { flash: 'flash', pro: 'pro' }, { flash: true, pro: false })
+    expect(measured.attempts).toMatchObject([{ model: 'flash', sent: true, usage: { inputTokens: 0, outputTokens: 0 }, content: 'valid' }])
+    const blocked = await routeGeneration({ prompt: '{}', deterministic: 'fallback' }, { generate: async () => { throw new ProviderError('open', undefined, 'circuit-open') } }, { flash: 'flash', pro: 'pro' }, { flash: true, pro: false })
+    expect(blocked.attempts).toMatchObject([{ model: 'flash', sent: false, error: { code: 'circuit-open' } }])
   })
 
   it('keeps a reproducible synthetic evaluation for both dimensions', () => {
     expect(evaluateRecallAt5(SYNTHETIC_FIXTURES, 768)).toBe(1)
     expect(evaluateRecallAt5(SYNTHETIC_FIXTURES, 1024)).toBe(1)
+  })
+
+  it('requires the beta flag and matching consent when explicitly enabled', async () => {
+    const betaEnv = { ...env, ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-beta-v1' }
+    const input = { workoutId: 'w0', startedAt: 3, exerciseId: 'squat', role: 'strength', repRangeMin: 5, repRangeMax: 8, loadIncrementKg: 2.5, plannedSets: 3, sets: [{ type: 'normal', weightKg: 100, reps: 5, completed: true }], previousExposures: [] }
+    const missing = await handleRequest(new Request('https://worker.test/v1/adaptations/analyze', { method: 'POST', headers, body: JSON.stringify({ inputs: [input] }) }), betaEnv, deps)
+    expect(missing.status).toBe(403)
+    const authorized = await handleRequest(new Request('https://worker.test/v1/adaptations/analyze', { method: 'POST', headers: { ...headers, 'X-NextRep-Consent-Version': 'coach-beta-v1', 'X-NextRep-Device-Id': 'device-1' }, body: JSON.stringify({ inputs: [input], consentVersion: 'coach-beta-v1', deviceId: 'device-1' }) }), betaEnv, deps)
+    expect(authorized.status).toBe(200)
+  })
+
+  it('aplica consentimiento y dispositivo también a eventos y provider probe durante la beta', async () => {
+    const betaEnv = { ...env, ENABLE_BETA: 'true', ENABLE_PROVIDER_PROBE: 'true', REQUIRED_CONSENT_VERSION: 'coach-beta-v1' }
+    const event = new Request('https://worker.test/v1/adaptations/events', { method: 'POST', headers, body: JSON.stringify({ analysisId: 'a', exerciseId: 'squat', candidateId: null, event: 'accepted' }) })
+    expect((await handleRequest(event, betaEnv, deps)).status).toBe(403)
+    const guardedHeaders = { ...headers, 'X-NextRep-Consent-Version': 'coach-beta-v1', 'X-NextRep-Device-Id': 'device-1' }
+    const guardedEvent = new Request('https://worker.test/v1/adaptations/events', { method: 'POST', headers: guardedHeaders, body: JSON.stringify({ analysisId: 'a', exerciseId: 'squat', candidateId: null, event: 'accepted' }) })
+    expect((await handleRequest(guardedEvent, betaEnv, deps)).status).toBe(200)
+    const probe = await handleRequest(new Request('https://worker.test/v1/providers/probe', { method: 'POST', headers: guardedHeaders }), betaEnv, deps)
+    expect(probe.status).toBe(200)
+  })
+
+  it('exposes authenticated readiness without calling a provider', async () => {
+    const response = await handleRequest(new Request('https://worker.test/readiness', { headers }), env, deps)
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({ ok: false, checks: { d1: false, index: false, corpus: false } })
+  })
+
+  it('marca D1 y Vectorize no disponibles cuando las consultas reales fallan', async () => {
+    const broken = { prepare: () => ({ first: async () => { throw new Error('D1 unavailable') } }) }
+    const response = await handleRequest(new Request('https://worker.test/readiness', { headers }), { ...env, DB: broken as never, VECTORIZE: { query: async () => { throw new Error('index unavailable') } } }, deps)
+    expect(await response.json()).toMatchObject({ checks: { d1: false, index: false, corpus: false } })
+  })
+
+  it('no declara listo un índice que responde sin ningún fragmento', async () => {
+    let probeVector: number[] = []
+    const readyDb = {
+      prepare(sql: string) {
+        return {
+          bind() { return this },
+          async first() { return sql.includes('SELECT 1') ? { ok: 1 } : { count: 1 } },
+        }
+      },
+      async batch() { return [] },
+    }
+    const response = await handleRequest(new Request('https://worker.test/readiness', { headers }), { ...env, DB: readyDb as never, VECTORIZE: { query: async (vector) => { probeVector = vector; return { matches: [] } } }, RAG_INDEX_VERSION: 'v1' }, deps)
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({ checks: { d1: true, corpus: true, index: false } })
+    expect(probeVector).toHaveLength(512)
+    expect(probeVector[0]).toBe(1)
+  })
+
+  it('readiness exige los conteos exactos del corpus cuando producción los configura', async () => {
+    const readyDb = {
+      prepare(sql: string) {
+        return {
+          bind() { return this },
+          async first() { return sql.includes('SELECT 1') ? { ok: 1 } : { count: 2708, source_count: 88, unapproved: 0 } },
+        }
+      },
+      async batch() { return [] },
+    }
+    const response = await handleRequest(new Request('https://worker.test/readiness', { headers }), { ...env, DB: readyDb as never, VECTORIZE: { query: async () => ({ matches: [{ id: 'candidate' }] }) }, RAG_INDEX_VERSION: 'v1', RAG_EXPECTED_SOURCE_COUNT: '88', RAG_EXPECTED_CHUNK_COUNT: '2708' }, deps)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ ok: true, checks: { d1: true, index: true, corpus: true } })
+  })
+
+  it('escalates a validated invalid Flash response only to Pro', async () => {
+    const calls: string[] = []
+    const result = await routeGeneration({ prompt: '{}', deterministic: 'fallback', escalationEnabled: true, validateFlash: () => ({ valid: false, requiresEscalation: false }) }, { generate: async (_prompt, model) => { calls.push(model); return model === 'flash' ? '{bad' : 'pro-json' } }, { flash: 'flash', pro: 'pro' }, { flash: true, pro: true })
+    expect(result.model).toBe('pro')
+    expect(calls).toEqual(['flash', 'pro'])
+  })
+
+  it('no acepta una salida vacía de Pro como análisis terminado', async () => {
+    const previous = [1, 2, 3].map((startedAt) => ({ workoutId: `previous-${startedAt}`, startedAt, exerciseId: 'squat', occurrenceId: 'routine:0:squat', role: 'strength' as const, repRangeMin: 5, repRangeMax: 8, loadIncrementKg: 2.5, plannedSets: 3, sets: [{ type: 'normal' as const, weightKg: 100, reps: 6, completed: true }, { type: 'normal' as const, weightKg: 100, reps: 6, completed: true }, { type: 'normal' as const, weightKg: 100, reps: 6, completed: true }] }))
+    const input = { workoutId: 'current', startedAt: 4, exerciseId: 'squat', occurrenceId: 'routine:0:squat', role: 'strength' as const, repRangeMin: 5, repRangeMax: 8, loadIncrementKg: 2.5, plannedSets: 3, sets: previous[0].sets, previousExposures: previous }
+    const response = await handleRequest(new Request('https://worker.test/v1/adaptations/analyze', { method: 'POST', headers, body: JSON.stringify({ inputs: [input] }) }), { ...env, NVIDIA_API_KEY: 'fake-only', ENABLE_FLASH: 'true', ENABLE_PRO: 'true' }, { ...deps, generation: { generate: async (_prompt, model) => model.includes('flash') ? 'invalid JSON' : '[]' } })
+    expect(await response.json()).toMatchObject({ provider: 'deterministic', pendingExplanation: true })
+  })
+
+  it('conserva las decisiones maintain cuando el modelo solo explica las accionables', () => {
+    const actionable = { exerciseId: 'squat', fallbackCandidateId: 'keep-squat', candidates: [{ candidateId: 'increase-squat', kind: 'increase-reps' as const, exerciseId: 'squat', previous: { plannedSets: 3, repsMin: 5, repsMax: 8 }, next: { plannedSets: 3, repsMin: 6, repsMax: 8 }, rule: 'v1:test' as const, evidence: { comparableWorkoutIds: [], comparableCount: 0, completedUpperBoundCount: 0, discreteIncreaseCount: 0 }, confidence: 'medium' as const, warnings: [], explanation: 'local' }], comparableWorkoutIds: [], warnings: [] }
+    const maintain = { exerciseId: 'bench', fallbackCandidateId: 'keep-bench', candidates: [{ candidateId: 'keep-bench', kind: 'maintain' as const, exerciseId: 'bench', previous: { plannedSets: 3, repsMin: 5, repsMax: 8 }, next: { plannedSets: 3, repsMin: 5, repsMax: 8 }, rule: 'v1:test' as const, evidence: { comparableWorkoutIds: [], comparableCount: 0, completedUpperBoundCount: 0, discreteIncreaseCount: 0 }, confidence: 'low' as const, warnings: [], explanation: 'Mantén.' }], comparableWorkoutIds: [], warnings: [] }
+    const merged = mergeModelDecisions([actionable, maintain], [{ exerciseId: 'squat', candidateId: 'increase-squat', explanation: 'Explicación respaldada', citationIds: ['chunk-1'], warnings: [], confidence: 'medium', requiresEscalation: false }], [{ id: 'chunk-1', source: 'Evidence', evidenceLevel: 3, text: 'support' }])
+    expect(merged[0].candidates[0].explanation).toBe('Explicación respaldada')
+    expect(merged[1]).toEqual(maintain)
+  })
+
+  it('no adquiere dos veces una clave de idempotencia expirada concurrente', async () => {
+    const state: { record?: Record<string, unknown> } = {}
+    const fakeDb = {
+      prepare(sql: string) {
+        let values: unknown[] = []
+        return {
+          bind(...bound: unknown[]) { values = bound; return this },
+          async run() {
+            if (sql.includes('INSERT INTO adaptation_idempotency')) {
+              const [userHash, key, requestHash, analysisId, expiresAt, status, now] = values
+              const current = state.record
+              if (!current || Number(current.expires_at) <= Number(now)) {
+                state.record = { user_hash: userHash, idem_key: key, request_hash: requestHash, analysis_id: analysisId, expires_at: expiresAt, status }
+                return { meta: { changes: 1 } }
+              }
+              return { meta: { changes: 0 } }
+            }
+            return { meta: { changes: 0 } }
+          },
+          async first() { return state.record ?? null },
+          async all() { return { results: [] } },
+        }
+      },
+      async batch() { return [] },
+    } as never
+    const [first, second] = await Promise.all([
+      reserveIdempotency(fakeDb, 'user', 'key', 'hash', 'analysis-a', 100),
+      reserveIdempotency(fakeDb, 'user', 'key', 'hash', 'analysis-b', 100),
+    ])
+    expect([first?.owner, second?.owner].filter(Boolean)).toHaveLength(1)
+  })
+
+  it('rechaza el consumo real que supera el presupuesto anunciado', () => {
+    expect(budgetUsageWithinLimit(2_000, 5_000, { inputTokens: 100_000, outputTokens: 5_000, concurrent: 2 })).toBe(true)
+    expect(budgetUsageWithinLimit(2_000, 6_000, { inputTokens: 100_000, outputTokens: 5_000, concurrent: 2 })).toBe(false)
+  })
+
+  it('distingue cero medido de contadores ausentes o inválidos', () => {
+    expect(normalizeGenerationUsage({ inputTokens: 0, outputTokens: 0, bad: 1 })).toEqual({ inputTokens: 0, outputTokens: 0 })
+    expect(normalizeGenerationUsage({ inputTokens: -1, outputTokens: Number.NaN })).toEqual({})
+    expect(accountGenerationAttempts([{ model: 'flash', sent: true, usage: { inputTokens: 0 } }], 123, 4_000)).toMatchObject({ inputTokens: 0, outputTokens: 4_000, inputMeasuredTokens: 0, outputEstimatedTokens: 4_000, usageIncomplete: true })
+  })
+
+  it('counts complete Recall@5 and never approves an uncited evaluation', () => {
+    const fixtures = [{ query: [1, 0], relevantIds: ['a', 'b'], documents: [{ id: 'a', vector: [1, 0] }, { id: 'noise', vector: [0, 1] }, { id: 'b', vector: [0.9, 0.1] }] }]
+    expect(evaluateRecallAt5(fixtures, 768)).toBe(1)
+    expect(evaluateCitationPrecision([{ citedIds: [], validIds: ['a'] }])).toBe(0)
+    expect(evaluateCitationPrecision([{ citedIds: ['a'], validIds: [], claims: [{ citedIds: ['a'], supportedIds: [] }] }])).toBe(0)
+  })
+
+  it('aplica el gate de 1024 contra la base 512', () => {
+    expect(passesDimensionGate(SYNTHETIC_FIXTURES, 1, 1)).toBe(false)
+  })
+
+  it('cubre timeout de la lectura de respuesta y cancelación externa', async () => {
+    await expect(withDeadline(async (signal) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('body abortado')))), 10)).rejects.toMatchObject({ code: 'timeout' })
+    const controller = new AbortController()
+    const pending = withDeadline(async (signal) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('body abortado')))), 1_000, controller.signal)
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
   })
 })

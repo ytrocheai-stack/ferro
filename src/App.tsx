@@ -13,12 +13,16 @@ import { beep, notify, unlockAudio, vibrate } from './lib/notify'
 import { IconMinus, IconPlay, IconPlus, IconX } from './components/icons'
 import { AuthControls } from './components/AuthControls'
 import { useAuth } from '@clerk/react'
-import { processPendingAdaptationEvents, processPendingAdaptationJobs } from './lib/adaptationClient'
+import { cancelPendingAdaptationProcessing, processPendingAdaptationEvents, processPendingAdaptationJobs, setCoachAccountId } from './lib/adaptationClient'
+import { syncPendingCoachRuns } from './lib/coachClient'
 
 export default function App() {
   const { pathname } = useLocation()
   const hideTabs = pathname.startsWith('/entreno') || pathname.startsWith('/rutina')
-  const { isSignedIn, getToken } = useAuth()
+  const { isLoaded, isSignedIn, getToken, userId } = useAuth()
+  // Clerk por sí solo no activa el coach; el gate global se enciende cuando
+  // existe un Worker configurado que puede procesar datos de la cuenta.
+  const authRequired = Boolean(import.meta.env.VITE_ADAPTATION_WORKER_URL)
 
   useEffect(() => {
     void ensurePersistentStorage()
@@ -28,14 +32,24 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    setCoachAccountId(isSignedIn ? userId : null)
+    return () => setCoachAccountId(null)
+  }, [isSignedIn, userId])
+
+  useEffect(() => {
     if (!isSignedIn) return
-    const process = () => void Promise.all([processPendingAdaptationJobs(getToken), processPendingAdaptationEvents(getToken)])
+    const process = () => void Promise.all([processPendingAdaptationJobs(getToken, userId), processPendingAdaptationEvents(getToken, userId), syncPendingCoachRuns(getToken)])
     const onVisible = () => { if (document.visibilityState === 'visible') process() }
     process()
     window.addEventListener('online', process)
+    window.addEventListener('nextrep:adaptation-wake', process)
+    window.addEventListener('nextrep:coach-consent-changed', process)
     document.addEventListener('visibilitychange', onVisible)
-    return () => { window.removeEventListener('online', process); document.removeEventListener('visibilitychange', onVisible) }
-  }, [getToken, isSignedIn])
+    return () => { window.removeEventListener('online', process); window.removeEventListener('nextrep:adaptation-wake', process); window.removeEventListener('nextrep:coach-consent-changed', process); document.removeEventListener('visibilitychange', onVisible); cancelPendingAdaptationProcessing(userId) }
+  }, [getToken, isSignedIn, userId])
+
+  if (authRequired && !isLoaded) return <AuthRequiredScreen loading />
+  if (authRequired && !isSignedIn) return <AuthRequiredScreen />
 
   return (
     <div className="mx-auto min-h-dvh w-full max-w-md pt-[env(safe-area-inset-top)]">
@@ -61,10 +75,22 @@ export default function App() {
   )
 }
 
+function AuthRequiredScreen({ loading = false }: { loading?: boolean }) {
+  return (
+    <div className="mx-auto flex min-h-dvh w-full max-w-md items-center px-5">
+      <section className="card w-full px-5 py-6 text-center" aria-labelledby="auth-required-title">
+        <h1 id="auth-required-title" className="text-lg font-extrabold text-text">NextRep requiere una cuenta</h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted">{loading ? 'Comprobando tu sesión…' : 'Inicia sesión para acceder a tus entrenamientos y mantener aislados los datos del coach.'}</p>
+        {!loading && <div className="mt-4"><AuthControls /></div>}
+      </section>
+    </div>
+  )
+}
+
 function CoachPrivacyNotice() {
   const { isSignedIn } = useAuth()
   if (!isSignedIn || !import.meta.env.VITE_ADAPTATION_WORKER_URL) return null
-  return <p className="sr-only">El coach guarda tus datos localmente. El análisis se envía de forma transitoria al Worker y NVIDIA; el resumen no se conserva en el backend.</p>
+  return <p className="sr-only">El coach solo comparte el contexto tras tu consentimiento: perfil, objetivos, restricciones, rutinas, hasta seis entrenamientos terminados y conversación. Las conversaciones se guardan localmente; el backend conserva temporalmente el contexto necesario para ejecutar y repetir la solicitud. No guarda JWT, correo ni nombre.</p>
 }
 
 /** Barra "entreno en curso" visible fuera de la pantalla de sesión. */

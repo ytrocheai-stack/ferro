@@ -18,6 +18,7 @@ const Profile = lazy(() => import('./pages/Profile'))
 const Nutrition = lazy(() => import('./pages/Nutrition'))
 const Measurements = lazy(() => import('./pages/Measurements'))
 const Analysis = lazy(() => import('./pages/Analysis'))
+const CoachPage = lazy(() => import('./pages/CoachPage'))
 
 const router = createBrowserRouter(
   [
@@ -34,6 +35,7 @@ const router = createBrowserRouter(
         { path: '/nutricion', element: <Nutrition /> },
         { path: '/medidas', element: <Measurements /> },
         { path: '/analisis', element: <Analysis /> },
+        { path: '/coach', element: <CoachPage /> },
         { path: '/perfil', element: <Profile /> },
         { path: '*', element: <Navigate to="/" replace /> },
       ],

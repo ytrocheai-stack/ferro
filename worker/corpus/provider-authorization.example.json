@@ -1,0 +1,17 @@
+{
+  "accessVerified": false,
+  "budgetVerified": false,
+  "maxAdditionalCost": 0,
+  "verifiedAt": "",
+  "reviewer": "",
+  "evidence": "Registrar la comprobación real de acceso y cuota gratuita; no basta tener una clave.",
+  "model": "moonshotai/kimi-k3",
+  "embeddingModel": "nvidia/nemotron-3-embed-1b",
+  "maxCalls": 4,
+  "maxInputTokens": 256000,
+  "maxOutputTokens": 8000,
+  "timeoutMs": 60000,
+  "maxTotalCalls": 4000,
+  "maxTotalInputTokens": 12000000,
+  "maxTotalOutputTokens": 2000000
+}

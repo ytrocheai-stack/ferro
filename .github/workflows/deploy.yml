@@ -37,6 +37,9 @@ jobs:
       - name: Descargar y procesar datos fijados
         run: npm run fetch-data
 
+      - name: Regresiones y contratos
+        run: npm run lint && npm run typecheck && npm run typecheck:worker && npm test && npm run test:worker
+
       - name: Build
         env:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}

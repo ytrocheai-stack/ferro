@@ -34,6 +34,7 @@ type HevySet = {
   distance_km?: number | null
   duration_seconds?: number | null
   rpe?: number | null
+  rir?: number | null
 }
 type HevyExercise = {
   index?: number
@@ -136,6 +137,7 @@ function mapSet(input: HevySet): LoggedSet {
     reps: Math.max(0, Math.round(Number(input.reps ?? 0) || 0)),
     completed: true,
     ...(input.rpe == null ? {} : { rpe: Number(input.rpe) }),
+    ...(input.rir == null ? {} : { rir: Number(input.rir) }),
     ...(input.duration_seconds == null ? {} : { durationSec: Number(input.duration_seconds) }),
     ...(input.distance_meters == null ? {} : { distanceM: Number(input.distance_meters) }),
   }
@@ -420,6 +422,7 @@ export function parseHevyCsv(text: string): { workouts: HevyWorkout[]; templates
   const description = col(headers, 'description', 'workout notes', 'workout description')
   const duration = col(headers, 'duration_seconds', 'duration seconds', 'duration')
   const rpe = col(headers, 'rpe')
+  const rir = col(headers, 'rir', 'reps in reserve', 'repetitions in reserve')
   if (workoutTitle < 0 && workoutIndex < 0) {
     throw new Error(`No se encontró una columna de entreno en el CSV de Hevy. Encabezados detectados: ${headers.join(', ')}`)
   }
@@ -472,6 +475,7 @@ export function parseHevyCsv(text: string): { workouts: HevyWorkout[]; templates
       distance_meters: distanceValue,
       duration_seconds: optionalDecimal(row, duration),
       rpe: optionalDecimal(row, rpe),
+      rir: optionalDecimal(row, rir),
     })
     if (!existing) workout.exercises!.push(exercise)
     byWorkout.set(external, workout)

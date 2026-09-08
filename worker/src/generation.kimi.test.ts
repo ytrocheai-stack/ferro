@@ -1,0 +1,32 @@
+import { describe, expect, it } from 'vitest'
+import { NvidiaGenerationProvider, selectEvidence, VectorizeRetriever, type D1Database } from './index'
+import { corpusMetadataKey, vectorPhysicalId } from '../../packages/corpus-identity/src/index.mjs'
+
+describe('Kimi generation transport', () => {
+  it('hydrates only eligible abstracts from retrieved sources with logical split ordering', async () => {
+    const metadata = (chunkId: string, sourceId = 's1') => ({ chunkId, sourceId, corpusVersion: 'v1', corpusKey: corpusMetadataKey('v1'), retrievalClass: 'evidence', populationReviewed: 'false', population: 'unknown', section: chunkId === 'intro' ? 'Introduction' : 'Abstract', text: chunkId })
+    const rows = ['abstract-0002', 'abstract-0001', 'unrelated'].map(id => ({ vector_id: vectorPhysicalId('v1', id), metadata_json: JSON.stringify(metadata(id, id === 'unrelated' ? 's2' : 's1')) }))
+    const db = { prepare: () => ({ bind: () => ({ all: async () => ({ results: rows }) }) }) } as unknown as D1Database
+    const retriever = new VectorizeRetriever({ query: async () => ({ matches: [{ id: vectorPhysicalId('v1', 'intro'), score: 0.9, metadata: metadata('intro') }] }) }, 'v1', db)
+    expect((await retriever.retrieve([1], 20, { mode: 'research' })).map(x => x.metadata?.chunkId)).toEqual(['abstract-0001', 'abstract-0002', 'intro'])
+    expect(await retriever.retrieve([1], 20, { mode: 'recommendation', population: ['adult-general'] })).toEqual([])
+  })
+  it('keeps enriched summary context in its intended order including split abstracts', () => {
+    const matches = ['summary-a', 'summary-b', 'intro'].map((id, contextRank) => ({ id, score: contextRank === 2 ? 0.9 : 0.8, contextRank }))
+    const metadata = new Map(matches.map(x => [x.id, { source: 'article', sourceId: 'same', evidenceLevel: 1, text: x.id }]))
+    expect(selectEvidence(matches, metadata).map(x => x.id)).toEqual(['summary-a', 'summary-b', 'intro'])
+  })
+  it('bounds output and uses the Kimi reasoning protocol', async () => {
+    let body: Record<string, unknown> = {}
+    const provider = new NvidiaGenerationProvider('test', async (_url, init) => {
+      body = JSON.parse(String(init?.body))
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{"ok":true}' } }], usage: { prompt_tokens: 10, completion_tokens: 20 } })
+    })
+    expect((await provider.generate('consulta', 'moonshotai/kimi-k3')).content).toBe('{"ok":true}')
+    expect(body).toMatchObject({ model: 'moonshotai/kimi-k3', max_tokens: 4000, temperature: 1, reasoning_effort: 'low' })
+  })
+  it.each([{ finish_reason: 'length', content: '{"partial":true}' }, { finish_reason: 'stop', content: '   ' }])('rejects invalid final output %j', async ({ finish_reason, content }) => {
+    const provider = new NvidiaGenerationProvider('test', async () => Response.json({ choices: [{ finish_reason, message: { content } }] }))
+    await expect(provider.generate('consulta', 'moonshotai/kimi-k3')).rejects.toThrow()
+  })
+})

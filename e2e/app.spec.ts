@@ -16,6 +16,12 @@ test('el panel de importación Hevy expone controles accesibles', async ({ page 
   await expect(page.getByLabel('API key')).toHaveAttribute('type', 'password')
 })
 
+test('la ruta del coach presenta el gate de cuenta cuando no hay sesión', async ({ page }) => {
+  await page.goto('./coach')
+  await expect(page.getByRole('heading', { name: 'Coach' })).toBeVisible()
+  await expect(page.getByText('Inicia sesión para usar el coach privado.')).toBeVisible()
+})
+
 test('importa el dialecto real del CSV de Hevy', async ({ page }) => {
   await page.goto('./perfil')
   await page.getByRole('button', { name: /Importar datos de Hevy/ }).click()
@@ -23,8 +29,13 @@ test('importa el dialecto real del CSV de Hevy', async ({ page }) => {
   await expect(page.getByText(/Hevy importado: 3 registros/)).toBeVisible()
 })
 
-test('la pantalla inicial no tiene violaciones axe críticas', async ({ page }) => {
+test('la pantalla inicial no tiene violaciones axe críticas', async ({ page }, testInfo) => {
+  // axe-core puede quedar bloqueado en la implementación de accesibilidad de
+  // WebKit; la auditoría se ejecuta en Chromium y el flujo completo continúa
+  // cubierto en ambos proyectos.
+  test.skip(testInfo.project.name === 'webkit-iphone', 'axe-core no termina de forma determinista en WebKit')
   await page.goto('./')
+  await expect(page.getByRole('heading', { name: 'Entrenar' })).toBeVisible()
   const result = await new AxeBuilder({ page }).analyze()
   expect(result.violations.filter((violation) => violation.impact === 'critical')).toEqual([])
 })

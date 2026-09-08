@@ -8,7 +8,7 @@ import type { AdaptationProposal } from '../db/types'
 import { useCatalog } from '../data/exercises'
 import { useActive } from '../stores/activeWorkout'
 import { useSettings } from '../stores/settings'
-import { toastUndo } from '../stores/toasts'
+import { toastUndo, useToasts } from '../stores/toasts'
 import {
   formatDay,
   formatDuration,
@@ -19,7 +19,9 @@ import {
 } from '../lib/format'
 import { fireConfetti } from '../lib/confetti'
 import { applyAdaptationDecisions, createEditedProposal, revertAdaptationAnalysis, type ProposalDecision } from '../lib/adaptation'
+import { invalidateStaleAdaptationJobsInTransaction } from '../lib/adaptationContext'
 import { enqueueAdaptationEvent, retryFailedAdaptationJob } from '../lib/adaptationClient'
+import { getCoachAccountId } from '../lib/coachAccount'
 import { ExerciseThumb } from '../components/ExerciseThumb'
 import { ActionSheet, Confirm } from '../components/Sheet'
 import {
@@ -64,17 +66,17 @@ export default function WorkoutDetail() {
   const { byId } = useCatalog()
   const session = useActive((s) => s.session)
   const units = useSettings((s) => s.units)
-  const { isSignedIn } = useAuth()
+  const { isSignedIn, userId } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'edit' | 'repeat' | null>(null)
   const [confirmApply, setConfirmApply] = useState(false)
   const adaptation = useLiveQuery(async () => {
     if (!id) return null
-    const job = await db.adaptationJobs.where('workoutId').equals(id).first()
+    const job = userId ? await db.adaptationJobs.where('ownerId').equals(userId).filter((item) => item.workoutId === id).first() : undefined
     if (!job?.analysisId) return { job, proposals: [] as AdaptationProposal[] }
-    return { job, proposals: await db.adaptationProposals.where('analysisId').equals(job.analysisId).toArray() }
-  }, [id], null)
+    return { job, proposals: await db.adaptationProposals.where('analysisId').equals(job.analysisId).filter((proposal) => proposal.ownerId === userId).toArray() }
+  }, [id, userId], null)
   const [proposalDecisions, setProposalDecisions] = useState<Record<string, ProposalDecision['decision']>>({})
 
   const hasPRs = !!workout && workout.prs.length > 0
@@ -108,7 +110,10 @@ export default function WorkoutDetail() {
 
   const deleteWorkout = () => {
     const snapshot = workout
-    void db.workouts.delete(workout.id).then(() => {
+    void db.transaction('rw', [db.workouts, db.routines, db.adaptationJobs, db.adaptationProposals], async () => {
+      await db.workouts.delete(workout.id)
+      await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
+    }).then(() => {
       navigate('/historial', { replace: true })
       toastUndo('Entreno eliminado', () => void db.workouts.put(snapshot))
     })
@@ -117,15 +122,26 @@ export default function WorkoutDetail() {
   const prValue = (kind: PRKind, value: number) =>
     kind === 'setVolume' ? formatVolume(value, units) : formatWeight(value, units)
 
+  // Una propuesta editada queda como historial; solo la revisión pendiente se
+  // puede confirmar y presentar al usuario.
   const pendingProposals = adaptation?.proposals.filter((proposal) => proposal.status === 'pending') ?? []
   const allDecided = pendingProposals.length > 0 && pendingProposals.every((proposal) => proposalDecisions[proposal.id])
   const applyProposals = async () => {
     const analysisId = adaptation?.job?.analysisId
     if (!analysisId || !allDecided) return
-    const decisions = pendingProposals.map((proposal) => ({ proposalId: proposal.id, decision: proposalDecisions[proposal.id] === 'accept' ? 'accept' as const : 'reject' as const, candidateId: proposal.candidateId }))
-    await applyAdaptationDecisions(analysisId, decisions)
-    void Promise.all(decisions.map((decision) => enqueueAdaptationEvent({ analysisId, exerciseId: pendingProposals.find((proposal) => proposal.id === decision.proposalId)?.exerciseId ?? 'unknown', candidateId: decision.candidateId, event: decision.decision === 'accept' ? 'accepted' : 'rejected' })))
-    setProposalDecisions({})
+    try {
+      const decisions = pendingProposals.map((proposal) => ({ proposalId: proposal.id, decision: proposalDecisions[proposal.id] === 'accept' ? 'accept' as const : 'reject' as const, candidateId: proposal.candidateId }))
+      const result = await applyAdaptationDecisions(analysisId, decisions)
+      if (result.status === 'stale') {
+        useToasts.getState().show('La rutina cambió; las propuestas quedaron obsoletas y no se aplicaron.')
+        setProposalDecisions({})
+        return
+      }
+      void Promise.all(decisions.map((decision) => enqueueAdaptationEvent({ analysisId, exerciseId: pendingProposals.find((proposal) => proposal.id === decision.proposalId)?.exerciseId ?? 'unknown', candidateId: decision.candidateId, event: decision.decision === 'accept' ? 'accepted' : 'rejected' })))
+      setProposalDecisions({})
+    } catch {
+      useToasts.getState().show('No se pudieron aplicar las propuestas; la rutina no fue modificada.')
+    }
   }
 
   return (
@@ -169,8 +185,9 @@ export default function WorkoutDetail() {
         <div className="card mt-4 px-4 py-3">
           <div className="font-bold">Coach adaptativo</div>
           {adaptation.job.status === 'pending' || adaptation.job.status === 'processing' ? <p className="pt-1 text-sm text-muted">Análisis pendiente; se procesará al recuperar conexión.</p> : null}
-          {adaptation.job.status === 'failed' ? <><p className="pt-1 text-sm text-danger">No se pudo completar el análisis.</p><button className="btn btn-surface mt-2 w-full" onClick={() => void retryFailedAdaptationJob(adaptation.job!.id)}>Reintentar análisis</button></> : null}
-          {adaptation.proposals.map((proposal) => <ProposalCard key={proposal.id} proposal={proposal} decision={proposalDecisions[proposal.id]} onDecision={(decision) => setProposalDecisions((current) => ({ ...current, [proposal.id]: decision }))} onEdit={(candidateId) => void createEditedProposal(proposal.id, candidateId).then(() => enqueueAdaptationEvent({ analysisId: proposal.analysisId, exerciseId: proposal.exerciseId, candidateId, event: 'edited' }))} />)}
+          {adaptation.job.status === 'failed' ? <><p className="pt-1 text-sm text-danger">{adaptation.job.lastError ?? 'No se pudo completar el análisis.'}</p><button className="btn btn-surface mt-2 w-full" onClick={() => void retryFailedAdaptationJob(adaptation.job!.id)}>Reintentar análisis</button></> : null}
+          {adaptation.job.status === 'completed' && adaptation.job.pendingExplanation ? <p className="pt-1 text-sm text-muted">Candidatos deterministas listos; la explicación avanzada quedó pendiente por un fallo temporal del proveedor.</p> : null}
+          {pendingProposals.map((proposal) => <ProposalCard key={proposal.id} proposal={proposal} decision={proposalDecisions[proposal.id]} onDecision={(decision) => setProposalDecisions((current) => ({ ...current, [proposal.id]: decision }))} onEdit={(candidateId) => void createEditedProposal(proposal.id, candidateId).then(() => enqueueAdaptationEvent({ analysisId: proposal.analysisId, exerciseId: proposal.exerciseId, candidateId, event: 'edited' }))} />)}
           {allDecided && <button className="btn btn-primary mt-3 w-full" onClick={() => setConfirmApply(true)}>Aplicar decisiones</button>}
           {adaptation.proposals.some((proposal) => proposal.status === 'accepted' && proposal.appliedRoutineRevision !== undefined) && adaptation.job.analysisId && <button className="btn btn-surface mt-2 w-full" onClick={() => void revertAdaptationAnalysis(adaptation.job!.analysisId!).then(() => void enqueueAdaptationEvent({ analysisId: adaptation.job!.analysisId!, exerciseId: 'batch', event: 'reverted' }))}>Revertir lote aplicado</button>}
           <p className="pt-3 text-[11px] text-muted">Los candidatos son cambios cerrados. Editar crea una nueva revisión y conserva la propuesta original.</p>
@@ -267,7 +284,8 @@ export default function WorkoutDetail() {
                               : setNumber}
                       </span>
                       <span className="font-semibold tabular-nums">{setLine(s, units)}</span>
-                      {s.rpe && <span className="text-xs text-warning">RPE {s.rpe}</span>}
+                      {s.rpe !== undefined && <span className="text-xs text-warning">RPE {s.rpe}</span>}
+                      {s.rir !== undefined && <span className="text-xs text-primary">RIR {s.rir}</span>}
                     </div>
                   )
                 })}
@@ -338,12 +356,15 @@ export default function WorkoutDetail() {
 }
 
 function ProposalCard({ proposal, decision, onDecision, onEdit }: { proposal: AdaptationProposal; decision?: ProposalDecision['decision']; onDecision: (decision: ProposalDecision['decision']) => void; onEdit: (candidateId: string) => void }) {
+  const sources = (proposal.sources ?? []).filter((source) => (proposal.citations ?? []).includes(source.id))
+  const values = proposal.candidate
   return <div className="mt-3 border-t border-border pt-3 text-sm">
     <div className="flex items-center justify-between gap-2"><span className="font-semibold">{proposal.exerciseId}</span><span className="text-xs text-muted">{proposal.confidence ?? proposal.candidate.confidence} · {proposal.selectedModel ?? 'deterministic'}</span></div>
-    <p className="pt-1 text-xs text-muted">{proposal.previousValues?.loadKg ?? proposal.candidate.previous.loadKg ?? '—'} kg / {proposal.previousValues?.plannedSets ?? proposal.candidate.previous.plannedSets} series → {proposal.proposedValues?.loadKg ?? proposal.candidate.next.loadKg ?? '—'} kg / {proposal.proposedValues?.plannedSets ?? proposal.candidate.next.plannedSets} series</p>
-    <p className="pt-1 text-muted">{proposal.candidate.explanation}</p>
+    <p className="pt-1 text-xs text-muted">{values.previous.loadKg ?? '—'} kg / {values.previous.plannedSets} series · {values.previous.repsMin}–{values.previous.repsMax} reps → {values.next.loadKg ?? '—'} kg / {values.next.plannedSets} series · {values.next.repsMin}–{values.next.repsMax} reps</p>
+    <p className="pt-1 text-muted">{values.explanation}</p>
     {proposal.candidate.warnings.length > 0 && <p className="pt-1 text-xs text-warning">{proposal.candidate.warnings.join(' · ')}</p>}
-    {(proposal.citations?.length ?? 0) > 0 && <p className="pt-1 text-xs text-primary">Citas: {proposal.citations!.join(' · ')}</p>}
+    <p className="pt-1 text-xs text-muted">Evidencia: {proposal.candidate.evidence.comparableCount} comparables{proposal.candidate.evidence.comparableWorkoutIds.length ? ` · ${proposal.candidate.evidence.comparableWorkoutIds.join(', ')}` : ''}</p>
+    {sources.length > 0 && <div className="pt-1 text-xs text-primary">Fuentes: {sources.map((source) => <a key={source.id} className="mr-2 underline" href={source.url} target="_blank" rel="noreferrer">{source.author}, {source.title}</a>)}</div>}
     <div className="flex gap-2 pt-2"><button className={`btn flex-1 py-2 ${decision === 'accept' ? 'bg-success/20 text-success' : 'btn-surface'}`} onClick={() => onDecision('accept')}>Aceptar</button><button className={`btn flex-1 py-2 ${decision === 'reject' ? 'bg-danger/20 text-danger' : 'btn-surface'}`} onClick={() => onDecision('reject')}>Rechazar</button></div>
     {proposal.candidateOptions.length > 1 && <div className="flex flex-wrap gap-1 pt-2">{proposal.candidateOptions.map((candidate) => <button key={candidate.candidateId} className="chip" onClick={() => onEdit(candidate.candidateId)}>{candidate.kind}</button>)}</div>}
   </div>

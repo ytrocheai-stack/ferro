@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useAuth } from '@clerk/react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import type { SetType } from '../db/types'
 import type { PostWorkoutFeedback } from '../db/types'
@@ -17,6 +18,8 @@ import { clock, displayToKg, formatDuration, formatVolume, kgToDisplay } from '.
 import { REST_OPTIONS, restLabel } from '../lib/constants'
 import { suggestProgression, warmupSets } from '../lib/progression'
 import { toastUndo } from '../stores/toasts'
+import { startCoachRun } from '../lib/coachClient'
+import { getCoachConsent } from '../lib/coachConsent'
 import { ExercisePicker } from '../components/ExercisePicker'
 import { ExerciseThumb } from '../components/ExerciseThumb'
 import { PlateCalculatorSheet } from '../components/PlateCalculator'
@@ -46,10 +49,12 @@ const supersetColor = (g: number) => SUPERSET_COLORS[g % SUPERSET_COLORS.length]
 const supersetLetter = (g: number) => String.fromCharCode(65 + (g % 26))
 
 const RPE_VALUES = [6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10]
+const RIR_VALUES = [0, 1, 2, 3, 4, 5]
 
 export default function ActiveWorkoutPage() {
   const session = useActive((s) => s.session)
   const keepAwake = useSettings((s) => s.keepAwake)
+  const { getToken, userId } = useAuth()
   useWakeLock(!!session && keepAwake)
   const navigate = useNavigate()
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -67,6 +72,9 @@ export default function ActiveWorkoutPage() {
   const doFinish = async () => {
     const editing = session.editingWorkoutId
     const wid = await useActive.getState().finish()
+    if (wid && !editing && userId && getCoachConsent(userId)) {
+      void startCoachRun(getToken, 'Analiza mi sesión terminada y dime qué debería ajustar antes del próximo entreno.').catch(() => undefined)
+    }
     if (wid) navigate(`/historial/${wid}${editing ? '' : '?nuevo=1'}`, { replace: true })
   }
 
@@ -186,6 +194,7 @@ function ExerciseBlock({
   const { byId } = useCatalog()
   const units = useSettings((s) => s.units)
   const trackRpe = useSettings((s) => s.trackRpe)
+  const trackRir = useSettings((s) => s.trackRir)
   const barWeightKg = useSettings((s) => s.barWeightKg)
   const info = byId.get(ex.exerciseId)
   const isCardio = info?.bodyPart === 'cardio'
@@ -273,9 +282,11 @@ function ExerciseBlock({
   ]
 
   const gridCols =
-    trackRpe && !isCardio
-      ? 'grid-cols-[2.1rem_1fr_3.9rem_3.9rem_2.3rem_2.6rem]'
-      : 'grid-cols-[2.2rem_1fr_4.4rem_4.4rem_2.6rem]'
+    !isCardio && trackRpe && trackRir
+      ? 'grid-cols-[2.1rem_1fr_3.6rem_3.6rem_2.1rem_2.1rem_2.6rem]'
+      : !isCardio && (trackRpe || trackRir)
+        ? 'grid-cols-[2.1rem_1fr_4rem_4rem_2.3rem_2.6rem]'
+        : 'grid-cols-[2.2rem_1fr_4.4rem_4.4rem_2.6rem]'
 
   return (
     <div
@@ -351,6 +362,7 @@ function ExerciseBlock({
           </>
         )}
         {trackRpe && !isCardio && <span>RPE</span>}
+        {trackRir && !isCardio && <span>RIR</span>}
         <span>
           <IconCheck size={12} className="mx-auto" />
         </span>
@@ -414,8 +426,10 @@ function SetRow({
 }) {
   const units = useSettings((s) => s.units)
   const trackRpe = useSettings((s) => s.trackRpe)
+  const trackRir = useSettings((s) => s.trackRir)
   const [typeOpen, setTypeOpen] = useState(false)
   const [rpeOpen, setRpeOpen] = useState(false)
+  const [rirOpen, setRirOpen] = useState(false)
   const st = ex.sets[i]
   if (!st) return null
   const ph = placeholderFor(ex, i)
@@ -524,6 +538,18 @@ function SetRow({
         </button>
       )}
 
+      {trackRir && !isCardio && (
+        <button
+          className={`min-h-9 rounded-lg py-1 text-center text-xs font-bold ${
+            st.rir !== undefined ? 'text-primary' : 'text-muted'
+          }`}
+          onClick={() => setRirOpen(true)}
+          aria-label="RIR"
+        >
+          {st.rir ?? '–'}
+        </button>
+      )}
+
       <button
         className={`mx-auto flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${
           st.completed ? 'bg-success text-white' : 'bg-surface-2 text-muted'
@@ -576,6 +602,34 @@ function SetRow({
             onClick={() => {
               useActive.getState().updateSet(ex.uid, i, { rpe: undefined })
               setRpeOpen(false)
+            }}
+          >
+            Quitar
+          </button>
+        </div>
+      </Sheet>
+      <Sheet open={rirOpen} onClose={() => setRirOpen(false)} title="RIR (repeticiones en reserva)">
+        <p className="pb-3 text-xs text-muted">
+          0 = fallo muscular · 1 = quedaba 1 repetición · registra el valor observado, sin convertirlo desde RPE.
+        </p>
+        <div className="grid grid-cols-3 gap-2 pb-2">
+          {RIR_VALUES.map((v) => (
+            <button
+              key={v}
+              className={`btn py-2.5 text-sm ${st.rir === v ? 'btn-primary' : 'btn-surface'}`}
+              onClick={() => {
+                useActive.getState().updateSet(ex.uid, i, { rir: v })
+                setRirOpen(false)
+              }}
+            >
+              {v}
+            </button>
+          ))}
+          <button
+            className="btn btn-surface py-2.5 text-sm text-muted"
+            onClick={() => {
+              useActive.getState().updateSet(ex.uid, i, { rir: undefined })
+              setRirOpen(false)
             }}
           >
             Quitar

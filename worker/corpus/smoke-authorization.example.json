@@ -1,0 +1,24 @@
+{
+  "accessVerified": false,
+  "budgetVerified": false,
+  "maxAdditionalCost": 0,
+  "verifiedAt": "",
+  "reviewer": "",
+  "evidence": "Registrar cuota/coste cero, allowlist y consentimiento; no incluir secretos.",
+  "canaryAccountId": "",
+  "expectedCorpusVersion": "",
+  "expectedConsentVersion": "coach-beta-v1",
+  "maxRequests": 4,
+  "maxInputTokens": 0,
+  "maxOutputTokens": 0,
+  "estimatedInputTokens": 0,
+  "estimatedOutputTokens": 0,
+  "temporaryFlags": {
+    "ENABLE_BETA": true,
+    "ENABLE_EMBEDDINGS": true,
+    "ENABLE_FLASH": true,
+    "ENABLE_PRO": false,
+    "ENABLE_RERANKING": false,
+    "ENABLE_PROVIDER_PROBE": false
+  }
+}

@@ -16,16 +16,21 @@ import type {
   AdaptationJob,
   RoutineRevisionSnapshot,
   AdaptationEventJob,
+  CoachRunRecord,
+  CoachMessage,
+  CoachProfile,
+  CoachConsentRecord,
 } from '../db/types'
 import { useSettings, type SettingsValues } from '../stores/settings'
 import { useNutrition, type NutritionGoals } from '../stores/nutrition'
 import { shareOrDownloadFile, uid } from './format'
 import { backupSchema, photosBackupSchema } from './validation'
 import { normalizeRoutine } from './adaptation'
+import { CONTEXT_INVALIDATED_MESSAGE } from './adaptationErrors'
 
 interface BackupFile {
   app: 'ferro'
-  version: 1 | 2 | 3 | 4 | 5
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
   exportedAt: string
   settings: SettingsValues
   nutritionGoals?: NutritionGoals
@@ -43,10 +48,14 @@ interface BackupFile {
   adaptationJobs?: AdaptationJob[]
   routineRevisionSnapshots?: RoutineRevisionSnapshot[]
   adaptationEventJobs?: AdaptationEventJob[]
+  coachRuns?: CoachRunRecord[]
+  coachMessages?: CoachMessage[]
+  coachProfiles?: CoachProfile[]
+  coachConsents?: CoachConsentRecord[]
 }
 
 export async function exportBackup(): Promise<void> {
-  const [workouts, routines, customExercises, folders, measurements, foods, dishes, foodLog, importBatches, externalRefs, adaptationProposals, adaptationJobs, routineRevisionSnapshots, adaptationEventJobs] =
+  const [workouts, routines, customExercises, folders, measurements, foods, dishes, foodLog, importBatches, externalRefs, adaptationProposals, adaptationJobs, routineRevisionSnapshots, adaptationEventJobs, coachRuns, coachMessages, coachProfiles, coachConsents] =
     await Promise.all([
       db.workouts.toArray(),
       db.routines.toArray(),
@@ -62,10 +71,14 @@ export async function exportBackup(): Promise<void> {
       db.adaptationJobs.toArray(),
       db.routineRevisionSnapshots.toArray(),
       db.adaptationEventJobs.toArray(),
+      db.coachRuns.toArray(),
+      db.coachMessages.toArray(),
+      db.coachProfiles.toArray(),
+      db.coachConsents.toArray(),
     ])
   const payload: BackupFile = {
     app: 'ferro',
-    version: 5,
+    version: 9,
     exportedAt: new Date().toISOString(),
     settings: { ...useSettings.getState() },
     nutritionGoals: { ...useNutrition.getState().goals },
@@ -83,6 +96,10 @@ export async function exportBackup(): Promise<void> {
     adaptationJobs,
     routineRevisionSnapshots,
     adaptationEventJobs,
+    coachRuns,
+    coachMessages,
+    coachProfiles,
+    coachConsents,
   }
   await downloadJson(payload, `nextrep-backup-${format(new Date(), 'yyyy-MM-dd')}.json`)
 }
@@ -101,6 +118,41 @@ export interface ImportResult {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
+}
+
+function sanitizeImportedProposal(proposal: AdaptationProposal): AdaptationProposal | null {
+  if (!proposal.ownerId) return null
+  const normalized = {
+    ...proposal,
+    status: (proposal.status as string) === 'applied' ? 'accepted' : proposal.status,
+    policyVersion: proposal.policyVersion ?? 'v1',
+    corpusVersion: proposal.corpusVersion ?? 'none',
+    previousValues: proposal.previousValues ?? proposal.candidate.previous,
+    proposedValues: proposal.proposedValues ?? proposal.candidate.next,
+    rule: proposal.rule ?? proposal.candidate.rule,
+    confidence: proposal.confidence ?? proposal.candidate.confidence,
+    citations: proposal.citations ?? [],
+    warnings: proposal.warnings ?? proposal.candidate.warnings,
+    selectedModel: proposal.selectedModel ?? 'deterministic' as const,
+  }
+  return normalized.status === 'pending' && (!normalized.workoutId || !normalized.requestId || !normalized.contextKey)
+    ? { ...normalized, status: 'stale' }
+    : normalized
+}
+
+function sanitizeImportedJob(job: AdaptationJob): AdaptationJob | null {
+  if (!job.ownerId) return null
+  if (job.requestId && job.contextKey && job.payload) return job
+  return {
+    ...job,
+    status: 'failed',
+    errorCode: 'context-invalidated',
+    lastError: CONTEXT_INVALIDATED_MESSAGE,
+    nextRetryAt: undefined,
+    runId: undefined,
+    leaseExpiresAt: undefined,
+    updatedAt: job.updatedAt ?? job.createdAt,
+  }
 }
 
 export const MAX_BACKUP_BYTES = 25 * 1024 * 1024
@@ -132,7 +184,7 @@ export async function importBackup(file: File): Promise<ImportResult> {
 
   await db.transaction(
     'rw',
-    [db.workouts, db.routines, db.customExercises, db.folders, db.measurements, db.foods, db.dishes, db.foodLog, db.importBatches, db.externalRefs, db.adaptationProposals, db.adaptationJobs, db.routineRevisionSnapshots, db.adaptationEventJobs],
+    [db.workouts, db.routines, db.customExercises, db.folders, db.measurements, db.foods, db.dishes, db.foodLog, db.importBatches, db.externalRefs, db.adaptationProposals, db.adaptationJobs, db.routineRevisionSnapshots, db.adaptationEventJobs, db.coachRuns, db.coachMessages, db.coachProfiles, db.coachConsents],
     async () => {
       await Promise.all([
         db.workouts.clear(),
@@ -149,6 +201,10 @@ export async function importBackup(file: File): Promise<ImportResult> {
         db.adaptationJobs.clear(),
         db.routineRevisionSnapshots.clear(),
         db.adaptationEventJobs.clear(),
+        db.coachRuns.clear(),
+        db.coachMessages.clear(),
+        db.coachProfiles.clear(),
+        db.coachConsents.clear(),
       ])
       await Promise.all([
         db.workouts.bulkPut(data.workouts),
@@ -161,22 +217,14 @@ export async function importBackup(file: File): Promise<ImportResult> {
         db.foodLog.bulkPut(data.foodLog ?? []),
         db.importBatches.bulkPut(data.importBatches ?? []),
         db.externalRefs.bulkPut(data.externalRefs ?? []),
-        db.adaptationProposals.bulkPut((data.adaptationProposals ?? []).map((proposal) => ({
-          ...proposal,
-          status: (proposal.status as string) === 'applied' ? 'accepted' : proposal.status,
-          policyVersion: proposal.policyVersion ?? 'v1',
-          corpusVersion: proposal.corpusVersion ?? 'none',
-          previousValues: proposal.previousValues ?? proposal.candidate.previous,
-          proposedValues: proposal.proposedValues ?? proposal.candidate.next,
-          rule: proposal.rule ?? proposal.candidate.rule,
-          confidence: proposal.confidence ?? proposal.candidate.confidence,
-          citations: proposal.citations ?? [],
-          warnings: proposal.warnings ?? proposal.candidate.warnings,
-          selectedModel: proposal.selectedModel ?? 'deterministic',
-        }))),
-        db.adaptationJobs.bulkPut(data.adaptationJobs ?? []),
+        db.adaptationProposals.bulkPut((data.adaptationProposals ?? []).map(sanitizeImportedProposal).filter((proposal) => proposal !== null)),
+        db.adaptationJobs.bulkPut((data.adaptationJobs ?? []).map(sanitizeImportedJob).filter((job) => job !== null)),
         db.routineRevisionSnapshots.bulkPut(data.routineRevisionSnapshots ?? []),
-        db.adaptationEventJobs.bulkPut(data.adaptationEventJobs ?? []),
+        db.adaptationEventJobs.bulkPut((data.adaptationEventJobs ?? []).filter((job) => !!job.ownerId)),
+        db.coachRuns.bulkPut((data.coachRuns ?? []).filter((run) => !!run.ownerId)),
+        db.coachMessages.bulkPut((data.coachMessages ?? []).filter((message) => !!message.ownerId)),
+        db.coachProfiles.bulkPut((data.coachProfiles ?? []).filter((profile) => !!profile.ownerId)),
+        db.coachConsents.bulkPut((data.coachConsents ?? []).filter((consent) => !!consent.ownerId)),
       ])
     },
   )

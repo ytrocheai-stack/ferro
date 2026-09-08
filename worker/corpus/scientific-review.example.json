@@ -1,0 +1,12 @@
+{
+  "approved": false,
+  "reviewer": "",
+  "reviewedAt": "",
+  "queryCount": 50,
+  "relevantReviewed": false,
+  "hardNegativesReviewed": false,
+  "claimsReviewed": false,
+  "populationApplicabilityReviewed": false,
+  "exclusionsCertified": false,
+  "notes": "La persona responsable debe completar y conservar la justificación fuera de Git; no incluir secretos."
+}

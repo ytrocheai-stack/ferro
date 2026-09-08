@@ -1,0 +1,51 @@
+name = "nextrep-adaptation"
+main = "src/index.ts"
+compatibility_date = "2026-08-26"
+
+[[workflows]]
+name = "nextrep-coach-run"
+binding = "COACH_WORKFLOW"
+class_name = "CoachRunWorkflow"
+
+[triggers]
+crons = ["17 3 * * *"]
+
+[vars]
+NVIDIA_REQUESTS_PER_MINUTE = "40"
+NVIDIA_ACCOUNTING_MODE = "requests"
+ENVIRONMENT = "production"
+ALLOWED_CLERK_IDS = "user_3ITDXf8hPt81kAjzS3Dw8U77qfE"
+ALLOWED_ORIGINS = "https://ytrocheai-stack.github.io"
+CLERK_AUTHORIZED_PARTIES = "https://ytrocheai-stack.github.io"
+FLASH_MODEL = "moonshotai/kimi-k3"
+PRO_MODEL = "deepseek-ai/deepseek-v4-pro-0813"
+EMBEDDING_MODEL = "nvidia/nemotron-3-embed-1b"
+RAG_INDEX_VERSION = "sha256:1d17531bbdcd614616bbf35bd0eb4a80e978a0af9c8fb50417be7d1201519c1f"
+RAG_EXPECTED_SOURCE_COUNT = "88"
+RAG_EXPECTED_CHUNK_COUNT = "2708"
+ENABLE_BETA = "false"
+ENABLE_EMBEDDINGS = "false"
+ENABLE_FLASH = "false"
+ENABLE_PRO = "false"
+ENABLE_RERANKING = "false"
+ENABLE_PROVIDER_PROBE = "false"
+REQUIRED_CONSENT_VERSION = "coach-beta-v1"
+MAX_CONCURRENT_ANALYSES = "1"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nextrep-adaptation"
+database_id = "b7e25a26-9264-49d2-9ac8-f6cb5b7024e8"
+migrations_dir = "migrations"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "nextrep-adaptation-512"
+
+[[vectorize]]
+binding = "VECTORIZE_LEGACY_768"
+index_name = "nextrep-adaptation-768"
+
+[[vectorize]]
+binding = "VECTORIZE_EVAL_1024"
+index_name = "nextrep-adaptation-eval-1024"

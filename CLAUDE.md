@@ -4,6 +4,11 @@
 > invariantes que NO se pueden romper. El detalle completo vive en [docs/ARQUITECTURA.md](docs/ARQUITECTURA.md),
 > [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md) y [docs/AUDITORIA-2026-07.md](docs/AUDITORIA-2026-07.md).
 
+> Revisión del coach, 2026-08-30: [auditoría del plan](docs/AUDITORIA-COACH-2026-08-30.md) y
+> [bitácora SDD](docs/PLAN-SDD-COACH-2026-08.md). Las regresiones por hallazgo pasan localmente, pero
+> E0/E5, los contratos de agentes, los gates remotos y la apertura siguen pendientes. No inferir que los cambios locales estén
+> publicados a partir de `/health`.
+
 ## Qué es
 
 **NextRep** (antes "Ferro") es un clon personal de [Hevy](https://www.hevyapp.com/): registro de
@@ -29,6 +34,12 @@ irreemplazables**.
 | `npm run icons` | Regenera iconos PWA con sharp (las salidas van commiteadas). |
 | `npm run check` | Lint, typecheck PWA/Worker, pruebas unitarias y build con comprobación anti-secretos. |
 | `npm run test:e2e` | Smoke/accesibilidad en Chromium y WebKit; no cubre todavía el flujo adaptativo. |
+| `npm run agent:lab` | Ejecuta el laboratorio ficticio sin IndexedDB, red ni proveedores. |
+| `npm run agent:evaluate` | Ejecuta 28 casos de aceptación y 10 de seguridad en tres repeticiones; separa sus gates. |
+| `npm run agent:rag` | Evalúa artefactos RAG reales y falla si faltan vectores, citas o revisión independiente. |
+| `npm run corpus:prepare -- --input <Hevy_Corpus>` | Verifica hashes/XML, normaliza 2.708 fragmentos y escribe sólo en `.cache`. |
+| `npm run corpus:embed` / `npm run corpus:upload` | Genera o carga por lotes con checkpoints; llamadas reales bloqueadas por defecto. |
+| `npm run corpus:status` | Emite el diagnóstico preparado/embeddings/índice/proveedor/calidad. |
 
 ## ⚠️ Invariantes críticos (romperlos = pérdida de datos o app rota)
 
@@ -46,8 +57,8 @@ irreemplazables**.
 3. **Los pesos se persisten SIEMPRE en kg** (`weightKg`). Las libras son solo presentación
    (`kgToDisplay`/`displayToKg`/`formatWeight` en [src/lib/format.ts](src/lib/format.ts)). Nunca guardes valores en unidades de display.
 4. **Esquema Dexie: cambios solo aditivos.** Para una tabla/índice nuevo: añade una versión nueva
-   (`v5` es la vigente) re-declarando TODO el esquema, sin borrar ningún bloque histórico
-   `version(1)`…`version(5)`, e inclúyela en
+   (`v9` es la vigente) re-declarando TODO el esquema, sin borrar ningún bloque histórico
+   `version(1)`…`version(7)`, e inclúyela en
    `exportBackup`/`importBackup` ([src/lib/backup.ts](src/lib/backup.ts)) con validación. Campos nuevos dentro del
    blob de un registro NO necesitan migración (no son índices).
 5. **No uses `loading="lazy"` en imágenes**: Chromium no las carga offline aunque estén en el SW.
@@ -84,13 +95,14 @@ src/
 ├── components/   Sheet/Select/Confirm (modales), ExercisePicker, FoodPicker, DishPicker,
 │                 GymKeypad, BarcodeScanner, TemplateBrowser, ExerciseThumb, Toasts, iconos…
 ├── stores/       Zustand: activeWorkout (sesión en curso), settings, nutrition (objetivos), toasts
-├── db/           db.ts (esquema Dexie v5, 15 tablas) + types.ts (todos los tipos de datos)
+├── db/           db.ts (esquema Dexie v9, 19 tablas) + types.ts (todos los tipos de datos)
 ├── data/         exercises.ts (catálogo), muscleGroups.ts, templates.ts (programas),
 │                 foods.ts + foods.seed.ts (~250 alimentos), translations.ts, measurementLabels.ts
 ├── lib/          format, stats (1RM/PRs/volumen), progression, adaptación/cliente/colas, nutrition
 │                 (BMR/TDEE/EMA), backup, csv, notify, photos, gifs, openFoodFacts, platform…
 └── App.tsx       Shell: layout, TabBar, RestTimerOverlay global, ActiveBanner, Toasts
-packages/         adaptation-core (motor determinista TypeScript compartido PWA/Worker)
+packages/         adaptation-core (motor determinista y contratos compartidos PWA/Worker)
+                  agent-lab (agentes, herramientas, escenarios y evaluación ficticia)
 worker/           Cloudflare Worker, migraciones D1, RAG y pruebas; despliegue independiente
 scripts/          fetch-dataset.mjs · postbuild.mjs · generate-icons.mjs · check-public-bundle.mjs
 docs/             ARQUITECTURA.md · DESPLIEGUE.md · ADAPTACION-ENTRENAMIENTO.md · auditorías
@@ -99,6 +111,7 @@ docs/             ARQUITECTURA.md · DESPLIEGUE.md · ADAPTACION-ENTRENAMIENTO.m
 ## Decisiones/limitaciones conocidas (no son bugs)
 
 Ver la lista completa con contexto en [docs/AUDITORIA-2026-07.md](docs/AUDITORIA-2026-07.md). Las principales:
-los PRs se calculan al guardar y no se recalculan al editar entrenos pasados; la notificación de
+los PRs se calculan al guardar y el guardado de una edición recalcula el historial cronológico
+completo; no se reescriben automáticamente por cambios externos posteriores. La notificación de
 fin de descanso solo puede llegar con la app abierta o al volver a ella (PWA sin push server);
 el día de Nutrición no auto-avanza al cruzar medianoche con la app abierta.

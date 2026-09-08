@@ -53,11 +53,11 @@
 | **Visor de fotos de progreso** | Tocar una miniatura abría directamente "¿Eliminar esta foto?" (borrado accidental a un toque) | Tocar abre un visor (foto grande + fecha); eliminar vive dentro, con confirmación y Deshacer |
 | **Platos (dishes)** | Tabla, tipos y backup existían; cero interfaz | Pestaña "Platos" completa en el selector de comida: crear/editar/eliminar platos (alimentos con gramos, macros exactos), registrar con ración 0.5×/1×/1.5×/2×/personalizada como una entrada agregada ([DishPicker.tsx](../src/components/DishPicker.tsx)) |
 
-## Limitaciones conocidas (documentadas, sin cambio de código)
+## Limitaciones conocidas (documentadas, sin cambio de código en esa revisión)
 
-1. **PRs congelados**: se calculan al guardar el entreno y no se recalculan si después editas/borras
-   un entreno anterior (un "PR" antiguo puede quedar mostrado). Recalcular todo el historial sería
-   una feature aparte.
+1. **PRs históricos (corregido posteriormente)**: en la implementación actual, el guardado de una
+   edición normaliza el historial cronológicamente y recalcula los PRs derivados. Esta entrada
+   describe el comportamiento de la revisión de julio.
 2. **Notificación de descanso en background profundo**: sin push server, la notificación solo puede
    dispararse con la app viva o al volver a ella (`visibilitychange`). Limitación estructural de PWA.
 3. **Medianoche**: el día de Nutrición no auto-avanza si la app queda abierta al cruzar las 00:00
