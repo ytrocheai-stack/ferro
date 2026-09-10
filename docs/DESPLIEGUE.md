@@ -1,5 +1,17 @@
 # Despliegue de NextRep
 
+> Actualización 2026-09-10: por petición del usuario, se prepara el coach privado sin
+> ejecutar benchmarks ni evaluar la calidad del modelo. Producción usa DeepSeek Flash,
+> consentimiento `coach-context-v2` y beta/embeddings/Flash habilitados únicamente para
+> la cuenta permitida existente. Pro, reranking y probes siguen apagados. Las instrucciones
+> anteriores sobre esperar benchmarks para esa activación quedan supersedidas por esta petición.
+> El system prompt compartido vive en `packages/adaptation-core/src/agent.ts`
+> (`coach-agent-instructions-v3`) y el Worker lo envía con rol `system`.
+> Verificaciones locales: tipos, build, lint, pruebas de contrato/cliente/Worker y dos
+> recorridos móviles simulados. No se hicieron llamadas al modelo en esta entrega.
+> D1 remoto: migraciones 0014/0015 ya aplicadas; presupuesto global disponible verificado.
+> La evaluación de recomendaciones queda pendiente; no se afirma calidad clínica o deportiva.
+
 > Revisión: 2026-09-08Z. El estado local se verificó con build y `wrangler deploy --dry-run` con
 > todos los flags apagados; no se afirma aquí que el checkout actual esté publicado en producción.
 > La PWA pública y el Worker requieren verificación de versión exacta antes del canario.

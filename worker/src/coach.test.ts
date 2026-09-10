@@ -49,7 +49,7 @@ function fakeDb() {
   return { db, rows }
 }
 
-const authHeaders = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json', 'Idempotency-Key': 'event-1', 'X-NextRep-Consent-Version': 'coach-beta-v1', 'X-NextRep-Device-Id': 'device-1' }
+const authHeaders = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json', 'Idempotency-Key': 'event-1', 'X-NextRep-Consent-Version': 'coach-context-v2', 'X-NextRep-Device-Id': 'device-1' }
 
 describe('private coach runs', () => {
   it('creates a durable run, rejects a second active run, reads it, and cancels it', async () => {
@@ -57,7 +57,7 @@ describe('private coach runs', () => {
     let created = ''
     let terminated = 0
     const workflow: WorkflowBinding = { create: async ({ id }) => { created = id; return { id } }, get: () => ({ terminate: async () => { terminated++ } }) }
-    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-beta-v1', DB: db, COACH_WORKFLOW: workflow }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
     const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
     const first = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
     expect(first.status).toBe(202)
@@ -82,7 +82,7 @@ describe('private coach runs', () => {
   it('does not continue a completed turn from another conversation', async () => {
     const { db, rows } = fakeDb()
     const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
-    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-beta-v1', DB: db, COACH_WORKFLOW: workflow }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
     const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
     const first = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
     expect(first.status).toBe(202)

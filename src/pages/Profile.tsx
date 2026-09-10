@@ -187,11 +187,11 @@ function CoachBetaCard() {
       </div>
       {isSignedIn && userId && !consent && (
         <div className="mt-3 rounded-xl bg-surface-2 px-3 py-2.5 text-xs leading-relaxed text-muted">
-          Al activar, autorizas enviar de forma transitoria al Worker tu perfil editable, objetivos, rutinas, conversación y hasta seis entrenamientos recientes terminados de esta cuenta. Los datos no se comparten con otras cuentas; puedes desactivar el coach cuando quieras. Versión de consentimiento: {COACH_CONSENT_VERSION}. Si cambia esta versión tendrás que aceptar de nuevo.
-          <button className="btn btn-primary mt-2 w-full py-2" type="button" onClick={() => setConsent(grantCoachConsent(userId))}>Aceptar y activar coach</button>
+          Al activar, autorizas enviar tu perfil editable, objetivos, restricciones, rutinas, conversación y hasta seis entrenamientos recientes terminados al backend privado de NextRep en Cloudflare y al modelo de IA servido por NVIDIA para generar la respuesta. Los datos no se comparten con otras cuentas; puedes desactivar el coach cuando quieras. Versión de consentimiento: {COACH_CONSENT_VERSION}. Si cambia esta versión tendrás que aceptar de nuevo.
+          <button className="btn btn-primary mt-2 w-full py-2" type="button" onClick={async () => setConsent(await grantCoachConsent(userId))}>Aceptar y activar coach</button>
         </div>
       )}
-      {consent && <button className="btn btn-surface mt-3 w-full py-2 text-xs" type="button" onClick={() => { revokeCoachConsent(consent.userId); setConsent(null) }}>Desactivar coach y detener nuevos envíos</button>}
+      {consent && <><Link className="btn btn-primary mt-3 w-full py-2 text-xs" to="/coach">Abrir coach</Link><button className="btn btn-surface mt-3 w-full py-2 text-xs" type="button" onClick={async () => { await revokeCoachConsent(consent.userId); setConsent(null) }}>Desactivar coach y detener nuevos envíos</button></>}
     </section>
   )
 }

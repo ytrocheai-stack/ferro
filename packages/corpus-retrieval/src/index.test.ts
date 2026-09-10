@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { corpusMetadataKey, vectorPhysicalId } from '../../corpus-identity/src/index.mjs'
+import { corpusMetadataKey, sha256Hex, vectorPhysicalId } from '../../corpus-identity/src/index.mjs'
 import { createLocalRetriever, createVectorizeRetriever, EMBEDDING_MODEL, manifestFingerprint, normalizePrefix, type CorpusManifest, type EmbeddingMatrix } from './index'
 
 const vector = (x = 1, y = 0) => [x, y, ...Array<number>(2046).fill(0)]
@@ -8,6 +8,14 @@ function fixture(): CorpusManifest {
 }
 function matrix(manifest: CorpusManifest): EmbeddingMatrix { return { corpusVersion: manifest.corpusVersion!, model: EMBEDDING_MODEL, documents: manifest.chunks.map((chunk, i) => ({ id: chunk.id, vector2048: vector(1, i / 25) })) } }
 describe('shared retrieval', () => {
+  it('accepts the embedding pipeline fingerprint while rejecting changed passage text', () => {
+    const manifest = fixture()
+    const data = { ...matrix(manifest), schema: 'hevy-embedding-matrix-v1', fingerprint: '', documents: matrix(manifest).documents.map((document, i) => ({ ...document, inputType: 'passage', textHash: sha256Hex(manifest.chunks[i].text) })) }
+    data.fingerprint = sha256Hex(JSON.stringify({ corpusVersion: data.corpusVersion, model: data.model, documents: data.documents.map(({ id, textHash, inputType }) => ({ id, textHash, inputType })) }))
+    expect(() => createLocalRetriever({ manifest, matrix: data, embedQuery: async () => vector() })).not.toThrow()
+    manifest.chunks[0].text = 'Changed passage'
+    expect(() => createLocalRetriever({ manifest, matrix: data, embedQuery: async () => vector() })).toThrow(/text hash mismatch/)
+  })
   it('uses semantic ordering with query input and bounded diversified context', async () => {
     const manifest = fixture()
     const retriever = createLocalRetriever({ manifest, matrix: matrix(manifest), embedQuery: async (_, input) => { expect(input).toBe('query'); return vector() } })

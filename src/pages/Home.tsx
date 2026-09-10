@@ -113,7 +113,7 @@ export default function Home() {
       </button>
 
       <button className="btn btn-surface mt-2.5 w-full" onClick={() => navigate('/coach')}>
-        Coach privado · Kimi K3
+        Abrir coach privado
       </button>
 
       <div className="flex items-center justify-between pb-3 pt-7">

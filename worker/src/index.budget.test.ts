@@ -55,11 +55,22 @@ describe('presupuesto real del Worker', () => {
   })
   it('espacia solicitudes globales de NVIDIA atómicamente entre usuarios e instancias', async () => {
     const { sqlite, database } = sqliteD1()
+    sqlite.exec("INSERT INTO provider_request_limits(provider,next_allowed_at,used_requests,max_requests) VALUES ('nvidia',0,2722,4500)")
     const now = 1_700_000_000_000
     const results = await Promise.all([reserveProviderRequest(database, now, 40), reserveProviderRequest(database, now, 40)])
     expect(results.filter(Boolean)).toHaveLength(1)
     expect(await reserveProviderRequest(database, now + 1499, 40)).toBe(false)
     expect(await reserveProviderRequest(database, now + 1500, 40)).toBe(true)
+    sqlite.close()
+  })
+  it('no reserva antes de conciliar y comparte el último intento entre clientes', async () => {
+    const { sqlite, database } = sqliteD1()
+    expect(await reserveProviderRequest(database, 10000, 40)).toBe(false)
+    sqlite.exec("INSERT INTO provider_request_limits(provider,next_allowed_at,used_requests,max_requests) VALUES ('nvidia',0,4499,4500)")
+    const results = await Promise.all([reserveProviderRequest(database, 10000, 40), reserveProviderRequest(database, 11500, 40)])
+    expect(results.filter(Boolean)).toHaveLength(1)
+    expect(await reserveProviderRequest(database, 13000, 40)).toBe(false)
+    expect(sqlite.prepare("SELECT used_requests FROM provider_request_limits WHERE provider='nvidia'").get()).toEqual({ used_requests: 4500 })
     sqlite.close()
   })
   it('rechaza replay antiguo si cambia el modelo de ejecución aunque el payload y la clave coincidan', async () => {

@@ -141,7 +141,11 @@ export async function startCoachRun(getToken: () => Promise<string | null>, mess
     requestSent = true
     const response = await fetch(`${url}/v1/coach/runs`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Idempotency-Key': request.event.id, 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': request.event.deviceId }, body: JSON.stringify(request) })
     const text = await response.text()
-    if (!response.ok) throw Object.assign(new Error(`Worker ${response.status}${text ? `: ${text}` : ''}`), { status: response.status })
+    if (!response.ok) {
+      if (response.status < 500) requestSent = false
+      const reason = (() => { try { return JSON.parse(text).error } catch { return undefined } })()
+      throw new Error(typeof reason === 'string' ? reason : `No se pudo iniciar el coach (${response.status})`)
+    }
     const remote = fromResponse(JSON.parse(text), request, ownerId)
     await db.coachRuns.delete(localId)
     await saveRun(request, remote)
@@ -181,11 +185,17 @@ export async function refreshCoachRun(getToken: () => Promise<string | null>, ru
 export async function syncPendingCoachRuns(getToken: () => Promise<string | null>): Promise<void> {
   const ownerId = getCoachAccountId()
   const url = workerUrl()
-  if (!ownerId || !url || !navigator.onLine || !getCoachConsent(ownerId)) return
+  if (!ownerId || !url || !navigator.onLine) return
+  const revoked = (await db.coachRuns.where('ownerId').equals(ownerId).toArray()).filter(run => run.error === 'cancelled-by-consent-revocation')
+  for (const run of revoked) {
+    try { await cancelCoachRun(getToken, run.id) } catch { /* Se conserva para reconciliar al reconectar. */ }
+  }
+  if (!getCoachConsent(ownerId)) return
   const token = await getToken()
   if (!token) return
   const pending = (await db.coachRuns.toArray()).filter((run) => run.ownerId === ownerId && run.id.startsWith('coach-local-') && run.status === 'queued')
   for (const local of pending) {
+    if (!getCoachConsent(ownerId)) return
     let requestSent = false
     try {
       requestSent = true
@@ -209,17 +219,21 @@ export async function cancelCoachRun(getToken: () => Promise<string | null>, run
   if (!local) return
   if (workerUrl() && navigator.onLine) {
     const token = await getToken()
-    if (token) await fetch(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': local.request.event.deviceId }, body: '{}' })
+    if (!token) throw new Error('Falta sesión para confirmar la cancelación remota')
+    if (!runId.startsWith('coach-local-')) {
+      const response = await fetch(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': local.request.event.deviceId }, body: '{}' })
+      if (!response.ok && response.status !== 404) throw new Error('No se pudo confirmar la cancelación remota')
+    }
   }
   await db.coachRuns.put({ ...local, status: 'cancelled', error: 'cancelled', endedAt: Date.now(), updatedAt: Date.now() })
 }
 
-/** Reintento explícito después de un desenlace incierto; conserva el vínculo y no reutiliza la llamada enviada. */
+/** Reintento explícito: una ejecución incierta no es una continuación completada. */
 export async function retryCoachRun(getToken: () => Promise<string | null>, runId: string): Promise<CoachRunRecord> {
   const previous = await db.coachRuns.get(runId)
   if (!previous || previous.ownerId !== getCoachAccountId() || previous.error !== 'unknown-outcome') throw new Error('Solo se puede reintentar una ejecución con desenlace incierto')
   const message = String(previous.request.event.payload?.message ?? 'Continúa la revisión anterior')
-  return startCoachRun(getToken, message, { causedByEventId: previous.eventId })
+  return startCoachRun(getToken, message)
 }
 
 export async function applyCoachChangeSet(runId: string): Promise<void> {

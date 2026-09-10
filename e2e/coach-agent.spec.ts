@@ -9,7 +9,7 @@ test('el flujo del agente crea, continúa y cancela ejecuciones sin proveedor re
 
   await page.addInitScript(({ accountId: seededAccountId }) => {
     localStorage.setItem('ferro-coach-device-id', 'e2e-device')
-    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: seededAccountId, deviceId: 'e2e-device', version: 'coach-beta-v1', acceptedAt: Date.now(), enabled: true }]))
+    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: seededAccountId, deviceId: 'e2e-device', version: 'coach-context-v2', acceptedAt: Date.now(), enabled: true }]))
   }, { accountId })
 
   await page.route('**/mock-worker/v1/coach/runs', async (route) => {
@@ -48,14 +48,14 @@ test('el flujo del agente crea, continúa y cancela ejecuciones sin proveedor re
   await expect(page.getByRole('heading', { name: 'Coach privado' })).toBeVisible()
   await page.getByLabel('Mensaje para el coach').fill('Analiza mi siguiente sesión')
   await page.getByRole('button', { name: 'Enviar al coach' }).click()
-  await expect(page.getByText('El coach está procesando tu contexto…')).toBeVisible()
+  await expect(page.getByText(/El coach está procesando tu contexto/)).toBeVisible()
   await expect(page.getByText('Necesito una aclaración antes de proponer cambios.')).toBeVisible({ timeout: 10_000 })
   await expect(page.getByText('¿Qué equipo tendrás disponible?')).toBeVisible()
 
   await page.getByLabel('Mensaje para el coach').fill('Tendré barra y discos')
   await page.getByRole('button', { name: 'Continuar conversación' }).click()
-  await expect(page.getByText('El coach está procesando tu contexto…')).toBeVisible()
+  await expect(page.getByText(/El coach está procesando tu contexto/)).toBeVisible()
   await page.getByRole('button', { name: 'Cancelar' }).click()
-  await expect(page.getByText('cancelled', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Cancelado', { exact: true }).first()).toBeVisible()
   expect([...runs.values()].map((run) => run.continuation)).toEqual([false, true])
 })

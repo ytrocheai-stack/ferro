@@ -1,12 +1,51 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../db/db'
 import { setCoachAccountId } from './coachAccount'
-import { applyCoachChangeSet, contextVersionFromSnapshot } from './coachClient'
+import { applyCoachChangeSet, contextVersionFromSnapshot, retryCoachRun, startCoachRun } from './coachClient'
+import { grantCoachConsent } from './coachConsent'
 import type { CoachRunRecord, Routine } from '../db/types'
 
 const accountId = 'user_coach_apply_test'
 const routineId = 'routine-coach-test'
 const contextVersion = `coach-context-${routineId}:1`
+
+describe('coach submission failures', () => {
+  beforeEach(async () => {
+    const storage = new Map<string, string>()
+    vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) })
+    setCoachAccountId(accountId)
+    vi.stubEnv('VITE_ADAPTATION_WORKER_URL', 'https://coach.example')
+    await grantCoachConsent(accountId)
+  })
+  afterEach(async () => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    await db.coachRuns.clear()
+    await db.coachMessages.clear()
+    await db.coachConsents.clear()
+    setCoachAccountId(null)
+  })
+  it('shows a confirmed rejection without treating it as an uncertain dispatch', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'La beta del coach está cerrada' }), { status: 403 })))
+    const result = await startCoachRun(async () => 'test-token', 'Hola')
+    expect(result.status).toBe('failed')
+    expect(result.error).toBe('La beta del coach está cerrada')
+  })
+  it('preserves uncertain outcome on a lost response so a new request is not sent automatically', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Network error')))
+    const result = await startCoachRun(async () => 'test-token', 'Hola')
+    expect(result.error).toBe('unknown-outcome')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it('an explicit retry does not require the uncertain run to be a completed conversation turn', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Network error')))
+    const initial = await startCoachRun(async () => 'test-token', 'Hola')
+    const retry = await retryCoachRun(async () => 'test-token', initial.id)
+    expect(retry.eventId).not.toBe(initial.eventId)
+    expect(retry.request.event.causedByEventId).toBeUndefined()
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+})
 
 function request() {
   return {

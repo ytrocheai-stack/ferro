@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { NvidiaGenerationProvider, selectEvidence, VectorizeRetriever, type D1Database } from './index'
 import { corpusMetadataKey, vectorPhysicalId } from '../../packages/corpus-identity/src/index.mjs'
+import { buildAgentInstructions } from '../../packages/adaptation-core/src/agent'
 
 describe('Kimi generation transport', () => {
+  it('sends coach behavior as a system message separate from user data', async () => {
+    let body: Record<string, unknown> = {}
+    const instructions = buildAgentInstructions('private-real', { includeContract: false })
+    const provider = new NvidiaGenerationProvider('test', async (_url, init) => {
+      body = JSON.parse(String(init?.body))
+      return Response.json({ choices: [{ message: { content: '{}' } }] })
+    }, undefined, undefined, instructions)
+    await provider.generate('contexto consentido', 'deepseek-ai/deepseek-v4-flash-0731')
+    expect(body.messages).toEqual([{ role: 'system', content: instructions }, { role: 'user', content: 'contexto consentido' }])
+  })
   it('hydrates only eligible abstracts from retrieved sources with logical split ordering', async () => {
     const metadata = (chunkId: string, sourceId = 's1') => ({ chunkId, sourceId, corpusVersion: 'v1', corpusKey: corpusMetadataKey('v1'), retrievalClass: 'evidence', populationReviewed: 'false', population: 'unknown', section: chunkId === 'intro' ? 'Introduction' : 'Abstract', text: chunkId })
     const rows = ['abstract-0002', 'abstract-0001', 'unrelated'].map(id => ({ vector_id: vectorPhysicalId('v1', id), metadata_json: JSON.stringify(metadata(id, id === 'unrelated' ? 's2' : 's1')) }))

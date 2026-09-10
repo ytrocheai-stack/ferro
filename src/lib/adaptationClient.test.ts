@@ -125,11 +125,11 @@ describe('contrato PWA → Worker', () => {
   it('detiene el lote después de revocar consentimiento durante el primer envío', async () => {
     await db.routines.put(routine())
     await db.workouts.bulkPut([workout('one', Date.now()), workout('two', Date.now() + 1)])
-    grantCoachConsent('user-1')
+    await grantCoachConsent('user-1')
     await enqueueAdaptationJob('one')
     await enqueueAdaptationJob('two')
     const send = vi.fn(async (_url: string, init: RequestInit) => {
-      revokeCoachConsent('user-1')
+      await revokeCoachConsent('user-1')
       const body = JSON.parse(init.body as string) as { inputs: ExerciseAnalysisInput[] }
       return Response.json({ analysisId: 'analysis-1', policyVersion: 'v1', decisions: analyzeAdaptation(body.inputs).decisions })
     })
@@ -141,7 +141,7 @@ describe('contrato PWA → Worker', () => {
 
   it('genera un nuevo requestId y payload al reencolar manualmente tras cambiar el feedback', async () => {
     await setupCurrentWorkout()
-    grantCoachConsent('user-1')
+    await grantCoachConsent('user-1')
     await enqueueAdaptationJob('current')
     const first = await db.adaptationJobs.get('adapt-current')
     await db.workouts.update('current', { postWorkoutFeedback: { generalPain: true } })
@@ -154,7 +154,7 @@ describe('contrato PWA → Worker', () => {
 
   it('procesa únicamente jobs del propietario autenticado', async () => {
     await setupCurrentWorkout()
-    grantCoachConsent('user-1')
+    await grantCoachConsent('user-1')
     await enqueueAdaptationJob('current')
     const current = await db.workouts.get('current')
     const foreignContext = await buildAdaptationContext(current!)
@@ -180,7 +180,7 @@ describe('contrato PWA → Worker', () => {
 
   it('invalidates the job when pain and sets change during a late success', async () => {
     await setupCurrentWorkout()
-    grantCoachConsent('user-1')
+    await grantCoachConsent('user-1')
     await enqueueAdaptationJob('current')
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
       await mutateContext(async () => {
@@ -204,7 +204,7 @@ describe('contrato PWA → Worker', () => {
 
   it('invalidates the job when the selected history changes during a late success', async () => {
     await setupCurrentAndPreviousWorkouts()
-    grantCoachConsent('user-1')
+    await grantCoachConsent('user-1')
     await enqueueAdaptationJob('current')
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
       await mutateContext(async () => {
@@ -227,7 +227,7 @@ describe('contrato PWA → Worker', () => {
 
   it('invalidates the job when the workout is deleted during a late success', async () => {
     await setupCurrentWorkout()
-    grantCoachConsent('user-1')
+    await grantCoachConsent('user-1')
     await enqueueAdaptationJob('current')
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
       await mutateContext(async () => {
@@ -245,7 +245,7 @@ describe('contrato PWA → Worker', () => {
 
   it('invalidates the job when the routine changes during a late success', async () => {
     await setupCurrentWorkout()
-    grantCoachConsent('user-1')
+    await grantCoachConsent('user-1')
     await enqueueAdaptationJob('current')
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
       await mutateContext(async () => {
@@ -263,7 +263,7 @@ describe('contrato PWA → Worker', () => {
 
   it('preserves the invalidated reason when a late network error arrives afterwards', async () => {
     await setupCurrentWorkout()
-    grantCoachConsent('user-1')
+    await grantCoachConsent('user-1')
     await enqueueAdaptationJob('current')
     vi.stubGlobal('fetch', vi.fn(async () => {
       await mutateContext(async () => {
@@ -292,7 +292,7 @@ describe('contrato PWA → Worker', () => {
   it('reconsulta una nueva pasada cuando se encola durante el último envío', async () => {
     await db.routines.put(routine())
     await db.workouts.put(workout('one', 1))
-    grantCoachConsent('user-1')
+    await grantCoachConsent('user-1')
     await enqueueAdaptationJob('one')
     const send = vi.fn(async (_url: string, init: RequestInit) => {
       const body = JSON.parse(init.body as string) as { inputs: ExerciseAnalysisInput[] }
@@ -310,7 +310,7 @@ describe('contrato PWA → Worker', () => {
 
   it('cancela el run reclamado sin consumir un intento técnico y permite retomarlo', async () => {
     await setupCurrentWorkout()
-    grantCoachConsent('user-1')
+    await grantCoachConsent('user-1')
     await enqueueAdaptationJob('current')
     const before = await db.adaptationJobs.get('adapt-current')
     let release!: (response: Response) => void

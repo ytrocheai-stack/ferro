@@ -1,10 +1,10 @@
 import { enrichWithSourceSummaries } from './summary-context.mjs'
-import { canonicalJson, corpusMetadataKey, corpusNamespace, sha256Base64url, vectorPhysicalId } from '../../corpus-identity/src/index.mjs'
+import { canonicalJson, corpusMetadataKey, corpusNamespace, sha256Base64url, sha256Hex, vectorPhysicalId } from '../../corpus-identity/src/index.mjs'
 
 export const EMBEDDING_MODEL = 'nvidia/nemotron-3-embed-1b'
 export interface CorpusSource {
   id: string; author: string; title: string; url: string; license: string; approved: boolean
-  language?: string; reviewStatus?: string; population?: string[]; populationReviewed?: boolean; collection?: string
+  language?: string; reviewStatus?: string; population?: string[]; populationReviewed?: boolean; populationScope?: string; collection?: string
 }
 export interface CorpusChunk {
   id: string; sourceId: string; text: string; location: string; section?: string; textHash?: string
@@ -12,7 +12,7 @@ export interface CorpusChunk {
   population?: string[]; populationReviewed?: boolean
 }
 export interface CorpusManifest { version?: string; corpusVersion?: string; status: string; sources: CorpusSource[]; chunks: CorpusChunk[] }
-export interface EmbeddingMatrix { corpusVersion: string; model: string; fingerprint?: string; documents: { id: string; vector2048: number[] }[] }
+export interface EmbeddingMatrix { schema?: string; corpusVersion: string; model: string; fingerprint?: string; documents: { id: string; inputType?: string; textHash?: string; vector2048: number[] }[] }
 export interface RetrievalOptions { mode?: 'recommendation' | 'research'; sourceIds?: string[]; population?: string[]; collection?: string; language?: string }
 export interface RetrievedEvidence { claim: string; sourceId: string; chunkId: string; location: string; excerpt: string; relevance: number; author: string; title: string; url: string; license: string }
 export interface RetrievalResult { candidates: RetrievedEvidence[]; evidence: RetrievedEvidence[] }
@@ -117,10 +117,15 @@ export function createLocalRetriever(config: RetrieverConfig & { matrix: Embeddi
   const repo = repository(config)
   const dimensions = config.dimensions ?? 512
   const matrix = config.matrix
-  if (matrix.corpusVersion !== repo.version || matrix.model !== EMBEDDING_MODEL || (matrix.fingerprint !== undefined && matrix.fingerprint !== manifestFingerprint(config.manifest))) throw new Error('Matrix corpus version, model or fingerprint mismatch')
+  const generated = matrix.schema === 'hevy-embedding-matrix-v1'
+  const expectedFingerprint = generated
+    ? sha256Hex(JSON.stringify({ corpusVersion: matrix.corpusVersion, model: matrix.model, documents: matrix.documents.map(({ id, textHash, inputType }) => ({ id, textHash, inputType })) }))
+    : manifestFingerprint(config.manifest)
+  if (matrix.corpusVersion !== repo.version || matrix.model !== EMBEDDING_MODEL || ((generated || matrix.fingerprint !== undefined) && matrix.fingerprint !== expectedFingerprint)) throw new Error('Matrix corpus version, model or fingerprint mismatch')
   const vectors = new Map<string, number[]>()
   for (const document of matrix.documents) {
     if (vectors.has(document.id) || !repo.chunks.has(document.id)) throw new Error('Matrix duplicate or unknown chunk identity')
+    if (generated && (document.inputType !== 'passage' || document.textHash !== sha256Hex(repo.chunks.get(document.id)!.text))) throw new Error('Matrix passage text hash mismatch')
     // Validate both supported prefixes even if this run uses only one.
     normalizePrefix(document.vector2048, 512)
     normalizePrefix(document.vector2048, 1024)

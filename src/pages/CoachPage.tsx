@@ -8,6 +8,15 @@ import { getCoachConsent } from '../lib/coachConsent'
 import { applyCoachChangeSet, cancelCoachRun, refreshCoachRun, retryCoachRun, startCoachRun } from '../lib/coachClient'
 import type { FutureSession } from '../../packages/adaptation-core/src/contract'
 
+const runLabels: Record<CoachRunRecord['status'], string> = { queued: 'En espera', running: 'Analizando', completed: 'Listo', failed: 'No se pudo completar', cancelled: 'Cancelado' }
+function runError(error: string): string {
+  if (error === 'unknown-outcome' || error === 'uncertain-outcome') return 'Se perdió la respuesta del proveedor. No se ha aplicado ningún cambio.'
+  if (error.includes('deadline') || error.includes('timeout')) return 'El proveedor tardó demasiado en responder. Puedes volver a intentarlo más tarde.'
+  if (error.includes('budget') || error.includes('Presupuesto')) return 'Se alcanzó el límite de consultas del coach. No se ha aplicado ningún cambio.'
+  if (error.startsWith('[') || error.includes('invalid')) return 'El coach devolvió una respuesta que no pudimos validar. No se ha aplicado ningún cambio.'
+  return error
+}
+
 function planDiffs(run: CoachRunRecord): string[] {
   if (run.decision?.kind !== 'propose' || !run.decision.changeSet.futurePlan) return []
   const before = new Map(((run.request.context.snapshot?.plan ?? []) as FutureSession[]).map((session) => [session.sessionId, session]))
@@ -38,7 +47,9 @@ export default function CoachPage() {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [applying, setApplying] = useState(false)
-  const [selected, setSelected] = useState<CoachRunRecord | undefined>()
+  const [actionError, setActionError] = useState<string>()
+  const [selection, setSelected] = useState<CoachRunRecord | undefined>()
+  const selected = selection?.ownerId === ownerId ? selection : undefined
 
   useEffect(() => {
     let mounted = true
@@ -60,26 +71,28 @@ export default function CoachPage() {
   }, [getToken, runs])
 
   useEffect(() => {
-    if (!selected && runs?.[0]) setSelected(runs[0])
+    if (!selected && runs?.[0]?.ownerId === ownerId) setSelected(runs[0])
     if (selected) setSelected(runs?.find((run) => run.id === selected.id) ?? selected)
-  }, [runs, selected])
+  }, [runs, selected, ownerId])
 
   const send = async () => {
     if (!message.trim() || busy) return
     setBusy(true)
+    setActionError(undefined)
     try {
       const causedByEventId = selected?.decision?.kind === 'ask' ? selected.eventId : undefined
       const next = await startCoachRun(getToken, message, { causedByEventId })
       setRuns((current) => [next, ...current.filter((run) => run.id !== next.id)])
       setSelected(next)
       setMessage('')
-    } finally { setBusy(false) }
+    } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'No se pudo enviar el mensaje. Inténtalo de nuevo.') } finally { setBusy(false) }
   }
 
   const apply = async () => {
     if (!selected || applying) return
     setApplying(true)
-    try { await applyCoachChangeSet(selected.id); setSelected(await db.coachRuns.get(selected.id)) } finally { setApplying(false) }
+    setActionError(undefined)
+    try { await applyCoachChangeSet(selected.id); setSelected(await db.coachRuns.get(selected.id)) } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'No se pudo aplicar la propuesta.') } finally { setApplying(false) }
   }
 
   const cancel = async () => {
@@ -108,8 +121,9 @@ export default function CoachPage() {
   const decision = selected?.decision
   return (
     <div className="px-4 pb-8 pt-6">
-      <div className="flex items-center justify-between"><h1 className="text-2xl font-extrabold">Coach privado</h1><span className="text-xs text-muted">Kimi K3</span></div>
-      <p className="mt-2 text-sm text-muted">Conversación con contexto local versionado. Cada cambio requiere confirmación.</p>
+      <div className="flex items-center justify-between"><h1 className="text-2xl font-extrabold">Coach privado</h1><span className="text-xs text-muted">DeepSeek Flash</span></div>
+      <p className="mt-2 text-sm text-muted">Revisa tu entrenamiento y pregunta al coach. Tú confirmas cada cambio antes de aplicarlo.</p>
+      {actionError && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{actionError}</p>}
       <div className="card mt-4 p-3">
         <label className="sr-only" htmlFor="coach-message">Mensaje para el coach</label>
         <textarea id="coach-message" className="min-h-24 w-full resize-y rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-primary" value={message} onChange={(event) => setMessage(event.target.value)} placeholder="¿Qué quieres revisar de tu próximo entrenamiento?" />
@@ -119,8 +133,8 @@ export default function CoachPage() {
 
       {selected && (
         <section className="card mt-4 p-4" aria-live="polite">
-          <div className="flex items-center justify-between"><h2 className="font-bold">Ejecución</h2><span className="text-xs text-muted">{selected.status}</span></div>
-          {selected.status === 'queued' || selected.status === 'running' ? <p className="mt-3 text-sm text-muted">El coach está procesando tu contexto…</p> : selected.error && <p className="mt-3 text-sm text-danger">{selected.error}</p>}
+          <div className="flex items-center justify-between"><h2 className="font-bold">Respuesta del coach</h2><span className="text-xs text-muted">{runLabels[selected.status]}</span></div>
+          {selected.status === 'queued' || selected.status === 'running' ? <p className="mt-3 text-sm text-muted">El coach está procesando tu contexto. Puede tardar unos minutos…</p> : selected.error && <p className="mt-3 text-sm text-danger">{runError(selected.error)}</p>}
           {selected.error === 'unknown-outcome' && <button className="btn btn-surface mt-3 w-full" type="button" disabled={busy} onClick={() => void retry()}>Solicitar un nuevo intento</button>}
           {decision && <>
             <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">{decision.explanation}</p>
@@ -136,7 +150,7 @@ export default function CoachPage() {
           <div className="mt-3 flex gap-2"><button className="btn btn-surface flex-1" type="button" onClick={() => void cancel()} disabled={selected.status === 'completed' || selected.status === 'failed' || selected.status === 'cancelled'}>Cancelar</button></div>
         </section>
       )}
-      {runs && runs.length > 1 && <div className="mt-5"><h2 className="text-sm font-bold">Conversaciones recientes</h2><div className="mt-2 flex flex-col gap-2">{runs.slice(0, 8).map((run) => <button className="card flex items-center justify-between px-3 py-3 text-left text-sm" key={run.id} type="button" onClick={() => setSelected(run)}><span className="truncate">{String(run.request.event.payload?.message ?? 'Ejecución del coach')}</span><span className="ml-2 text-xs text-muted">{run.status}</span></button>)}</div></div>}
+      {runs && runs.length > 1 && <div className="mt-5"><h2 className="text-sm font-bold">Conversaciones recientes</h2><div className="mt-2 flex flex-col gap-2">{runs.filter((run) => run.ownerId === ownerId).slice(0, 8).map((run) => <button className="card flex items-center justify-between px-3 py-3 text-left text-sm" key={run.id} type="button" onClick={() => setSelected(run)}><span className="truncate">{String(run.request.event.payload?.message ?? 'Ejecución del coach')}</span><span className="ml-2 text-xs text-muted">{runLabels[run.status]}</span></button>)}</div></div>}
     </div>
   )
 }

@@ -1,4 +1,4 @@
-export const COACH_CONSENT_VERSION = 'coach-beta-v1'
+export const COACH_CONSENT_VERSION = 'coach-context-v2'
 const CONSENT_KEY = 'ferro-coach-consent'
 const DEVICE_KEY = 'ferro-coach-device-id'
 const CONVERSATION_PREFIX = 'ferro-coach-conversation:'
@@ -53,19 +53,19 @@ export function getCoachConsent(userId: string | null | undefined): CoachConsent
   return read().find((item) => item.userId === userId && item.deviceId === getCoachDeviceId() && item.version === COACH_CONSENT_VERSION && item.enabled) ?? null
 }
 
-export function grantCoachConsent(userId: string): CoachConsent {
+export async function grantCoachConsent(userId: string): Promise<CoachConsent> {
   const consent: CoachConsent = { userId, deviceId: getCoachDeviceId(), version: COACH_CONSENT_VERSION, acceptedAt: Date.now(), enabled: true }
-  write([...read().filter((item) => !(item.userId === userId && item.deviceId === consent.deviceId)), consent])
   const now = Date.now()
-  void db.coachConsents.put({ id: `${userId}:${consent.deviceId}`, ownerId: userId, deviceId: consent.deviceId, version: consent.version, enabled: true, revision: now, acceptedAt: consent.acceptedAt, updatedAt: now } satisfies CoachConsentRecord)
+  await db.coachConsents.put({ id: `${userId}:${consent.deviceId}`, ownerId: userId, deviceId: consent.deviceId, version: consent.version, enabled: true, revision: now, acceptedAt: consent.acceptedAt, updatedAt: now } satisfies CoachConsentRecord)
+  write([...read().filter((item) => !(item.userId === userId && item.deviceId === consent.deviceId)), consent])
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('nextrep:coach-consent-changed', { detail: { userId } }))
   return consent
 }
 
-export function revokeCoachConsent(userId: string): void {
+export async function revokeCoachConsent(userId: string): Promise<void> {
   const deviceId = getCoachDeviceId()
   write(read().map((item) => item.userId === userId && item.deviceId === deviceId ? { ...item, enabled: false } : item))
-  void db.transaction('rw', [db.coachConsents, db.coachRuns, db.adaptationProposals], async () => {
+  await db.transaction('rw', [db.coachConsents, db.coachRuns, db.adaptationProposals], async () => {
     const id = `${userId}:${deviceId}`
     const current = await db.coachConsents.get(id)
     const now = Date.now()
@@ -74,7 +74,7 @@ export function revokeCoachConsent(userId: string): void {
     await db.coachRuns.bulkPut(runs.filter((run) => run.status === 'queued' || run.status === 'running').map((run) => ({ ...run, status: 'cancelled' as const, error: 'cancelled-by-consent-revocation', endedAt: now, updatedAt: now })))
     const proposals = await db.adaptationProposals.where('ownerId').equals(userId).toArray()
     await db.adaptationProposals.bulkPut(proposals.filter((proposal) => proposal.status === 'pending').map((proposal) => ({ ...proposal, status: 'stale' as const })))
-  }).catch(() => undefined)
+  })
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('nextrep:coach-consent-changed', { detail: { userId } }))
 }
 

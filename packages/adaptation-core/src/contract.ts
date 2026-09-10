@@ -335,7 +335,7 @@ const coachMetricsSchema = z.object({
 export const coachContextSnapshotSchema = z.object({
   message: z.string().max(4000).optional(),
   profileRevision: revision.default(0),
-  consentVersion: nonEmpty.max(80).default('coach-beta-v1'),
+  consentVersion: nonEmpty.max(80).default('coach-context-v2'),
   consentRevision: revision.default(0),
   profile: coachProfileSchema.default({ population: [], populationConfirmed: false, goals: [] }),
   goals: z.array(nonEmpty.max(400)).max(20).default([]),
@@ -357,7 +357,7 @@ export const coachRunRequestSchema = z.object({
     timezone: nonEmpty.max(80),
     isCurrent: z.boolean(),
     conversationVersion: nonEmpty.max(160).default('coach-conversation-empty'),
-    snapshot: coachContextSnapshotSchema.default({ profileRevision: 0, consentVersion: 'coach-beta-v1', consentRevision: 0, profile: { population: [], populationConfirmed: false, goals: [] }, goals: [], restrictions: { injuriesOrPain: [], unavailableEquipment: [], excludedExercises: [], nutritionConstraints: [] }, catalog: [], metrics: { captured: false, bestE1rmByExercise: {} }, plan: [], history: [], conversation: [], conversationVersion: 'coach-conversation-empty' }),
+    snapshot: coachContextSnapshotSchema.default({ profileRevision: 0, consentVersion: 'coach-context-v2', consentRevision: 0, profile: { population: [], populationConfirmed: false, goals: [] }, goals: [], restrictions: { injuriesOrPain: [], unavailableEquipment: [], excludedExercises: [], nutritionConstraints: [] }, catalog: [], metrics: { captured: false, bestE1rmByExercise: {} }, plan: [], history: [], conversation: [], conversationVersion: 'coach-conversation-empty' }),
   }).strict(),
 }).strict()
 
