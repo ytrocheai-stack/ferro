@@ -116,7 +116,7 @@ describe('Flash final answer handling', () => {
       const final = body.chat_template_kwargs?.thinking === false
       return new Response(JSON.stringify({ choices: [{ finish_reason: final ? 'stop' : 'length', message: { content: final ? '{"responseText":"respuesta"}' : null, reasoning_content: final ? null : 'synthetic fixture' } }], usage: { prompt_tokens: 20, completion_tokens: final ? 10 : 1200 } }))
     } })
-    await expect(session.generate('consulta', 1200, undefined, 'q1')).rejects.toMatchObject({ code: 'PROVIDER_OUTPUT_TRUNCATED' })
+    await expect(session.generate('consulta', 1200, undefined, 'q1', undefined, { thinking: true })).rejects.toMatchObject({ code: 'PROVIDER_OUTPUT_TRUNCATED' })
     const answer = await session.generate('consulta', 1200, undefined, 'q1', undefined, { thinking: false })
     expect(answer.content).toBe('{"responseText":"respuesta"}')
     expect(await session.generate('consulta', 1200, undefined, 'q1', undefined, { thinking: false })).toEqual(answer)
