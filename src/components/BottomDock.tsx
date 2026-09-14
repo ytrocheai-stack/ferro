@@ -2,16 +2,24 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useKeypad } from './GymKeypad'
 
 type DockSlot = 'coach' | 'session' | 'rest' | 'toasts'
-type DockContextValue = { slots: Partial<Record<DockSlot, ReactNode>>; setSlot: (slot: DockSlot, content: ReactNode) => void }
+type DockContextValue = {
+  slots: Partial<Record<DockSlot, ReactNode>>
+  setSlot: (slot: DockSlot, content: ReactNode) => void
+  coachPortalTarget: HTMLDivElement | null
+  setCoachPortalTarget: (target: HTMLDivElement | null) => void
+}
 const DockContext = createContext<DockContextValue | null>(null)
 
 export function BottomDockProvider({ children }: { children: ReactNode }) {
   const [slots, setSlots] = useState<Partial<Record<DockSlot, ReactNode>>>({})
+  const [coachPortalTarget, setCoachPortalTarget] = useState<HTMLDivElement | null>(null)
   const setSlot = useCallback((slot: DockSlot, content: ReactNode) => setSlots((current) => current[slot] === content ? current : ({ ...current, [slot]: content })), [])
   const value = useMemo(() => ({
     slots,
     setSlot,
-  }), [setSlot, slots])
+    coachPortalTarget,
+    setCoachPortalTarget,
+  }), [coachPortalTarget, setSlot, slots])
   return <DockContext.Provider value={value}>{children}</DockContext.Provider>
 }
 
@@ -81,7 +89,7 @@ export function BottomDock({
         {toasts ?? dockSlots.toasts}
         {rest ?? dockSlots.rest}
         {session ?? dockSlots.session}
-        {coach ?? dockSlots.coach}
+        <div id="coach-composer-dock" className="empty:hidden" ref={context?.setCoachPortalTarget}>{coach ?? dockSlots.coach}</div>
         {accessory}
         {navigation}
       </div>

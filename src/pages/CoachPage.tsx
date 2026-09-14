@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { useAuth } from '@clerk/react'
 import { db } from '../db/db'
@@ -11,6 +12,7 @@ import { useCatalog } from '../data/exercises'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { PageHeader } from '../components/PageHeader'
 import { useBottomDock } from '../components/BottomDock'
+import { CoachComposer } from '../components/CoachComposer'
 
 const runLabels: Record<CoachRunRecord['status'], string> = { queued: 'En espera', running: 'Analizando', completed: 'Listo', failed: 'No se pudo completar', cancelled: 'Cancelado' }
 function runLabel(run: CoachRunRecord): string { return run.status === 'queued' && run.id.startsWith('coach-local-') ? 'En espera local' : runLabels[run.status] }
@@ -59,7 +61,7 @@ export default function CoachPage() {
   const [actionError, setActionError] = useState<string>()
   const [selection, setSelected] = useState<CoachRunRecord | undefined>()
   const [recentOpen, setRecentOpen] = useState(false)
-  const { setSlot } = useBottomDock()
+  const { coachPortalTarget } = useBottomDock()
   const { byId } = useCatalog()
   const routines = useLiveQuery(() => db.routines.toArray(), [], [])
   const selected = selection?.ownerId === ownerId ? selection : undefined
@@ -151,21 +153,12 @@ export default function CoachPage() {
     } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'No se pudo solicitar un nuevo intento.') } finally { setBusy(false) }
   }
 
-  useEffect(() => {
-    if (!isSignedIn || !consent) {
-      setSlot('coach', null)
-      return
-    }
-    setSlot('coach', <CoachComposer message={message} busy={busy} disabled={Boolean(activeRunId)} followUp={selected?.decision?.kind === 'ask'} onChange={setMessage} onSend={() => void send()} />)
-    return () => setSlot('coach', null)
-  }, [activeRunId, busy, consent, isSignedIn, message, selected?.decision?.kind, send, setSlot])
-
   if (!isSignedIn) return <section className="page-content pt-3"><PageHeader title="Coach" /><p className="mt-4 text-base leading-6 text-muted">Inicia sesión para usar el coach privado.</p><Link className="btn btn-primary mt-4 w-full" to="/perfil">Ir a Perfil</Link></section>
   if (!consent) return <section className="page-content pt-3"><PageHeader title="Coach" /><p className="mt-4 text-base leading-6 text-muted">Activa el consentimiento desde Perfil para enviar contexto al coach.</p><Link className="btn btn-primary mt-4 w-full" to="/perfil">Resolver en Perfil</Link></section>
 
   const decision = selected?.decision
   return (
-    <div className="page-content pb-4 pt-3">
+    <><div className="page-content pb-4 pt-3">
       <PageHeader title="Coach" action={<button className="page-header__profile pressable text-xs" onClick={() => setRecentOpen((open) => !open)} aria-label="Conversaciones recientes">{runs.length}</button>} />
       <p className="mt-4 text-base leading-6 text-muted">Revisa tu entrenamiento y pregunta al coach. Tú confirmas cada cambio antes de aplicarlo.</p>
       {actionError && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{actionError}</p>}
@@ -192,17 +185,6 @@ export default function CoachPage() {
         </section>
       )}
       {recentOpen && runs && runs.length > 0 && <div className="mt-5"><h2 className="text-xl font-semibold">Conversaciones recientes</h2><div className="mt-2 flex flex-col gap-2">{runs.filter((run) => run.ownerId === ownerId).slice(0, 8).map((run) => <button className="card flex items-center justify-between px-3 py-3 text-left text-sm" key={run.id} type="button" onClick={() => { setSelected(run); setRecentOpen(false) }}><span className="line-clamp-2">{String(run.request.event.payload?.message ?? 'Ejecución del coach')}</span><span className="ml-2 shrink-0 text-xs text-muted">{runLabel(run)}</span></button>)}</div></div>}
-    </div>
+    </div>{coachPortalTarget && createPortal(<CoachComposer message={message} busy={busy} sendDisabled={Boolean(activeRunId)} followUp={selected?.decision?.kind === 'ask'} onChange={setMessage} onSend={() => void send()} />, coachPortalTarget)}</>
   )
-}
-
-function CoachComposer({ message, busy, disabled, followUp, onChange, onSend }: { message: string; busy: boolean; disabled: boolean; followUp: boolean; onChange: (value: string) => void; onSend: () => void }) {
-  const inputRef = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => {
-    const input = inputRef.current
-    if (!input) return
-    input.style.height = 'auto'
-    input.style.height = `${Math.min(128, Math.max(44, input.scrollHeight))}px`
-  }, [message])
-  return <div className="dock-card bg-surface px-3 py-2"><label className="sr-only" htmlFor="coach-message">Mensaje para el coach</label><div className="flex items-end gap-2"><textarea ref={inputRef} id="coach-message" rows={1} maxLength={4000} disabled={disabled || busy} className="min-h-11 max-h-32 min-w-0 flex-1 resize-none rounded-[12px] border border-border bg-surface-2 px-3 py-2 text-base leading-6 outline-none focus:border-primary disabled:opacity-60" value={message} onChange={(event) => onChange(event.target.value)} placeholder={disabled ? 'El coach está procesando…' : 'Pregunta al coach…'} /><button className="btn btn-primary min-h-11 shrink-0 px-4 text-sm" type="button" disabled={disabled || busy || !message.trim()} onClick={onSend}>{busy ? 'Enviando…' : followUp ? 'Continuar' : 'Enviar'}</button></div>{followUp && <p className="pt-1 text-xs text-muted">Tu respuesta continuará la ejecución.</p>}</div>
 }
