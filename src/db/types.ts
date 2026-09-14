@@ -257,6 +257,8 @@ export interface CoachRunRecord {
   request: CoachRunRequest
   decision?: AgentDecision
   error?: string
+  /** Solicitud de cancelación durable; se conserva hasta conocer el estado remoto. */
+  cancelRequestedAt?: number
   usage?: { inputTokens?: number; outputTokens?: number }
   createdAt: number
   updatedAt: number

@@ -16,6 +16,14 @@ function fakeDb() {
       const statement = {
         bind(...bound: unknown[]) { values = bound; return statement },
         async first<T = Record<string, unknown>>() {
+          if (sql.includes('WHERE event_id = ? AND account_hash = ? AND conversation_id = ?')) {
+            const row = [...rows.values()].find((item) => item.event_id === values[0] && item.account_hash === values[1] && item.conversation_id === values[2])
+            return (row ? { status: row.status, request_json: row.request_json, decision_json: row.decision_json } : null) as T | null
+          }
+          if (sql.includes('WHERE event_id = ? AND account_hash = ?')) {
+            const row = [...rows.values()].find((item) => item.event_id === values[0] && item.account_hash === values[1])
+            return (row ?? null) as T | null
+          }
           if (sql.includes('SELECT id FROM coach_runs')) {
             const row = [...rows.values()].find((item) => item.account_hash === values[0] && ['queued', 'running'].includes(String(item.status)))
             return (row ? { id: row.id } : null) as T | null
@@ -94,6 +102,21 @@ describe('private coach runs', () => {
     expect(cancel.status).toBe(200)
     expect((await cancel.json() as { run: { status: string } }).run.status).toBe('cancelled')
     expect(terminated).toBe(1)
+  })
+
+  it('reads a run by event only inside the authenticated account', async () => {
+    const { db, rows } = fakeDb()
+    const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
+    const created = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
+    expect(created.status).toBe(202)
+    const found = await handleRequest(new Request('https://worker.test/v1/coach/runs/by-event/event-1', { headers: authHeaders }), env, deps)
+    expect(found.status).toBe(200)
+    expect((await found.json() as { run: { eventId: string; accountId: string } }).run).toMatchObject({ eventId: 'event-1', accountId: 'user_1' })
+    rows.values().next().value!.account_hash = 'other-account'
+    const hidden = await handleRequest(new Request('https://worker.test/v1/coach/runs/by-event/event-1', { headers: authHeaders }), env, deps)
+    expect(hidden.status).toBe(404)
   })
 
   it('does not continue a completed turn from another conversation', async () => {

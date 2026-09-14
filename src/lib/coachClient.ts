@@ -158,6 +158,44 @@ export async function buildCoachRequest(message: string, causedByEventId?: strin
 const activeRun = (run: CoachRunRecord) => run.status === 'queued' || run.status === 'running'
 const remoteId = (run: CoachRunRecord) => run.remoteRunId ?? (run.id.startsWith('coach-local-') ? undefined : run.id)
 const DISPATCH_LEASE_MS = 60_000
+export const COACH_CLIENT_TIMEOUT_MS = 30_000
+
+export async function fetchCoach(url: string, init: RequestInit = {}, timeoutMs = COACH_CLIENT_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } catch (cause) {
+    if (controller.signal.aborted) throw messageError('coach-call-timeout')
+    throw cause
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function coachHttpError(response: Response, text: string): Error {
+  let reason: unknown
+  try { reason = JSON.parse(text).error } catch { /* respuesta no JSON */ }
+  if (typeof reason === 'string' && reason.trim()) return messageError(reason)
+  if (response.status === 401) return messageError('coach-auth-required')
+  if (response.status === 403) return messageError('coach-forbidden')
+  if (response.status === 409) return messageError('coach-conflict')
+  if (response.status === 429) return messageError('provider-rate-limited')
+  if (response.status >= 500) return messageError('server-error')
+  return messageError(`No se pudo iniciar el coach (${response.status})`)
+}
+
+async function findRemoteRunByEvent(getToken: () => Promise<string | null>, request: CoachRunRequest): Promise<unknown | undefined> {
+  const url = workerUrl()
+  if (!url || !navigator.onLine) return undefined
+  const token = await getToken()
+  if (!token) return undefined
+  const response = await fetchCoach(`${url}/v1/coach/runs/by-event/${encodeURIComponent(request.event.id)}`, { headers: { Authorization: `Bearer ${token}` } })
+  if (response.status === 404) return undefined
+  const text = await response.text()
+  if (!response.ok) throw coachHttpError(response, text)
+  return JSON.parse(text)
+}
 
 /** IndexedDB serializa estas transacciones incluso entre conexiones/pestañas. */
 async function admitRun(request: CoachRunRequest): Promise<CoachRunRecord> {
@@ -252,19 +290,25 @@ async function dispatchRun(getToken: () => Promise<string | null>, localId: stri
   let value: unknown
   try {
     outcomeUnknown = true
-    const response = await fetch(`${url}/v1/coach/runs`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Idempotency-Key': request.event.id, 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': request.event.deviceId }, body: JSON.stringify(request) })
+    const response = await fetchCoach(`${url}/v1/coach/runs`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Idempotency-Key': request.event.id, 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': request.event.deviceId }, body: JSON.stringify(request) })
     const text = await response.text()
     outcomeUnknown = false
     if (!response.ok) {
-      const reason = (() => { try { return JSON.parse(text).error } catch { return undefined } })()
-      throw new Error(typeof reason === 'string' ? reason : `No se pudo iniciar el coach (${response.status})`)
+      throw coachHttpError(response, text)
     }
     value = JSON.parse(text)
   } catch (cause) {
+    if (outcomeUnknown) {
+      try {
+        const found = await findRemoteRunByEvent(getToken, request)
+        if (found !== undefined) return reconcileRun(localId, found)
+      } catch { /* La incertidumbre sigue visible y se puede resolver manualmente. */ }
+    }
     return db.transaction('rw', db.coachRuns, async () => {
       const current = (await db.coachRuns.get(localId))!
       if (!activeRun(current) || remoteId(current) || current.dispatchToken !== claimed.dispatchToken) return current
-      const failed: CoachRunRecord = { ...current, status: 'failed', error: outcomeUnknown ? 'unknown-outcome' : cause instanceof Error ? cause.message : 'No se pudo iniciar el coach', endedAt: Date.now(), updatedAt: Date.now(), dispatchToken: undefined, dispatchLeaseExpiresAt: undefined }
+      const error = cause instanceof Error ? cause.message : 'No se pudo iniciar el coach'
+      const failed: CoachRunRecord = { ...current, status: 'failed', error: outcomeUnknown && error !== 'coach-call-timeout' ? 'unknown-outcome' : error, endedAt: Date.now(), updatedAt: Date.now(), dispatchToken: undefined, dispatchLeaseExpiresAt: undefined }
       await db.coachRuns.put(failed)
       return failed
     })
@@ -294,8 +338,8 @@ export async function refreshCoachRun(getToken: () => Promise<string | null>, ru
   if (!local || !remoteId(local) || !workerUrl() || !navigator.onLine) return local
   const token = await getToken()
   if (!token) return local
-  const response = await fetch(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(remoteId(local)!)}`, { headers: { Authorization: `Bearer ${token}` } })
-  if (!response.ok) throw new Error(`No se pudo consultar el estado del coach (${response.status})`)
+  const response = await fetchCoach(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(remoteId(local)!)}`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!response.ok) throw coachHttpError(response, await response.text())
   return reconcileRun(local.id, await response.json())
 }
 
@@ -325,21 +369,31 @@ async function syncPendingCoachRunsInternal(getToken: () => Promise<string | nul
   for (const local of pending) {
     if (getCoachAccountId() !== ownerId) return
     if (!getCoachConsent(ownerId)) return
-    await dispatchRun(getToken, local.id)
+    const sent = await dispatchRun(getToken, local.id)
+    if (sent.cancelRequestedAt) await cancelCoachRun(getToken, local.id)
   }
 }
 
 export async function cancelCoachRun(getToken: () => Promise<string | null>, runId: string): Promise<void> {
   const local = await db.coachRuns.get(runId)
   if (!local) return
+  const requestedAt = local.cancelRequestedAt ?? Date.now()
+  await db.coachRuns.update(runId, { cancelRequestedAt: requestedAt, error: 'cancellation-pending', updatedAt: Date.now() })
   if (workerUrl() && navigator.onLine) {
     const token = await getToken()
     if (!token) throw new Error('Falta sesión para confirmar la cancelación remota')
     if (remoteId(local)) {
-      const response = await fetch(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(remoteId(local)!)}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': local.request.event.deviceId }, body: '{}' })
-      if (!response.ok && response.status !== 404) throw new Error('No se pudo confirmar la cancelación remota')
+      const response = await fetchCoach(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(remoteId(local)!)}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': local.request.event.deviceId }, body: '{}' })
+      if (response.status === 404) {
+        await db.coachRuns.update(runId, { status: 'cancelled', error: 'cancelled', endedAt: Date.now(), updatedAt: Date.now(), cancelRequestedAt: requestedAt })
+        return
+      }
+      if (!response.ok) throw coachHttpError(response, await response.text())
+      await reconcileRun(runId, await response.json())
+      return
     }
   }
+  if (!navigator.onLine || !remoteId(local)) return
   await db.transaction('rw', db.coachRuns, async () => {
     const current = await db.coachRuns.get(runId)
     if (current) await db.coachRuns.put({ ...current, status: 'cancelled', error: 'cancelled', endedAt: current.endedAt ?? Date.now(), updatedAt: Date.now() })
@@ -350,8 +404,8 @@ export async function cancelCoachRun(getToken: () => Promise<string | null>, run
 export async function retryCoachRun(getToken: () => Promise<string | null>, runId: string): Promise<CoachRunRecord> {
   const previous = await db.coachRuns.get(runId)
   if (!previous || previous.ownerId !== getCoachAccountId() || !isRetryableCoachError(previous.error)) throw new Error('Esta ejecución no tiene un fallo recuperable para reintentar')
-  const message = String(previous.request.event.payload?.message ?? 'Continúa la revisión anterior')
-  return startCoachRun(getToken, message)
+  await db.coachRuns.update(runId, { status: 'queued', error: undefined, endedAt: undefined, updatedAt: Date.now() })
+  return dispatchRun(getToken, runId)
 }
 
 export async function applyCoachChangeSet(runId: string): Promise<void> {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Dexie from 'dexie'
 import { db, FerroDB } from '../db/db'
 import { setCoachAccountId } from './coachAccount'
-import { applyCoachChangeSet, boundConversation, buildCoachRequest, cancelCoachRun, contextVersionFromSnapshot, normalizeCoachRequestForTransport, queueCoachSessionFinished, refreshCoachRun, retryCoachRun, startCoachRun, syncPendingCoachRuns } from './coachClient'
+import { applyCoachChangeSet, boundConversation, buildCoachRequest, cancelCoachRun, contextVersionFromSnapshot, fetchCoach, normalizeCoachRequestForTransport, queueCoachSessionFinished, refreshCoachRun, retryCoachRun, startCoachRun, syncPendingCoachRuns } from './coachClient'
 import { grantCoachConsent } from './coachConsent'
 import type { CoachRunRecord, Routine } from '../db/types'
 import { coachRunRequestSchema, type CoachRunRequest, type CoachRunResponse } from '../../packages/adaptation-core/src/contract'
@@ -33,19 +33,65 @@ describe('coach submission failures', () => {
     expect(result.status).toBe('failed')
     expect(result.error).toBe('La beta del coach está cerrada')
   })
+
+  it.each([[401, 'coach-auth-required'], [409, 'coach-conflict'], [429, 'provider-rate-limited'], [500, 'server-error']] as const)('keeps HTTP %s visible as %s', async (status, error) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status })))
+    const result = await startCoachRun(async () => 'test-token', 'Hola')
+    expect(result).toMatchObject({ status: 'failed', error })
+  })
   it('preserves uncertain outcome on a lost response so a new request is not sent automatically', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Network error')))
     const result = await startCoachRun(async () => 'test-token', 'Hola')
     expect(result.error).toBe('unknown-outcome')
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe(`https://coach.example/v1/coach/runs/by-event/${encodeURIComponent(result.eventId)}`)
+  })
+
+  it('consults the original event before exposing an uncertain outcome', async () => {
+    let original: CoachRunRequest | undefined
+    const request = vi.fn()
+      .mockImplementationOnce(async (_url: string, init: RequestInit) => { original = JSON.parse(String(init.body)) as CoachRunRequest; throw new TypeError('Network error') })
+      .mockImplementationOnce(async () => new Response(JSON.stringify({ run: { id: 'remote-found', eventId: original!.event.id, accountId, contextVersion: original!.context.version, specialists: ['orchestrator'], status: 'completed', endedAt: 20 }, decision: { kind: 'maintain', explanation: 'Listo', observations: [], evidence: [] } }), { status: 200 }))
+    vi.stubGlobal('fetch', request)
+    const result = await startCoachRun(async () => 'test-token', 'Hola')
+    expect(result.status).toBe('completed')
+    expect(result.remoteRunId).toBe('remote-found')
+    expect(request.mock.calls[1]?.[0]).toBe(`https://coach.example/v1/coach/runs/by-event/${encodeURIComponent(result.eventId)}`)
+  })
+
+  it('persists cancellation while offline and reconciles a late completed response', async () => {
+    vi.stubGlobal('navigator', { onLine: false })
+    const initial = await startCoachRun(async () => 'test-token', 'Hola')
+    await cancelCoachRun(async () => 'test-token', initial.id)
+    expect(await db.coachRuns.get(initial.id)).toMatchObject({ status: 'queued', error: 'cancellation-pending', cancelRequestedAt: expect.any(Number) })
+    await db.coachRuns.update(initial.id, { remoteRunId: 'remote-late' })
+    vi.stubGlobal('navigator', { onLine: true })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ run: { id: 'remote-late', eventId: initial.eventId, accountId, contextVersion: initial.contextVersion, specialists: ['orchestrator'], status: 'completed', endedAt: 20 }, decision: { kind: 'maintain', explanation: 'Terminó', observations: [], evidence: [] } }), { status: 200 })))
+    const reconciled = await refreshCoachRun(async () => 'test-token', initial.id)
+    expect(reconciled).toMatchObject({ status: 'completed', remoteRunId: 'remote-late' })
+  })
+
+  it('uses a 30 second abort signal and keeps timeout recoverable', async () => {
+    vi.useFakeTimers()
+    let signal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal
+      return new Promise<Response>((_, reject) => signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted', 'AbortError'))))
+    }))
+    const pending = fetchCoach('https://coach.example/timeout', {}, 30_000)
+    const rejection = expect(pending).rejects.toThrow('coach-call-timeout')
+    await vi.advanceTimersByTimeAsync(30_000)
+    await rejection
+    expect(signal?.aborted).toBe(true)
+    vi.useRealTimers()
   })
   it('an explicit retry does not require the uncertain run to be a completed conversation turn', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Network error')))
     const initial = await startCoachRun(async () => 'test-token', 'Hola')
     const retry = await retryCoachRun(async () => 'test-token', initial.id)
-    expect(retry.eventId).not.toBe(initial.eventId)
+    expect(retry.eventId).toBe(initial.eventId)
     expect(retry.request.event.causedByEventId).toBeUndefined()
-    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenCalledTimes(4)
   })
 
   it('projects the strict transport contract and bounds old conversation history', async () => {
@@ -385,9 +431,9 @@ describe('coach IndexedDB persistence and reconciliation', () => {
     const localId = `coach-local-${request.event.id}`
     await cancelCoachRun(async () => 'token', localId)
     late.resolve(new Response(JSON.stringify(responseFor(request))))
-    expect(await sending).toMatchObject({ id: localId, status: 'cancelled', remoteRunId: `remote-${request.event.id}` })
-    expect(await db.coachMessages.count()).toBe(1)
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}')))
+    expect(await sending).toMatchObject({ id: localId, status: 'completed', remoteRunId: `remote-${request.event.id}` })
+    expect(await db.coachMessages.count()).toBe(2)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(responseFor(request, 'completed')))))
     await cancelCoachRun(async () => 'token', localId)
     expect(fetch).toHaveBeenCalledWith(`https://coach.example/v1/coach/runs/remote-${request.event.id}/cancel`, expect.objectContaining({ method: 'POST' }))
   })

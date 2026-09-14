@@ -947,6 +947,14 @@ async function getCoachRun(request: Request, env: Env, userId: string, userHash:
   return json(request, coachRunResponse(row, userId), 200, env)
 }
 
+async function getCoachRunByEvent(request: Request, env: Env, userId: string, userHash: string, eventId: string, now: number): Promise<Response> {
+  if (env.DB) await reconcileCoachRuns(env.DB, userHash, now)
+  const row = await env.DB?.prepare('SELECT * FROM coach_runs WHERE event_id = ? AND account_hash = ? ORDER BY updated_at DESC LIMIT 1').bind(eventId, userHash).first<CoachRunRow>()
+  if (!row) return error(request, 404, 'Ejecución no encontrada', env)
+  if (row.event_id !== eventId || row.account_hash !== userHash) return error(request, 404, 'Ejecución no encontrada', env)
+  return json(request, coachRunResponse(row, userId), 200, env)
+}
+
 async function cancelCoachRun(request: Request, env: Env, deps: WorkerDependencies, userHash: string, userId: string, runId: string, now: number): Promise<Response> {
   if (!env.DB) return error(request, 503, 'D1 es obligatorio para el coach', env)
   const row = await env.DB.prepare('SELECT * FROM coach_runs WHERE id = ? AND account_hash = ?').bind(runId, userHash).first<CoachRunRow>()
@@ -974,17 +982,19 @@ export async function handleRequest(request: Request, env: Env, deps: WorkerDepe
   }
   const url = new URL(request.url)
   const coachCancelMatch = url.pathname.match(/^\/v1\/coach\/runs\/([^/]+)\/cancel$/)
+  const coachEventMatch = url.pathname.match(/^\/v1\/coach\/runs\/by-event\/([^/]+)$/)
   const coachRunMatch = url.pathname.match(/^\/v1\/coach\/runs\/([^/]+)$/)
   const coachCollection = url.pathname === '/v1/coach/runs'
   if (request.method === 'GET' && url.pathname === '/health') return json(request, { ok: true, policyVersion: 'v1' }, 200, env)
   if (request.method !== 'GET' && request.method !== 'POST') return error(request, 404, 'Ruta no encontrada', env)
-  if (request.method === 'GET' && !['/readiness', '/v1/readiness'].includes(url.pathname) && !coachRunMatch) return error(request, 404, 'Ruta no encontrada', env)
+  if (request.method === 'GET' && !['/readiness', '/v1/readiness'].includes(url.pathname) && !coachRunMatch && !coachEventMatch) return error(request, 404, 'Ruta no encontrada', env)
   if (request.method === 'POST' && !['/v1/adaptations/analyze', '/v1/adaptations/events', '/v1/providers/probe'].includes(url.pathname) && !coachCollection && !coachRunMatch && !coachCancelMatch) return error(request, 404, 'Ruta no encontrada', env)
   const configurationError = productionConfigError(env)
   if (configurationError) return error(request, 503, configurationError, env)
   const auth = await authenticate(request, env, deps); if (auth instanceof Response) return auth
   const pseudonymKey = env.PSEUDONYMIZATION_KEY ?? env.CLERK_JWT_KEY
   const userHash = await hmac(auth.sub, pseudonymKey)
+  if (coachEventMatch && request.method === 'GET') return getCoachRunByEvent(request, env, auth.sub, userHash, decodeURIComponent(coachEventMatch[1]), now)
   if (coachRunMatch && request.method === 'GET') return getCoachRun(request, env, auth.sub, userHash, decodeURIComponent(coachRunMatch[1]), now)
   if (request.method === 'GET') {
     const checks = await readiness(env.DB, env.VECTORIZE, env.RAG_INDEX_VERSION, env.RAG_EXPECTED_SOURCE_COUNT, env.RAG_EXPECTED_CHUNK_COUNT)
