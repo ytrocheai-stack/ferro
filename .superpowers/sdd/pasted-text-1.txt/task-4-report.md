@@ -26,3 +26,33 @@ Las pruebas nuevas cubren migración v9, huérfanos, cuentas distintas, fechas i
 
 - La selección de conversación queda expuesta por el repositorio (`selectCoachConversation`); la UI de conversaciones no forma parte del brief T4 y no se añadió una pantalla nueva.
 - La ampliación se integra directamente en v10, que es el contrato de migración compartido por T2/T4; no se creó un downgrade ni una migración alternativa.
+
+## Round 1 — correcciones del reviewer
+
+- Las colisiones de IDs ahora generan una identidad alternativa determinista por propietario, tanto en `ensureCoachConversation` como en la reparación v9→v10; nunca se reutiliza ni se sobrescribe una fila de otro propietario.
+- `admitCoachRun` exige que la conversación exista, pertenezca a `request.event.accountId` y no esté pendiente de eliminación antes de leer o incrementar `nextSequence`.
+- La migración actualiza el caché de conversación después de cada fila, por lo que varias filas sin secuencia reciben `1, 2, ...`; las filas ya reparadas se conservan al reabrir la base.
+- La normalización de requests filtra los mensajes del snapshot por `event.conversationId`, excluyendo conversaciones explícitamente distintas.
+- El borrado invalida memoria y timers de drafts antes de la transacción; un callback tardío no puede recrear el draft.
+- `CoachRunRecord.messageId` usa exactamente el ID del mensaje de usuario insertado en la misma transacción.
+
+## Verificación Round 1 (comandos y salida)
+
+```text
+$ npx tsc --noEmit
+exit 0
+
+$ npx eslint src/db/db.ts src/db/types.ts src/lib/coachConsent.ts src/lib/coachClient.ts src/lib/coachConversations.ts src/lib/coachConversations.test.ts src/lib/backup.ts src/lib/validation.ts src/lib/coachClient.test.ts
+exit 0
+
+$ npx vitest run src/lib/coachConversations.test.ts src/lib/coachClient.test.ts src/lib/backup.test.ts
+✓ src/lib/backup.test.ts (5 tests)
+✓ src/lib/coachConversations.test.ts (9 tests)
+✓ src/lib/coachClient.test.ts (52 tests)
+Test Files 3 passed (3)
+Tests 66 passed (66)
+exit 0
+
+$ git diff --check
+exit 0
+```

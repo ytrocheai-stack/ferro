@@ -86,11 +86,17 @@ export function normalizeCoachRequestForTransport(value: unknown): ParsedCoachRu
   const source = value as Record<string, unknown>
   const context = source.context && typeof source.context === 'object' ? source.context as Record<string, unknown> : {}
   const rawSnapshot = context.snapshot && typeof context.snapshot === 'object' ? context.snapshot as Record<string, unknown> : {}
+  const event = source.event && typeof source.event === 'object' ? source.event as Record<string, unknown> : {}
+  const selectedConversationId = typeof event.conversationId === 'string' ? event.conversationId : undefined
   const rawConversation = Array.isArray(rawSnapshot.conversation) ? rawSnapshot.conversation : []
-  const conversation = boundConversation(rawConversation.filter(validHistoricalMessage))
+  const conversation = boundConversation(rawConversation.filter((candidate) => {
+    if (!validHistoricalMessage(candidate)) return false
+    if (!selectedConversationId || !candidate || typeof candidate !== 'object') return true
+    const candidateConversationId = (candidate as Partial<CoachMessage>).conversationId
+    return candidateConversationId === undefined || candidateConversationId === selectedConversationId
+  }))
   const normalizedSnapshot = { ...rawSnapshot, conversation, conversationVersion: conversationVersion(conversation) }
   const version = contextVersionFromSnapshot(normalizedSnapshot)
-  const event = source.event && typeof source.event === 'object' ? source.event as Record<string, unknown> : {}
   return parseCoachRequest({
     ...source,
     event: { ...event, contextVersion: version },
@@ -199,7 +205,7 @@ async function findRemoteRunByEvent(getToken: () => Promise<string | null>, requ
 }
 
 /** IndexedDB serializa estas transacciones incluso entre conexiones/pestañas. */
-async function admitRun(request: CoachRunRequest): Promise<CoachRunRecord> {
+export async function admitCoachRun(request: CoachRunRequest): Promise<CoachRunRecord> {
   return db.transaction('rw', [db.coachRuns, db.coachMessages, db.coachConversations], async () => {
     const ownerId = request.event.accountId
     const runs = await db.coachRuns.where('ownerId').equals(ownerId).toArray()
@@ -211,16 +217,22 @@ async function admitRun(request: CoachRunRequest): Promise<CoachRunRecord> {
     if (existing) return existing
     if (runs.some(activeRun)) throw new Error('Ya existe una ejecución activa del coach. Espera a que termine o cancélala.')
     const now = Date.now()
-    const conversationId = request.event.conversationId ?? `coach-local-${request.event.id}`
+    const messageId = `coach-message-coach-local-${request.event.id}`
+    const requestedConversationId = request.event.conversationId
+    if (!requestedConversationId) throw new Error('La solicitud no tiene una conversación seleccionada')
+    const conversationId = requestedConversationId
     const conversation = await db.coachConversations.get(conversationId)
+    if (!conversation || conversation.ownerId !== ownerId || conversation.pendingDeletion) {
+      throw new Error('La conversación seleccionada no existe o no pertenece a esta cuenta')
+    }
     const sequence = conversation?.nextSequence ?? 1
     const run: CoachRunRecord = {
       id: `coach-local-${request.event.id}`, ownerId, eventId: request.event.id,
-      conversationId, messageId: `coach-message-${request.event.id}`, reconciliationState: 'pending',
+      conversationId, messageId, reconciliationState: 'pending',
       contextVersion: request.context.version, status: 'queued', request, createdAt: now, updatedAt: now,
     }
     await db.coachRuns.add(run)
-    await db.coachMessages.add({ id: `coach-message-${run.id}`, ownerId, runId: run.id, conversationId, sequence, deliveryState: 'pending', role: 'user', content: String(request.event.payload?.message ?? ''), createdAt: now, contextVersion: run.contextVersion })
+    await db.coachMessages.add({ id: messageId, ownerId, runId: run.id, conversationId, sequence, deliveryState: 'pending', role: 'user', content: String(request.event.payload?.message ?? ''), createdAt: now, contextVersion: run.contextVersion })
     if (conversation) await db.coachConversations.put({ ...conversation, nextSequence: sequence + 1, updatedAt: now })
     return run
   })
@@ -365,7 +377,7 @@ async function dispatchRun(getToken: () => Promise<string | null>, localId: stri
 export async function startCoachRun(getToken: () => Promise<string | null>, message: string, options: { causedByEventId?: string } = {}): Promise<CoachRunRecord> {
   const request = await buildCoachRequest(message, options.causedByEventId)
   if (!request) throw new Error('Activa el consentimiento del coach y escribe un mensaje')
-  const local = await admitRun(request)
+  const local = await admitCoachRun(request)
   return dispatchRun(getToken, local.id)
 }
 
@@ -373,7 +385,7 @@ export async function startCoachRun(getToken: () => Promise<string | null>, mess
 export async function queueCoachSessionFinished(workoutId: string): Promise<void> {
   const request = await buildCoachRequest(`Sesión terminada ${workoutId}. Revisa el contexto y dime si hay algo que deba observar antes de mi próximo entrenamiento.`, undefined, 'session-finished', { eventId: `coach-session-finished-${workoutId}`, payload: { workoutId } })
   if (!request) return
-  await admitRun(request)
+  await admitCoachRun(request)
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('nextrep:coach-wake'))
 }
 

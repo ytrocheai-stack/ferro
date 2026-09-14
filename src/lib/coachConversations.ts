@@ -7,6 +7,10 @@ const draftTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const draftMemory = new Map<string, string>()
 const draftId = (ownerId: string, conversationId: string) => `${ownerId}:${conversationId}`
 
+function alternateConversationId(ownerId: string, requestedId: string): string {
+  return `${ownerId}:${requestedId}`
+}
+
 export async function listCoachConversations(ownerId: string): Promise<CoachConversation[]> {
   return (await db.coachConversations.where('ownerId').equals(ownerId).toArray())
     .filter((item) => !item.pendingDeletion).sort((a, b) => b.updatedAt - a.updatedAt || a.createdAt - b.createdAt)
@@ -19,11 +23,22 @@ export async function ensureCoachConversation(ownerId: string, requestedId?: str
       if (requested?.ownerId === ownerId && !requested.pendingDeletion) return requested
     }
     const conversations = await db.coachConversations.where('ownerId').equals(ownerId).toArray()
-    for (const conversation of conversations) {
-      if (!conversation.pendingDeletion && await db.coachMessages.where('conversationId').equals(conversation.id).count() === 0) return conversation
+    if (!requestedId) {
+      for (const conversation of conversations) {
+        if (!conversation.pendingDeletion && await db.coachMessages.where('conversationId').equals(conversation.id).count() === 0) return conversation
+      }
+    }
+    const baseId = requestedId ?? uid()
+    let id = baseId
+    let collision = await db.coachConversations.get(id)
+    let suffix = 0
+    while (collision && collision.ownerId !== ownerId) {
+      suffix += 1
+      id = `${alternateConversationId(ownerId, baseId)}${suffix === 1 ? '' : `:${suffix}`}`
+      collision = await db.coachConversations.get(id)
     }
     const now = Date.now()
-    const conversation: CoachConversation = { id: requestedId ?? uid(), ownerId, title: DEFAULT_TITLE, createdAt: now, updatedAt: now, nextSequence: 1 }
+    const conversation: CoachConversation = { id, ownerId, title: DEFAULT_TITLE, createdAt: now, updatedAt: now, nextSequence: 1 }
     await db.coachConversations.add(conversation)
     return conversation
   })
@@ -56,6 +71,10 @@ export async function renameCoachConversation(ownerId: string, id: string, title
 }
 
 export async function deleteCoachConversation(ownerId: string, id: string): Promise<boolean> {
+  const key = draftId(ownerId, id)
+  const timer = draftTimers.get(key)
+  if (timer) { clearTimeout(timer); draftTimers.delete(key) }
+  draftMemory.delete(key)
   return db.transaction('rw', [db.coachConversations, db.coachMessages, db.coachRuns, db.coachDrafts], async () => {
     const current = await db.coachConversations.get(id)
     if (!current || current.ownerId !== ownerId) return false

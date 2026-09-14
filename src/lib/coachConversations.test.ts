@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Dexie from 'dexie'
 import { db, FerroDB } from '../db/db'
-import { buildCoachRequest } from './coachClient'
+import { admitCoachRun, buildCoachRequest, normalizeCoachRequestForTransport } from './coachClient'
 import { setCoachAccountId } from './coachAccount'
 import { grantCoachConsent, getSelectedCoachConversation } from './coachConsent'
 import { createCoachConversation, deleteCoachConversation, ensureCoachConversation, flushCoachDraft, getCoachDraft, listCoachConversations, setCoachDraft } from './coachConversations'
@@ -25,6 +25,16 @@ describe('conversaciones locales del coach', () => {
     expect(await getCoachDraft('account-a', first.id)).toBe('borrador')
     expect(await getCoachDraft('account-b', first.id)).toBe('')
     expect(await createCoachConversation('account-a')).toEqual(first)
+  })
+
+  it('resuelve una colisión de identidad sin cambiar el propietario ni los mensajes ajenos', async () => {
+    const ownerA = await ensureCoachConversation('owner-a', 'shared-conversation')
+    await db.coachMessages.put({ id: 'owner-a-message', ownerId: 'owner-a', runId: 'run-a', conversationId: ownerA.id, sequence: 1, role: 'user', content: 'A', createdAt: 1, contextVersion: 'ctx' })
+    const ownerB = await ensureCoachConversation('owner-b', 'shared-conversation')
+    expect(ownerB.id).not.toBe(ownerA.id)
+    expect(ownerB.ownerId).toBe('owner-b')
+    expect(await db.coachConversations.get(ownerA.id)).toMatchObject({ ownerId: 'owner-a' })
+    expect(await db.coachMessages.get('owner-a-message')).toMatchObject({ conversationId: ownerA.id, ownerId: 'owner-a' })
   })
 
   it('envía únicamente la conversación seleccionada y conserva el historial local completo', async () => {
@@ -54,6 +64,40 @@ describe('conversaciones locales del coach', () => {
     expect(await db.coachMessages.get('message-pending')).toBeUndefined()
   })
 
+  it('invalida memoria y timer del draft al eliminar una conversación', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const conversation = await ensureCoachConversation('account-a')
+      setCoachDraft('account-a', conversation.id, 'no debe reaparecer')
+      expect(await deleteCoachConversation('account-a', conversation.id)).toBe(true)
+      await vi.advanceTimersByTimeAsync(300)
+      expect(await db.coachDrafts.get(`account-a:${conversation.id}`)).toBeUndefined()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('rechaza una conversación inexistente sin consumir una secuencia ajena', async () => {
+    const ownerB = await ensureCoachConversation('owner-b', 'foreign')
+    const request = await buildCoachRequest('mensaje')
+    const foreignRequest = structuredClone(request!)
+    foreignRequest.event.conversationId = ownerB.id
+    await expect(admitCoachRun(foreignRequest)).rejects.toThrow('no existe o no pertenece')
+    expect(await db.coachConversations.get(ownerB.id)).toMatchObject({ ownerId: 'owner-b', nextSequence: 1 })
+    expect(await db.coachRuns.count()).toBe(0)
+  })
+
+  it('normaliza snapshots legacy sin mezclar conversaciones', async () => {
+    const request = await buildCoachRequest('mensaje')
+    const legacy = structuredClone(request!) as unknown as Record<string, unknown>
+    const context = legacy.context as Record<string, unknown>
+    const snapshot = context.snapshot as Record<string, unknown>
+    snapshot.conversation = [
+      { id: 'selected', conversationId: request!.event.conversationId, role: 'user', content: 'sí', createdAt: 1, contextVersion: 'ctx' },
+      { id: 'other', conversationId: 'other-conversation', role: 'user', content: 'no', createdAt: 2, contextVersion: 'ctx' },
+    ]
+    const normalized = normalizeCoachRequestForTransport(legacy)
+    expect(normalized.context.snapshot.conversation.map((message) => message.content)).toEqual(['sí'])
+  })
+
   it('mantiene fechas iguales con secuencias distintas y soporta recarga del repositorio', async () => {
     const first = await ensureCoachConversation('account-a')
     await db.coachMessages.bulkPut([
@@ -74,14 +118,23 @@ describe('migración v9 a v10 de conversaciones', () => {
     legacy.version(9).stores({ coachRuns: 'id, ownerId, eventId, status, createdAt, updatedAt, contextVersion', coachMessages: 'id, ownerId, runId, createdAt, [runId+createdAt]' })
     await legacy.open()
     await legacy.table('coachRuns').put({ id: 'coach-local-event-1', ownerId: 'owner-a', eventId: 'event-1', contextVersion: 'ctx', status: 'completed', request: { event: { id: 'event-1', accountId: 'owner-a', deviceId: 'd', conversationId: 'conv-a' } }, createdAt: 10, updatedAt: 10 })
-    await legacy.table('coachMessages').bulkPut([{ id: 'known', ownerId: 'owner-a', runId: 'coach-local-event-1', role: 'user', content: 'conserva', createdAt: 10, contextVersion: 'ctx' }, { id: 'orphan', ownerId: 'owner-a', runId: 'missing', role: 'assistant', content: 'huérfano', createdAt: 10, contextVersion: 'ctx' }])
+    await legacy.table('coachMessages').bulkPut([{ id: 'known-a', ownerId: 'owner-a', runId: 'coach-local-event-1', role: 'user', content: 'conserva', createdAt: 10, contextVersion: 'ctx' }, { id: 'known-b', ownerId: 'owner-a', runId: 'coach-local-event-1', role: 'assistant', content: 'segunda', createdAt: 10, contextVersion: 'ctx' }, { id: 'orphan', ownerId: 'owner-a', runId: 'missing', role: 'assistant', content: 'huérfano', createdAt: 10, contextVersion: 'ctx' }])
     legacy.close()
     const upgraded = new FerroDB(name)
     await upgraded.open()
-    expect(await upgraded.coachMessages.count()).toBe(2)
+    expect(await upgraded.coachMessages.count()).toBe(3)
     expect(await upgraded.coachConversations.get('conv-a')).toMatchObject({ ownerId: 'owner-a' })
     expect(await upgraded.coachConversations.get('coach-history-owner-a')).toMatchObject({ title: 'Historial anterior' })
     expect((await upgraded.coachMessages.get('orphan'))?.content).toBe('huérfano')
-    upgraded.close(); await Dexie.delete(name)
+    expect(await upgraded.coachMessages.get('known-a')).toMatchObject({ sequence: 1, conversationId: 'conv-a' })
+    expect(await upgraded.coachMessages.get('known-b')).toMatchObject({ sequence: 2, conversationId: 'conv-a' })
+    expect(await upgraded.coachConversations.get('conv-a')).toMatchObject({ nextSequence: 3 })
+    upgraded.close()
+    const reopened = new FerroDB(name)
+    await reopened.open()
+    expect(await reopened.coachMessages.get('known-a')).toMatchObject({ sequence: 1 })
+    expect(await reopened.coachMessages.get('known-b')).toMatchObject({ sequence: 2 })
+    expect(await reopened.coachConversations.get('conv-a')).toMatchObject({ nextSequence: 3 })
+    reopened.close(); await Dexie.delete(name)
   })
 })

@@ -290,13 +290,20 @@ export class FerroDB extends Dexie {
       const created = new Map<string, CoachConversation>()
       const runMap = new Map<string, CoachRunRecord>()
       const ensureConversation = async (ownerId: string, id: string, title = 'Nueva conversación') => {
-        const key = `${ownerId}:${id}`
+        let resolvedId = id
+        let existing = await conversations.get(resolvedId)
+        let suffix = 0
+        while (existing && existing.ownerId !== ownerId) {
+          suffix += 1
+          resolvedId = `${ownerId}:${id}${suffix === 1 ? '' : `:${suffix}`}`
+          existing = await conversations.get(resolvedId)
+        }
+        const key = `${ownerId}:${resolvedId}`
         const cached = created.get(key)
         if (cached) return cached
-        const existing = await conversations.get(id)
         if (existing?.ownerId === ownerId) { created.set(key, existing); return existing }
         const now = Date.now()
-        const next = { id, ownerId, title, createdAt: now, updatedAt: now, nextSequence: 1 } satisfies CoachConversation
+        const next = { id: resolvedId, ownerId, title, createdAt: now, updatedAt: now, nextSequence: 1 } satisfies CoachConversation
         await conversations.put(next); created.set(key, next); return next
       }
       const localIds = new Set(runs.map((run) => run.id))
@@ -313,11 +320,12 @@ export class FerroDB extends Dexie {
           }
         }
         const explicitConversationId = run.request?.event?.conversationId
-        const conversationId = explicitConversationId || `coach-local-${run.eventId}`
+        const requestedConversationId = explicitConversationId || `coach-local-${run.eventId}`
+        const conversation = await ensureConversation(run.ownerId, requestedConversationId)
+        const conversationId = conversation.id
         const repairedRun = { ...run, remoteRunId: run.remoteRunId ?? (!run.id.startsWith('coach-local-') ? run.id : undefined), ...(explicitConversationId ? { conversationId, reconciliationState: run.reconciliationState ?? 'reconciled' } : {}) }
         if (repairedRun.remoteRunId !== run.remoteRunId || (explicitConversationId && run.conversationId !== conversationId)) await tx.table<CoachRunRecord>('coachRuns').put(repairedRun)
         runMap.set(run.id, repairedRun)
-        await ensureConversation(run.ownerId, conversationId)
       }
       const legacy = new Map<string, CoachConversation>()
       const ordered = (await messages.toArray()).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
@@ -330,9 +338,12 @@ export class FerroDB extends Dexie {
           conversationId = fallback.id
         }
         const conversation = await ensureConversation(message.ownerId, conversationId)
+        conversationId = conversation.id
         const sequence = message.sequence ?? conversation.nextSequence
         await messages.put({ ...message, conversationId, sequence, deliveryState: message.deliveryState ?? 'delivered' })
-        await conversations.put({ ...conversation, nextSequence: Math.max(conversation.nextSequence, sequence + 1), updatedAt: Math.max(conversation.updatedAt, message.createdAt) })
+        const updatedConversation = { ...conversation, nextSequence: Math.max(conversation.nextSequence, sequence + 1), updatedAt: Math.max(conversation.updatedAt, message.createdAt) }
+        await conversations.put(updatedConversation)
+        created.set(`${message.ownerId}:${conversation.id}`, updatedConversation)
       }
     })
   }

@@ -292,6 +292,7 @@ describe('coach IndexedDB persistence and reconciliation', () => {
     expect(await db.coachRuns.get(result.remoteRunId!)).toBeUndefined()
     const messages = await db.coachMessages.toArray()
     expect(messages).toHaveLength(2)
+    expect(result.messageId).toBe(messages.find((message) => message.role === 'user')?.id)
     expect(messages.find((message) => message.role === 'user')).toMatchObject({ content: 'Mi pregunta', runId: result.id, createdAt: result.createdAt })
     expect(messages.find((message) => message.role === 'assistant')).toMatchObject({ content: 'Necesito conocer tu equipo.\n\n¿Tienes barra?\n\n¿Tienes discos?', runId: result.id })
     expect(new Set(messages.map((message) => message.id)).size).toBe(2)
