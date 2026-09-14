@@ -46,7 +46,11 @@ function fakeDb() {
           }
           return null
         },
-        async all<T = Record<string, unknown>>() { return { results: (sql.includes('FROM coach_run_snapshots') ? snapshots.filter((item) => item.run_id === values[0] && Number(item.sequence) > Number(values[1])).sort((a, b) => Number(a.sequence) - Number(b.sequence)) : []) as T[] } },
+        async all<T = Record<string, unknown>>() {
+          if (sql.includes('FROM coach_run_snapshots')) return { results: snapshots.filter((item) => item.run_id === values[0] && Number(item.sequence) > Number(values[1])).sort((a, b) => Number(a.sequence) - Number(b.sequence)) as T[] }
+          if (sql.includes('FROM coach_runs WHERE account_hash = ?')) return { results: [...rows.values()].filter((item) => item.account_hash === values[0] && ['queued', 'running'].includes(String(item.status)) && Number(item.created_at) + 600_000 <= Number(values[2])).map((item) => ({ id: item.id })) as T[] }
+          return { results: [] as T[] }
+        },
         async run() {
           if (sql.includes('INSERT INTO coach_runs')) {
             const [id, accountHash, eventId, conversationId, contextVersion, requestHash, idempotencyKey, requestJson, createdAt, updatedAt] = values
@@ -56,6 +60,8 @@ function fakeDb() {
             snapshots.push({ run_id: runId, sequence, text, status, decision_json: decisionJson, error_code: errorCode, created_at: createdAt })
           } else if (sql.includes("SET status = 'cancelled'")) {
             const row = rows.get(String(values[2])); if (row) { row.status = 'cancelled'; row.error_code = 'cancelled'; row.ended_at = values[0]; row.updated_at = values[1]; row.workflow_status = 'terminated' }
+          } else if (sql.includes("SET status = 'failed'")) {
+            const row = rows.get(String(values[2])); if (row && ['queued', 'running'].includes(String(row.status))) { row.status = 'failed'; row.error_code = 'coach-global-deadline-exceeded'; row.ended_at = values[0]; row.updated_at = values[1]; row.workflow_status = 'errored' }
           }
           return { success: true, meta: { changes: 1 } }
         },
@@ -160,6 +166,23 @@ describe('private coach runs', () => {
     const body = await response.text()
     expect(body).toContain(': heartbeat')
     expect(body).toContain(': timeout')
+  })
+
+  it('reconciles an expired run before events and replays its failed terminal snapshot', async () => {
+    const { db, rows, snapshots } = fakeDb()
+    const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    let now = 1_700_000_000_000
+    const deps = { verify: async () => ({ sub: 'user_1' }), now: () => now }
+    const created = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
+    const id = (await created.json() as { run: { id: string } }).run.id
+    now += 600_001
+    const response = await handleRequest(new Request(`https://worker.test/v1/coach/runs/${id}/events`, { headers: authHeaders }), env, deps)
+    const body = await response.text()
+    expect(body).toContain('"status":"failed"')
+    expect(body).toContain('coach-global-deadline-exceeded')
+    expect(rows.get(id)?.status).toBe('failed')
+    expect(snapshots.at(-1)).toMatchObject({ run_id: id, status: 'failed' })
   })
 
   it('cancels durably with a cancelled terminal snapshot and does not rewrite it as failed', async () => {

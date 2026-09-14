@@ -68,8 +68,11 @@ export default function CoachPage() {
   const messageOffset = useRef(0)
   const conversationGeneration = useRef(0)
   const streamControllers = useRef(new Map<string, AbortController>())
+  const streamTimers = useRef(new Map<string, number>())
+  const streamReconnectAttempts = useRef(new Map<string, number>())
   const runsRef = useRef<CoachRunRecord[]>([])
   const getTokenRef = useRef(getToken)
+  const streamRunRef = useRef<(run: CoachRunRecord) => Promise<void>>(async () => undefined)
 
   selectedIdRef.current = selectedId
   runsRef.current = runs
@@ -122,26 +125,40 @@ export default function CoachPage() {
   }, [ownerId])
 
   const streamRun = useCallback(async (run: CoachRunRecord) => {
-    if (!isCoachStreamingEnabled() || !ownerId || run.ownerId !== ownerId || streamControllers.current.has(run.id)) return
+    if (!isCoachStreamingEnabled() || !ownerId || run.ownerId !== ownerId || streamControllers.current.has(run.id) || streamTimers.current.has(run.id)) return
     const controller = new AbortController()
     streamControllers.current.set(run.id, controller)
     const update = (next: CoachRunRecord) => {
       if (getCoachAccountId() !== ownerId) return
       setRuns((current) => current.map((item) => item.id === next.id ? next : item))
     }
+    let latest: CoachRunRecord | undefined
     try {
-      const next = await streamCoachRun(getTokenRef.current, run.id, controller.signal, update)
-      if (next) update(next)
-      if (next && (next.status === 'completed' || next.status === 'failed' || next.status === 'cancelled')) {
+      latest = await streamCoachRun(getTokenRef.current, run.id, controller.signal, update)
+      if (latest) update(latest)
+      if (latest && (latest.status === 'completed' || latest.status === 'failed' || latest.status === 'cancelled')) {
         // El terminal SSE solo sustituye el parcial; el JSON normal materializa la burbuja una vez.
         const reconciled = await refreshCoachRun(getTokenRef.current, run.id)
         if (reconciled) update(reconciled)
-        if (next.conversationId && selectedIdRef.current === next.conversationId) await loadMessages(next.conversationId, 'refresh')
+        streamReconnectAttempts.current.delete(run.id)
+        if (latest.conversationId && selectedIdRef.current === latest.conversationId) await loadMessages(latest.conversationId, 'refresh')
       }
     } catch (cause) {
-      if (!(cause instanceof DOMException && cause.name === 'AbortError')) setActionError(errorLabel(cause instanceof Error ? cause.message : undefined))
-    } finally { streamControllers.current.delete(run.id) }
+      latest = await db.coachRuns.get(run.id) ?? run
+      if (!(cause instanceof DOMException && cause.name === 'AbortError') && !(cause instanceof Error && cause.name === 'AbortError')) setActionError(errorLabel(cause instanceof Error ? cause.message : undefined))
+    } finally {
+      streamControllers.current.delete(run.id)
+    }
+    const stillActive = latest && (latest.status === 'queued' || latest.status === 'running')
+    if (!controller.signal.aborted && stillActive && navigator.onLine && isCoachStreamingEnabled() && !streamTimers.current.has(run.id)) {
+      const attempt = streamReconnectAttempts.current.get(run.id) ?? 0
+      streamReconnectAttempts.current.set(run.id, attempt + 1)
+      const delay = Math.min(250 * (2 ** Math.min(attempt, 4)), 4_000)
+      const timer = window.setTimeout(() => { streamTimers.current.delete(run.id); void streamRunRef.current(run) }, delay)
+      streamTimers.current.set(run.id, timer)
+    }
   }, [loadMessages, ownerId])
+  streamRunRef.current = streamRun
 
   useEffect(() => { conversationOffset.current = 0; if (consent) void loadConversations() }, [consent, loadConversations])
 
@@ -186,6 +203,9 @@ export default function CoachPage() {
       document.removeEventListener('visibilitychange', reconnect)
       for (const controller of streamControllers.current.values()) controller.abort()
       streamControllers.current.clear()
+      for (const timer of streamTimers.current.values()) window.clearTimeout(timer)
+      streamTimers.current.clear()
+      streamReconnectAttempts.current.clear()
     }
   }, [ownerId, streamRun])
 

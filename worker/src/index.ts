@@ -1084,6 +1084,8 @@ async function getCoachRunEvents(request: Request, env: Env, userHash: string, r
   if (!env.DB) return error(request, 503, 'D1 es obligatorio para el coach', env)
   const run = await env.DB.prepare('SELECT id FROM coach_runs WHERE id = ? AND account_hash = ?').bind(runId, userHash).first<{ id: string }>()
   if (!run) return error(request, 404, 'Ejecución no encontrada', env)
+  // El listener también es un punto de recuperación: materializa expiraciones antes del replay.
+  await reconcileCoachRuns(env.DB, userHash, deps.now?.() ?? Date.now())
   // Una ejecución que terminó mientras no había listener obtiene su terminal antes del replay.
   await persistActualTerminalSnapshot(env.DB, runId, deps.now?.() ?? Date.now())
   const rawCursor = request.headers.get('Last-Event-ID') ?? new URL(request.url).searchParams.get('after') ?? '0'

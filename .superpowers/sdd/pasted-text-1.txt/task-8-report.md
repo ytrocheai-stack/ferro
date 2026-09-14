@@ -16,8 +16,9 @@ Implementado localmente y sin despliegue. La bandera `ENABLE_COACH_STREAMING` no
   - expone `GET /v1/coach/runs/:id/events` autenticado por bearer, aislado por `account_hash`, con cursor `Last-Event-ID`/`after`, replay, espera acotada, heartbeats y cierre por timeout/terminal;
   - reintenta conflictos de secuencia D1 leyendo de nuevo la última secuencia, sin reenviar generación;
   - responde `404` para una ejecución de otra cuenta y nunca crea una ejecución durante reconexión.
-- `src/lib/coachClient.ts`, `src/pages/CoachPage.tsx`, `src/components/CoachTranscript.tsx` y `src/db/types.ts`: reconexión SSE opt-in mediante `streamCoachRun`, cursor local, deduplicación por secuencia y reemplazo del parcial; con `VITE_ENABLE_COACH_STREAMING` apagada, `CoachPage` conserva exactamente el polling de 2 segundos; se conservan borrador, run y conversación locales.
-- Pruebas focalizadas Worker/cliente/UI para cancelación, expiración, Workflow reiniciado, carrera de secuencia, conexión viva acotada, aislamiento, cursor, reconexión, reemplazo de parciales y ausencia de POST.
+- `src/lib/coachClient.ts`, `src/pages/CoachPage.tsx`, `src/components/CoachTranscript.tsx` y `src/db/types.ts`: reconexión SSE opt-in mediante `streamCoachRun`, cursor local, deduplicación por secuencia y reemplazo del parcial; EOF, timeout y errores de red reintentan con backoff acotado; `CoachPage` programa nuevas conexiones mientras el run siga activo y cancela timers/controllers al desmontar; con `VITE_ENABLE_COACH_STREAMING` apagada, conserva exactamente el polling de 2 segundos.
+- `GET /events` ejecuta `reconcileCoachRuns` después de validar owner y antes del replay/espera, por lo que un run expirado se materializa como `failed` con snapshot terminal sin convertir un `cancelled`.
+- Pruebas focalizadas Worker/cliente/UI para cancelación, expiración vista por events, Workflow reiniciado, carrera de secuencia, conexión viva acotada, aislamiento, cursor, EOF/timeout/error de red, reconexión, reemplazo de parciales y ausencia de POST.
 
 ## Decisiones de seguridad y rollback
 
@@ -31,13 +32,14 @@ Implementado localmente y sin despliegue. La bandera `ENABLE_COACH_STREAMING` no
 ## Pendientes / preocupaciones
 
 - No se habilitó el streaming remoto porque T8 exige mantener la bandera apagada hasta acreditar capacidad y ausencia de gasto adicional.
-- El endpoint mantiene una conexión viva solo durante una ventana de 30 segundos; el cliente debe reconectar con su último cursor para seguir observando una ejecución larga.
+- El endpoint mantiene una conexión viva solo durante una ventana de 30 segundos; el cliente la reabre automáticamente con su último cursor mientras el run siga activo. Cada conexión limita sus reintentos a cuatro y el `CoachPage` aplica backoff máximo de 4 segundos entre conexiones; la señal de desmontaje corta ambos.
+- Los tests inyectan `sleep` y `maxReconnects` para cerrar los escenarios EOF/timeout/error sin loops infinitos ni esperas reales.
 - La asignación de secuencia usa clave primaria D1 y reintento tras conflicto; si se añadieran varios procesos con escrituras de idéntico contenido, todavía convendría incorporar una clave de idempotencia de snapshot explícita.
 - El stream de UI se integra bajo una flag frontend separada (`VITE_ENABLE_COACH_STREAMING`), apagada por defecto; el Worker tampoco activa `ENABLE_COACH_STREAMING` por este cambio.
 
 ## Verificación
 
-- `npx vitest run worker/src/coach.test.ts worker/src/coach.durable.test.ts src/lib/coachClient.test.ts src/pages/CoachPage.test.tsx src/components/CoachTranscript.test.tsx` — 85 pruebas aprobadas.
+- `npx vitest run worker/src/coach.test.ts worker/src/coach.durable.test.ts src/lib/coachClient.test.ts src/pages/CoachPage.test.tsx src/components/CoachTranscript.test.tsx` — 89 pruebas aprobadas.
 - `npm run typecheck` — aprobado.
 - `npm run typecheck:worker` — aprobado.
 - `npm run lint` — aprobado.

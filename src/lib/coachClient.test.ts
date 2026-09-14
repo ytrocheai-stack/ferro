@@ -140,6 +140,24 @@ describe('coach submission failures', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe('https://coach.example/v1/coach/runs/remote-stream/events')
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ 'Last-Event-ID': '0' })
   })
+
+  it.each(['eof', 'timeout', 'network-error'] as const)('reintenta tras %s con cursor, sin POST y se detiene en terminal', async (failure) => {
+    vi.stubEnv('VITE_ENABLE_COACH_STREAMING', 'true')
+    const local = await startCoachRun(async () => null, 'Hola')
+    await db.coachRuns.update(local.id, { remoteRunId: 'remote-retry', status: 'running' })
+    const firstSnapshot = 'id: 1\nevent: snapshot\ndata: {"type":"snapshot","snapshot":{"runId":"remote-retry","sequence":1,"text":"parcial","status":"running","createdAt":1}}\n\n'
+    const terminal = `id: ${failure === 'eof' ? 2 : 1}\nevent: snapshot\ndata: {"type":"snapshot","snapshot":{"runId":"remote-retry","sequence":${failure === 'eof' ? 2 : 1},"text":"final","status":"completed","createdAt":2}}\n\n`
+    const fetchMock = vi.fn()
+    if (failure === 'network-error') fetchMock.mockRejectedValueOnce(new TypeError('offline'))
+    else fetchMock.mockResolvedValueOnce(new Response(failure === 'timeout' ? ': timeout\n\n' : firstSnapshot, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }))
+    fetchMock.mockResolvedValueOnce(new Response(terminal, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await streamCoachRun(async () => 'token', local.id, undefined, undefined, { maxReconnects: 1, sleep: async () => undefined })
+    expect(result).toMatchObject({ status: 'completed', snapshotSequence: failure === 'eof' ? 2 : 1, partialExplanation: 'final' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls.every((call) => call[1]?.method === undefined)).toBe(true)
+    expect(fetchMock.mock.calls[1]?.[1]?.headers).toMatchObject({ 'Last-Event-ID': failure === 'eof' ? '1' : '0' })
+  })
   it('an explicit retry does not require the uncertain run to be a completed conversation turn', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Network error')))
     const initial = await startCoachRun(async () => 'test-token', 'Hola')

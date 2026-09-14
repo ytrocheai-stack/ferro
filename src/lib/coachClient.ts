@@ -178,6 +178,23 @@ export function isCoachStreamingEnabled(): boolean {
   return flag === '1' || flag?.toLowerCase() === 'true'
 }
 
+export const COACH_STREAM_MAX_RECONNECTS = 4
+const COACH_STREAM_BACKOFF_MS = [250, 500, 1_000, 2_000]
+type CoachStreamOptions = { sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>; maxReconnects?: number }
+
+function streamAbortError(): Error {
+  const error = new Error('coach-stream-aborted'); error.name = 'AbortError'; return error
+}
+
+function waitForStreamRetry(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(streamAbortError())
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => { signal?.removeEventListener('abort', abort); resolve() }, milliseconds)
+    const abort = () => { window.clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(streamAbortError()) }
+    signal?.addEventListener('abort', abort, { once: true })
+  })
+}
+
 export async function fetchCoach(url: string, init: RequestInit = {}, timeoutMs = COACH_CLIENT_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -439,36 +456,63 @@ function sseRecords(buffer: string): { records: string[]; rest: string } {
 }
 
 /** Cliente de reconexión opt-in: nunca crea un run ni sustituye el polling existente. */
-export async function streamCoachRun(getToken: () => Promise<string | null>, runId: string, signal?: AbortSignal, onSnapshot?: (run: CoachRunRecord) => void | Promise<void>): Promise<CoachRunRecord | undefined> {
+export async function streamCoachRun(getToken: () => Promise<string | null>, runId: string, signal?: AbortSignal, onSnapshot?: (run: CoachRunRecord) => void | Promise<void>, options: CoachStreamOptions = {}): Promise<CoachRunRecord | undefined> {
   const local = await db.coachRuns.get(runId)
   const url = workerUrl()
   const remoteRunId = local ? remoteId(local) : undefined
   if (!local || !remoteRunId || !url || !navigator.onLine || !isCoachStreamingEnabled()) return local
   const token = await getToken()
   if (!token) return local
-  const response = await fetch(`${url}/v1/coach/runs/${encodeURIComponent(remoteRunId)}/events`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream', 'Last-Event-ID': String(local.snapshotSequence ?? 0) }, signal,
-  })
-  if (!response.ok) return persistTransportError(runId, coachStatusError(response, await response.text()))
-  const reader = response.body?.getReader()
-  if (!reader) return local
-  const decoder = new TextDecoder()
-  let buffer = ''
+  const sleep = options.sleep ?? waitForStreamRetry
+  const maxReconnects = options.maxReconnects ?? COACH_STREAM_MAX_RECONNECTS
+  let reconnects = 0
   let current = local
   while (true) {
-    const part = await reader.read()
-    buffer += decoder.decode(part.value ?? new Uint8Array(), { stream: !part.done })
-    const parsed = sseRecords(buffer); buffer = parsed.rest
-    for (const record of parsed.records) {
-      const data = record.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('')
-      if (!data) continue
-      const event = coachRunSnapshotEventSchema.parse(JSON.parse(data))
-      const next = await applyCoachSnapshot(runId, event.snapshot)
-      if (next) { current = next; await onSnapshot?.(next) }
+    if (signal?.aborted) throw streamAbortError()
+    const latest = await db.coachRuns.get(runId)
+    if (latest) current = latest
+    if (!activeRun(current)) return current
+    const cursor = current.snapshotSequence ?? 0
+    let shouldReconnect = false
+    try {
+      const response = await fetch(`${url}/v1/coach/runs/${encodeURIComponent(remoteRunId)}/events`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream', 'Last-Event-ID': String(cursor) }, signal,
+      })
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403 || response.status === 409) return persistTransportError(runId, coachStatusError(response, await response.text()))
+        shouldReconnect = response.status === 408 || response.status >= 500
+        if (!shouldReconnect) return persistTransportError(runId, coachStatusError(response, await response.text()))
+      } else {
+        const reader = response.body?.getReader()
+        if (!reader) shouldReconnect = true
+        else {
+          const decoder = new TextDecoder()
+          let buffer = ''
+          while (true) {
+            const part = await reader.read()
+            buffer += decoder.decode(part.value ?? new Uint8Array(), { stream: !part.done })
+            const parsed = sseRecords(buffer); buffer = parsed.rest
+            for (const record of parsed.records) {
+              const data = record.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('')
+              if (!data) continue
+              const event = coachRunSnapshotEventSchema.parse(JSON.parse(data))
+              const next = await applyCoachSnapshot(runId, event.snapshot)
+              if (next) { current = next; await onSnapshot?.(next) }
+            }
+            if (part.done) break
+          }
+          shouldReconnect = activeRun(current)
+        }
+      }
+    } catch (cause) {
+      if (signal?.aborted || (cause instanceof Error && cause.name === 'AbortError')) throw cause
+      shouldReconnect = true
     }
-    if (part.done) break
+    if (!shouldReconnect || !activeRun(current) || reconnects >= maxReconnects) return current
+    const delay = COACH_STREAM_BACKOFF_MS[Math.min(reconnects, COACH_STREAM_BACKOFF_MS.length - 1)]
+    reconnects += 1
+    await sleep(delay, signal)
   }
-  return current
 }
 
 /** Reconcilia pendientes sin ID remoto usando siempre la misma clave idempotente. */
