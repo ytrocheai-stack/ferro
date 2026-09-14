@@ -47,3 +47,13 @@ autorizado. No cambia el modelo activo ni implementa una migración.
   pruebas, rollback y autorización explícita; hasta entonces conservar los modelos
   y flags actuales.
 - No se probaron acceso remoto, despliegue, Clerk real ni teclado Android real.
+
+## Round 1 — corrección del revisor
+
+- Fix: se actualizó el enlace T0 de `docs/DESPLIEGUE.md` para apuntar al archivo
+  real `MIGRACION-NEXTREP-T0-2026-09-09.md`.
+- Comprobación de diff: `git diff --check` — salida vacía; código de salida 0.
+- Comprobación enfocada: `rg -n 'MIGRACION-NEXTREP-T0-2026' docs/DESPLIEGUE.md worker/README.md`
+  — `docs/DESPLIEGUE.md:15` y `worker/README.md:17` apuntan a
+  `MIGRACION-NEXTREP-T0-2026-09-09.md`.
+- Inventario documental/modelos: `rg -n -i '(gpt-5\\.6-luna|moonshotai/kimi-k3|deepseek-ai/deepseek-v4-flash-0731|NVIDIA|ENABLE_FLASH|ENABLE_PRO|ENABLE_RERANKING|ENABLE_PROVIDER_PROBE|CLERK)' docs/DESPLIEGUE.md worker/README.md docs/MIGRACION-NEXTREP-T0-2026-09-09.md worker/wrangler.toml worker/wrangler.production.toml` — referencias encontradas únicamente en los documentos/configuraciones esperados; código de salida 0.

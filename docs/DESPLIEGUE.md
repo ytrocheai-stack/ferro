@@ -12,7 +12,7 @@ afirma usar Luna y no se cambia ningún modelo activo, secreto, flag ni credenci
 La ejecución de este paso puede usar Luna como agente dentro de Codex; eso no es
 evidencia de que la PWA tenga acceso a Luna. Las comprobaciones de T0 son locales y
 documentales: no implican acceso remoto, despliegue, Clerk real ni teclado Android
-real. Ver el informe [T0](MIGRACION-NEXTREP-T0-2026-09.md).
+real. Ver el informe [T0](MIGRACION-NEXTREP-T0-2026-09-09.md).
 
 > Actualización 2026-09-10: por petición del usuario, se prepara el coach privado sin
 > ejecutar benchmarks ni evaluar la calidad del modelo. Producción usa DeepSeek Flash,
