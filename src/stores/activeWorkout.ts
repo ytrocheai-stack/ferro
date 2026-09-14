@@ -61,6 +61,8 @@ export interface ActiveSession {
   startedAt: number
   name: string
   notes: string
+  /** Identidad estable para reintentar un guardado tras un fallo de persistencia local. */
+  finalizationId?: string
   routineId?: string
   routineRevision?: number
   postWorkoutFeedback?: PostWorkoutFeedback
@@ -196,7 +198,7 @@ export const useActive = create<ActiveState>()(
 
       startEmpty: () => {
         set({
-          session: { startedAt: Date.now(), name: defaultWorkoutName(), notes: '', exercises: [] },
+          session: { startedAt: Date.now(), name: defaultWorkoutName(), notes: '', finalizationId: uid(), exercises: [] },
           rest: null,
         })
       },
@@ -250,6 +252,7 @@ export const useActive = create<ActiveState>()(
             startedAt: Date.now(),
             name: routine.name,
             notes: '',
+            finalizationId: uid(),
             routineId: routine.id,
             routineRevision: routine.revision,
             exercises,
@@ -293,6 +296,7 @@ export const useActive = create<ActiveState>()(
             startedAt: Date.now(),
             name: workout.name,
             notes: workout.notes ?? '',
+            finalizationId: workout.id,
             editingWorkoutId: workout.id,
             originalStartedAt: workout.startedAt,
             originalEndedAt: workout.endedAt,
@@ -335,7 +339,7 @@ export const useActive = create<ActiveState>()(
           prescription: we.prescription,
         }))
         set({
-          session: { startedAt: Date.now(), name: workout.name, notes: '', exercises },
+          session: { startedAt: Date.now(), name: workout.name, notes: '', finalizationId: uid(), exercises },
           rest: null,
         })
       },
@@ -594,6 +598,17 @@ export const useActive = create<ActiveState>()(
 
 let finishing = false
 
+export class WorkoutFinishRecoveryError extends Error {
+  readonly workoutId: string
+  readonly persisted = true
+
+  constructor(workoutId: string, cause: unknown) {
+    super('El entreno se guardó, pero no se pudo cerrar la sesión local.', { cause })
+    this.name = 'WorkoutFinishRecoveryError'
+    this.workoutId = workoutId
+  }
+}
+
 type Getter = () => ActiveState
 type Setter = (partial: Partial<ActiveState>) => void
 
@@ -652,7 +667,7 @@ async function doFinish(get: Getter, set: Setter): Promise<string | null> {
   const startedAt = isEdit ? (s.originalStartedAt ?? s.startedAt) : s.startedAt
   const endedAt = isEdit ? (s.originalEndedAt ?? Date.now()) : Date.now()
   const workout: Workout = {
-    id: s.editingWorkoutId ?? uid(),
+    id: s.editingWorkoutId ?? s.finalizationId ?? `workout-${s.startedAt}`,
     name: s.name.trim() || defaultWorkoutName(),
     startedAt,
     endedAt,
@@ -665,16 +680,7 @@ async function doFinish(get: Getter, set: Setter): Promise<string | null> {
     routineRevision: s.routineRevision,
     postWorkoutFeedback: s.postWorkoutFeedback,
   }
-  await db.transaction('rw', [db.workouts, db.routines, db.adaptationJobs, db.adaptationProposals], async () => {
-    // Leer el historial dentro de la misma transacción que escribe los campos
-    // derivados evita que dos guardados calculen sobre snapshots distintos.
-    const all = await db.workouts.toArray()
-    const normalized = recalculateWorkoutHistory([...all.filter((item) => item.id !== workout.id), workout])
-    await db.workouts.bulkPut(normalized)
-    if (isEdit) {
-      await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
-    }
-  })
+  await persistWorkoutHistory(workout, isEdit)
   if (!isEdit) {
     try {
       await enqueueAdaptationJob(workout.id)
@@ -687,6 +693,48 @@ async function doFinish(get: Getter, set: Setter): Promise<string | null> {
       useToasts.getState().show('Entrenamiento guardado. No se pudo encolar la revisión del coach; puedes continuar desde Coach.')
     }
   }
-  set({ session: null, rest: null })
+  try {
+    set({ session: null, rest: null })
+  } catch (cause) {
+    // IndexedDB ya confirmó el entreno. Restaurar la sesión en memoria y, si
+    // es posible, en localStorage permite reintentar sin crear otro ID.
+    const recoverySession = { ...s, finalizationId: workout.id }
+    try {
+      set({ session: recoverySession, rest: null })
+    } catch {
+      // El setter aplica el estado antes de persistir; aunque localStorage siga
+      // fallando, la sesión queda conservada en memoria para el siguiente intento.
+    }
+    throw new WorkoutFinishRecoveryError(workout.id, cause)
+  }
   return workout.id
+}
+
+/** Persiste un entreno y recalcula todo el historial en una transacción única. */
+export async function persistWorkoutHistory(workout: Workout, invalidateAdaptation = false): Promise<void> {
+  await db.transaction('rw', [db.workouts, db.routines, db.adaptationJobs, db.adaptationProposals], async () => {
+    const all = await db.workouts.toArray()
+    const normalized = recalculateWorkoutHistory([...all.filter((item) => item.id !== workout.id), workout])
+    await db.workouts.bulkPut(normalized)
+    if (invalidateAdaptation) await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
+  })
+}
+
+/** Borra un entreno y reconstruye los campos derivados del historial restante. */
+export async function deleteWorkoutFromHistory(workoutId: string): Promise<void> {
+  await db.transaction('rw', [db.workouts, db.routines, db.adaptationJobs, db.adaptationProposals], async () => {
+    const history = await db.workouts.toArray()
+    await db.workouts.delete(workoutId)
+    await db.workouts.bulkPut(recalculateWorkoutHistory(history.filter((item) => item.id !== workoutId)))
+    await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
+  })
+}
+
+/** Restaura un snapshot de entreno sin duplicarlo y recalcula el historial. */
+export async function restoreWorkoutToHistory(snapshot: Workout): Promise<void> {
+  await db.transaction('rw', [db.workouts, db.routines, db.adaptationJobs, db.adaptationProposals], async () => {
+    const history = await db.workouts.toArray()
+    await db.workouts.bulkPut(recalculateWorkoutHistory([...history.filter((item) => item.id !== snapshot.id), snapshot]))
+    await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
+  })
 }

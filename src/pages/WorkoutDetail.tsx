@@ -6,7 +6,7 @@ import { db } from '../db/db'
 import type { LoggedSet, PRKind, Workout } from '../db/types'
 import type { AdaptationProposal } from '../db/types'
 import { useCatalog } from '../data/exercises'
-import { useActive } from '../stores/activeWorkout'
+import { deleteWorkoutFromHistory, restoreWorkoutToHistory, useActive } from '../stores/activeWorkout'
 import { useSettings } from '../stores/settings'
 import { toastUndo, useToasts } from '../stores/toasts'
 import {
@@ -18,10 +18,7 @@ import {
   kgToDisplay,
 } from '../lib/format'
 import { applyAdaptationDecisions, createEditedProposal, revertAdaptationAnalysis, type ProposalDecision } from '../lib/adaptation'
-import { invalidateStaleAdaptationJobsInTransaction } from '../lib/adaptationContext'
 import { enqueueAdaptationEvent, retryFailedAdaptationJob } from '../lib/adaptationClient'
-import { getCoachAccountId } from '../lib/coachAccount'
-import { recalculateWorkoutHistory } from '../lib/stats'
 import { ExerciseThumb } from '../components/ExerciseThumb'
 import { ActionSheet, Confirm } from '../components/Sheet'
 import { PageHeader } from '../components/PageHeader'
@@ -114,22 +111,12 @@ export default function WorkoutDetail() {
     const snapshot = workout
     void (async () => {
       try {
-        await db.transaction('rw', [db.workouts, db.routines, db.adaptationJobs, db.adaptationProposals], async () => {
-          const history = await db.workouts.toArray()
-          const remaining = history.filter((item) => item.id !== snapshot.id)
-          await db.workouts.delete(snapshot.id)
-          await db.workouts.bulkPut(recalculateWorkoutHistory(remaining))
-          await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
-        })
+        await deleteWorkoutFromHistory(snapshot.id)
         navigate('/historial', { replace: true })
         toastUndo('Entreno eliminado', () => {
           void (async () => {
             try {
-              await db.transaction('rw', [db.workouts, db.routines, db.adaptationJobs, db.adaptationProposals], async () => {
-                const history = await db.workouts.toArray()
-                await db.workouts.bulkPut(recalculateWorkoutHistory([...history, snapshot]))
-                await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
-              })
+              await restoreWorkoutToHistory(snapshot)
             } catch {
               useToasts.getState().show('No se pudo deshacer: el historial no ha cambiado.')
             }

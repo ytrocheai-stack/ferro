@@ -8,6 +8,7 @@ import {
   useActive,
   type ActiveExercise,
   type ActiveSession,
+  WorkoutFinishRecoveryError,
 } from '../stores/activeWorkout'
 import { useSettings } from '../stores/settings'
 import { useCatalog } from '../data/exercises'
@@ -74,8 +75,12 @@ export default function ActiveWorkoutPage() {
     try {
       const wid = await useActive.getState().finish()
       if (wid) navigate(`/historial/${wid}${editing ? '' : '?nuevo=1'}`, { replace: true })
-    } catch {
-      useToasts.getState().show('No se pudo guardar: conserva la sesión y vuelve a intentarlo.')
+    } catch (error) {
+      useToasts.getState().show(
+        error instanceof WorkoutFinishRecoveryError
+          ? 'Entreno guardado; la sesión sigue abierta para confirmar. Puedes reintentar sin duplicarlo.'
+          : 'No se pudo guardar: conserva la sesión y vuelve a intentarlo.',
+      )
     } finally {
       setSaving(false)
     }
