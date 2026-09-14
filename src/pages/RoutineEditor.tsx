@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
@@ -22,7 +22,7 @@ import { invalidateStaleAdaptationJobsInTransaction } from '../lib/adaptationCon
 import { getCoachAccountId } from '../lib/coachAccount'
 import { PageHeader } from '../components/PageHeader'
 import { useToasts } from '../stores/toasts'
-import { withPlannedSetCount } from '../lib/routineEditing'
+import { putRoutineWithExpectedRevision, RoutineRevisionConflictError, RoutineUnavailableError, withPlannedSetCount } from '../lib/routineEditing'
 
 export default function RoutineEditor() {
   const { id } = useParams()
@@ -49,6 +49,7 @@ export default function RoutineEditor() {
   const [saveError, setSaveError] = useState<string>()
   const [saveSuccess, setSaveSuccess] = useState<string>()
   const [exerciseErrors, setExerciseErrors] = useState<Record<number, string>>({})
+  const openingRevision = useRef<number | undefined>(undefined)
 
   useEffect(() => {
     if (isNew) return
@@ -66,6 +67,7 @@ export default function RoutineEditor() {
       setExercises(normalizedExercises)
       setFolderId(r.folderId)
       setConfirmCoach(r.coachReviewed ?? false)
+      openingRevision.current = r.revision
       setOriginal(JSON.stringify({ name: r.name, exercises: normalizedExercises, folderId: r.folderId }))
       setLoaded(true)
     })
@@ -80,11 +82,11 @@ export default function RoutineEditor() {
     setSaveError(undefined)
     setSaveSuccess(undefined)
     try {
-      const existing = isNew ? undefined : await db.routines.get(id!)
-      const routineId = existing?.id ?? uid()
+      const routineId = isNew ? uid() : id!
       const now = Date.now()
       await db.transaction('rw', [db.routines, db.workouts, db.adaptationJobs, db.adaptationProposals], async () => {
-        await db.routines.put({
+        const existing = isNew ? undefined : await db.routines.get(routineId)
+        const nextRoutine = {
           ...(existing ?? {}),
           id: routineId,
           name: name.trim(),
@@ -96,18 +98,21 @@ export default function RoutineEditor() {
             trainingRole: exercise.trainingRole ?? exercise.role ?? existing?.trainingRole ?? 'hypertrophy',
           })),
           folderId,
-          revision: existing ? (dirty ? (existing.revision ?? 1) + 1 : existing.revision ?? 1) : 1,
+          revision: existing?.revision ?? 1,
           trainingRole: exercises[0]?.trainingRole ?? exercises[0]?.role ?? existing?.trainingRole ?? 'hypertrophy',
           loadIncrementKg: exercises[0]?.loadIncrementKg ?? existing?.loadIncrementKg ?? 2.5,
           coachReviewed: confirmCoach,
-        })
+        }
+        await putRoutineWithExpectedRevision(db.routines, nextRoutine, isNew ? undefined : openingRevision.current)
         await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
       })
       setSaveSuccess('Rutina guardada correctamente.')
       useToasts.getState().show('Rutina guardada')
       navigate('/', { replace: true })
     } catch (cause) {
-      setSaveError(cause instanceof Error ? cause.message : 'No se pudo guardar la rutina. Revisa los datos e inténtalo de nuevo.')
+      if (cause instanceof RoutineRevisionConflictError) setSaveError('La rutina cambió mientras la editabas. Tu borrador sigue aquí: recarga para ver la versión nueva o descarta tus cambios.')
+      else if (cause instanceof RoutineUnavailableError) setSaveError('La rutina fue retirada o eliminada mientras la editabas. Tu borrador sigue aquí; puedes copiarlo o descartarlo.')
+      else setSaveError(cause instanceof Error ? `No se pudo guardar: ${cause.message}. Tu borrador sigue aquí; inténtalo de nuevo.` : 'No se pudo guardar la rutina. Tu borrador sigue aquí; inténtalo de nuevo.')
     } finally { setSaving(false) }
   }
 
@@ -153,7 +158,7 @@ export default function RoutineEditor() {
         )}
       />
 
-      {saveError && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm text-danger">{saveError}</p>}
+      {saveError && <div role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm text-danger"><p>{saveError}</p>{!isNew && <div className="mt-2 flex gap-2"><button className="btn btn-surface" onClick={() => navigate(0)}>Recargar</button><button className="btn btn-surface" onClick={() => navigate('/', { replace: true })}>Descartar borrador</button></div>}</div>}
       {saveSuccess && <p role="status" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm text-primary">{saveSuccess}</p>}
 
       <input

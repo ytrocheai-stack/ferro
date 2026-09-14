@@ -1,4 +1,32 @@
 import type { RoutineExercise } from '../db/types'
+import type { Routine } from '../db/types'
+
+export class RoutineRevisionConflictError extends Error {
+  constructor(public readonly current?: Routine) {
+    super('La rutina cambió en otra pestaña o por el Coach. Conservamos tu borrador local.')
+    this.name = 'RoutineRevisionConflictError'
+  }
+}
+
+export class RoutineUnavailableError extends Error {
+  constructor(message = 'La rutina ya no está disponible porque fue retirada o eliminada.') {
+    super(message)
+    this.name = 'RoutineUnavailableError'
+  }
+}
+
+export async function putRoutineWithExpectedRevision(
+  routines: { get: (id: string) => Promise<Routine | undefined>; put: (routine: Routine) => Promise<unknown> },
+  routine: Routine,
+  expectedRevision: number | undefined,
+): Promise<Routine> {
+  const current = await routines.get(routine.id)
+  if (expectedRevision !== undefined && (!current || current.retiredAt !== undefined)) throw new RoutineUnavailableError()
+  if (expectedRevision !== undefined && current && (current.revision ?? 1) !== expectedRevision) throw new RoutineRevisionConflictError(current)
+  const next = { ...routine, revision: expectedRevision === undefined ? 1 : expectedRevision + 1 }
+  await routines.put(next)
+  return next
+}
 
 export const WARMUP_REDUCTION_MESSAGE = 'No se pueden eliminar calentamientos al reducir series. Reduce primero los calentamientos de forma explícita.'
 
