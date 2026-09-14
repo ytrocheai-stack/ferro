@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CoachPage from './CoachPage'
 import { useBottomDock } from '../components/BottomDock'
 import { startCoachRun, streamCoachRun } from '../lib/coachClient'
@@ -32,6 +32,10 @@ describe('CoachPage T6', () => {
     fixture.messages.length = 0; fixture.runs.length = 0; fixture.draft = ''; fixture.streamingEnabled = false
     const target = document.createElement('div'); document.body.append(target)
     vi.mocked(useBottomDock).mockReturnValue({ coachPortalTarget: target } as ReturnType<typeof useBottomDock>)
+  })
+
+  afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
   })
 
   it('muestra conversación identificada y permite cambiar el borrador por conversación', async () => {
@@ -91,5 +95,17 @@ describe('CoachPage T6', () => {
     render(<MemoryRouter><CoachPage /></MemoryRouter>)
     await waitFor(() => expect(streamCoachRun).toHaveBeenCalledWith(expect.any(Function), 'run-stream', expect.any(AbortSignal), expect.any(Function)))
     expect(startCoachRun).not.toHaveBeenCalled()
+  })
+
+  it('pausa el polling con la página oculta y limita la consulta de runs a la conversación', async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    const interval = vi.spyOn(window, 'setInterval')
+    render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    expect(interval).not.toHaveBeenCalled()
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => expect(interval).toHaveBeenCalledWith(expect.any(Function), 2_000))
+    interval.mockRestore()
   })
 })

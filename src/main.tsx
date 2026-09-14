@@ -51,7 +51,7 @@ const router = createBrowserRouter(
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ClerkProvider afterSignOutUrl="/">
+    <ClerkProvider afterSignOutUrl={import.meta.env.BASE_URL}>
       <RouterProvider router={router} />
     </ClerkProvider>
   </StrictMode>,

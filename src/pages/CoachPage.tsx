@@ -30,7 +30,7 @@ function statusFor(run: CoachRunRecord | undefined, busy: boolean): string {
   if (busy) return 'Enviando'
   if (!run) return 'Guardado local'
   if (pendingCancellation(run)) return 'Cancelación pendiente'
-  if (run.status === 'queued') return typeof navigator !== 'undefined' && !navigator.onLine ? 'Pendiente de conexión' : 'Guardado local'
+  if (run.status === 'queued') return typeof navigator !== 'undefined' && !navigator.onLine ? 'Pendiente de conexión' : 'Procesando respuesta'
   if (run.status === 'running') return 'Respondiendo'
   if (run.status === 'completed' && !run.decision) return 'Incompleto'
   if (run.status === 'completed') return 'Completado'
@@ -150,7 +150,7 @@ export default function CoachPage() {
       streamControllers.current.delete(run.id)
     }
     const stillActive = latest && (latest.status === 'queued' || latest.status === 'running')
-    if (!controller.signal.aborted && stillActive && navigator.onLine && isCoachStreamingEnabled() && !streamTimers.current.has(run.id)) {
+    if (!controller.signal.aborted && document.visibilityState === 'visible' && stillActive && navigator.onLine && isCoachStreamingEnabled() && !streamTimers.current.has(run.id)) {
       const attempt = streamReconnectAttempts.current.get(run.id) ?? 0
       streamReconnectAttempts.current.set(run.id, attempt + 1)
       const delay = Math.min(250 * (2 ** Math.min(attempt, 4)), 4_000)
@@ -183,13 +183,20 @@ export default function CoachPage() {
   useEffect(() => {
     if (!ownerId || !selectedId) return
     if (isCoachStreamingEnabled()) return
-    const timer = window.setInterval(() => {
-      if (selectedIdRef.current !== selectedId) return
-      void Promise.all([loadMessages(selectedId, 'refresh'), db.coachRuns.where('ownerId').equals(ownerId).toArray(), loadConversations()]).then(([, nextRuns]) => {
+    let timer: number | undefined
+    let disposed = false
+    const poll = () => {
+      if (disposed || document.visibilityState !== 'visible' || selectedIdRef.current !== selectedId) return
+      void Promise.all([loadMessages(selectedId, 'refresh'), db.coachRuns.where('conversationId').equals(selectedId).toArray()]).then(([, nextRuns]) => {
         if (selectedIdRef.current === selectedId && getCoachAccountId() === ownerId) setRuns(nextRuns.filter((run) => run.ownerId === ownerId))
       })
-    }, 2_000)
-    return () => window.clearInterval(timer)
+    }
+    const stop = () => { if (timer !== undefined) { window.clearInterval(timer); timer = undefined } }
+    const start = () => { if (document.visibilityState === 'visible' && timer === undefined) timer = window.setInterval(poll, 2_000) }
+    const onVisibilityChange = () => { if (document.visibilityState === 'visible') { poll(); start() } else stop() }
+    start()
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => { disposed = true; stop(); document.removeEventListener('visibilitychange', onVisibilityChange) }
   }, [loadConversations, loadMessages, ownerId, selectedId])
 
   useEffect(() => {
@@ -198,9 +205,16 @@ export default function CoachPage() {
       if (document.visibilityState !== 'visible') return
       runsRef.current.filter((run) => run.ownerId === ownerId && (run.status === 'queued' || run.status === 'running')).forEach((run) => { void streamRun(run) })
     }
-    document.addEventListener('visibilitychange', reconnect)
+    const pauseOrReconnect = () => {
+      if (document.visibilityState === 'visible') { reconnect(); return }
+      for (const controller of streamControllers.current.values()) controller.abort()
+      streamControllers.current.clear()
+      for (const timer of streamTimers.current.values()) window.clearTimeout(timer)
+      streamTimers.current.clear()
+    }
+    document.addEventListener('visibilitychange', pauseOrReconnect)
     return () => {
-      document.removeEventListener('visibilitychange', reconnect)
+      document.removeEventListener('visibilitychange', pauseOrReconnect)
       for (const controller of streamControllers.current.values()) controller.abort()
       streamControllers.current.clear()
       for (const timer of streamTimers.current.values()) window.clearTimeout(timer)
@@ -289,17 +303,17 @@ export default function CoachPage() {
 
   const status = statusFor(activeRun ?? latestRun, busy)
   const renderHistory = (className?: string) => <CoachConversationHistory className={className} conversations={conversations} selectedId={selectedId} onSelect={(id) => void selectConversation(id)} onNew={() => void newConversation()} onRename={(conversation) => { setMenuConversation(conversation); setTitleDraft(conversation.title) }} onDelete={setConfirmDelete} hasMore={hasMoreConversations} loadingMore={loadingMoreConversations} onLoadMore={() => { if (loadingMoreConversations) return; setLoadingMoreConversations(true); void loadConversations(true).finally(() => setLoadingMoreConversations(false)) }} />
-  return <div className="page-content coach-page pb-4 pt-3">
-    <PageHeader title="Coach" action={<><button className="btn btn-primary min-h-11 px-3 text-sm coach-new-mobile" type="button" onClick={() => void newConversation()}>Nuevo chat</button><button className="page-header__profile pressable coach-history-mobile" type="button" aria-label="Abrir historial" onClick={() => setHistoryOpen(true)}>☰</button></>} />
+  return <section className="page-content coach-page pb-4 pt-3" aria-labelledby="coach-page-title">
+    <div id="coach-page-title"><PageHeader title="Coach" action={<><button className="btn btn-primary min-h-11 px-3 text-sm coach-new-mobile" type="button" onClick={() => void newConversation()}>Nuevo chat</button><button className="page-header__profile pressable coach-history-mobile" type="button" aria-label="Abrir historial" onClick={() => setHistoryOpen(true)}>☰</button></>} /></div>
     <div className="coach-layout">
       {renderHistory()}
-      <main className="coach-conversation" aria-labelledby="coach-conversation-title">
-        <div className="coach-conversation__header"><div className="min-w-0"><h2 id="coach-conversation-title" className="truncate text-lg font-bold">{selected?.title ?? 'Nuevo chat'}</h2><p className="text-xs text-muted" role="status" aria-live="polite">{status}</p></div><button className="btn btn-primary coach-new-desktop min-h-10 px-3 text-sm" type="button" onClick={() => void newConversation()}>Nuevo chat</button></div>
+      <section className="coach-conversation" aria-labelledby="coach-conversation-title" role="region">
+        <div className="coach-conversation__header"><div className="min-w-0"><h2 id="coach-conversation-title" className="truncate text-lg font-bold">{selected?.title ?? 'Nuevo chat'}</h2><p className="text-xs text-muted" role="status" aria-live="polite" aria-atomic="true">{status}</p></div><button className="btn btn-primary coach-new-desktop min-h-10 px-3 text-sm" type="button" onClick={() => void newConversation()}>Nuevo chat</button></div>
         {actionError && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{actionError}</p>}
-        {latestRun?.error && <p className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{pendingCancellation(latestRun) ? 'Cancelación pendiente: aún no se ha confirmado el estado remoto.' : errorLabel(latestRun.error)}{isRetryableCoachError(latestRun.error) && <button className="ml-2 underline" type="button" onClick={() => void refresh(latestRun)}>Reintentar</button>}</p>}
+        {latestRun?.error && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{pendingCancellation(latestRun) ? 'Cancelación pendiente: aún no se ha confirmado el estado remoto.' : errorLabel(latestRun.error)}{isRetryableCoachError(latestRun.error) && <button className="ml-2 underline" type="button" onClick={() => void refresh(latestRun)}>Reintentar</button>}</p>}
         {latestRun && isRenderableCoachProposal(latestRun) && <section className="card mt-3 p-3" aria-label="Propuesta del coach"><p className="text-sm font-semibold">Propuesta validada y lista para revisar</p><p className="mt-1 text-sm text-muted">{latestRun.decision?.explanation}</p><button className="btn btn-primary mt-3 w-full" type="button" disabled={applying || Boolean(latestRun.appliedAt)} onClick={() => setConfirmApply(latestRun)}>{latestRun.appliedAt ? 'Aplicado' : applying ? 'Aplicando…' : 'Confirmar y aplicar'}</button></section>}
         <CoachTranscript conversationId={selectedId} messages={messages} runs={selectedRuns} hasOlder={hasOlder} loadingOlder={loadingOlder} onLoadOlder={() => { if (!selectedId || loadingOlder) return; setLoadingOlder(true); void loadMessages(selectedId, 'older').finally(() => setLoadingOlder(false)) }} />
-      </main>
+      </section>
     </div>
     {coachPortalTarget && createPortal(<CoachComposer message={draft} busy={busy} sendDisabled={Boolean(activeRun)} followUp={Boolean(latestRun?.decision?.kind === 'ask')} onChange={(value) => { revision.current += 1; draftRef.current = value; setDraft(value); if (ownerId && selectedId) setCoachDraft(ownerId, selectedId, value) }} onSend={() => void send()} />, coachPortalTarget)}
     <Sheet open={historyOpen} onClose={() => setHistoryOpen(false)} title="Historial">{renderHistory('coach-history coach-history--sheet')}</Sheet>
@@ -307,5 +321,5 @@ export default function CoachPage() {
     <Sheet open={Boolean(editingTitle)} onClose={() => setEditingTitle(undefined)} title="Renombrar conversación"><form className="flex flex-col gap-3 pb-2" onSubmit={(event) => { event.preventDefault(); void submitTitle() }}><label className="text-sm font-semibold" htmlFor="coach-title">Nombre</label><input id="coach-title" className="input" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} autoFocus /><button className="btn btn-primary" type="submit">Guardar nombre</button></form></Sheet>
     <Confirm open={Boolean(confirmDelete)} onClose={() => setConfirmDelete(undefined)} title="Eliminar conversación" message={`Se eliminará “${confirmDelete?.title ?? ''}” de este dispositivo. Las rutinas aplicadas no se revierten.`} confirmLabel="Eliminar" danger onConfirm={() => void doDelete()} />
     <Confirm open={Boolean(confirmApply)} onClose={() => setConfirmApply(undefined)} title="Confirmar propuesta" message="Se aplicarán los cambios validados a tus rutinas. Esta acción no revierte automáticamente las modificaciones posteriores." confirmLabel="Aplicar cambios" onConfirm={() => { const run = confirmApply; setConfirmApply(undefined); if (run) void applyProposal(run) }} />
-  </div>
+  </section>
 }
