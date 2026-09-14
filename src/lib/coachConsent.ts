@@ -49,6 +49,10 @@ export function getCoachConversationId(userId: string): string {
   return id
 }
 
+export function setCoachConversationId(userId: string, conversationId: string): void {
+  if (typeof localStorage?.setItem === 'function') localStorage.setItem(`${CONVERSATION_PREFIX}${userId}:${getCoachDeviceId()}`, conversationId)
+}
+
 /** Returns the durable selected conversation while preserving the old localStorage identity. */
 export async function getSelectedCoachConversation(userId: string) {
   return ensureCoachConversation(userId, getCoachConversationId(userId))

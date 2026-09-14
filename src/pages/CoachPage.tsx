@@ -1,221 +1,45 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { useAuth } from '@clerk/react'
+import Dexie from 'dexie'
 import { db } from '../db/db'
-import type { CoachRunRecord } from '../db/types'
+import type { CoachConversation, CoachMessage, CoachRunRecord } from '../db/types'
 import { getCoachAccountId } from '../lib/coachAccount'
-import { getCoachConsent } from '../lib/coachConsent'
-import { applyCoachChangeSet, cancelCoachRun, isRecoverableCoachError, isRetryableCoachError, refreshCoachRun, retryCoachRun, startCoachRun } from '../lib/coachClient'
-import type { FutureSession } from '../../packages/adaptation-core/src/contract'
-import { useCatalog } from '../data/exercises'
-import { useLiveQuery } from 'dexie-react-hooks'
+import { getCoachConsent, getCoachConversationId, setCoachConversationId } from '../lib/coachConsent'
+import { applyCoachChangeSet, isRetryableCoachError, refreshCoachRun, startCoachRun } from '../lib/coachClient'
+import { ensureCoachConversation, createCoachConversation, deleteCoachConversation, getCoachDraft, renameCoachConversation, setCoachDraft, flushCoachDraft } from '../lib/coachConversations'
 import { PageHeader } from '../components/PageHeader'
-import { useBottomDock } from '../components/BottomDock'
 import { CoachComposer } from '../components/CoachComposer'
+import { CoachConversationHistory } from '../components/CoachConversationHistory'
+import { CoachTranscript } from '../components/CoachTranscript'
+import { Confirm, Sheet } from '../components/Sheet'
+import { useBottomDock } from '../components/BottomDock'
 
-const runLabels: Record<CoachRunRecord['status'], string> = { queued: 'En espera', running: 'Analizando', completed: 'Listo', failed: 'No se pudo completar', cancelled: 'Cancelado' }
-function runLabel(run: CoachRunRecord): string { return run.status === 'queued' && run.id.startsWith('coach-local-') ? 'En espera local' : runLabels[run.status] }
-function cancellationPending(run: CoachRunRecord): boolean { return run.cancelRequestedAt !== undefined || run.error === 'cancellation-pending' || (run.status as string) === 'cancellation-pending' }
-function runError(error: string): string {
-  if (error === 'unknown-outcome' || error === 'uncertain-outcome') return 'Se perdió la respuesta del proveedor. No se ha aplicado ningún cambio.'
-  if (error.includes('deadline') || error.includes('timeout')) return 'El proveedor tardó demasiado en responder. No se ha aplicado ningún cambio; puedes solicitar un nuevo intento.'
-  if (error.includes('budget') || error.includes('Presupuesto')) return 'Se alcanzó el límite de consultas del coach. No se ha aplicado ningún cambio.'
-  if (error === 'provider-rate-limited') return 'El proveedor limitó temporalmente la consulta. No se ha aplicado ningún cambio; puedes solicitar un nuevo intento.'
-  if (error === 'provider-server-error' || error === 'server-error') return 'El proveedor tuvo un error temporal. No se ha aplicado ningún cambio; puedes solicitar un nuevo intento.'
-  if (error === 'coach-auth-required') return 'Tu sesión ya no está disponible. Inicia sesión de nuevo para consultar el estado del coach.'
-  if (error === 'coach-forbidden') return 'El consentimiento o dispositivo del coach ya no está vigente. Revísalo en Perfil.'
-  if (error === 'coach-conflict') return 'El contexto remoto ya no coincide; consulta de nuevo antes de crear otra solicitud.'
-  if (error === 'workflow-create-failed' || error === 'workflow-not-configured') return 'El servicio del coach no pudo iniciar la ejecución. No se ha aplicado ningún cambio.'
-  if (error.startsWith('[') || error.includes('invalid')) return 'El coach devolvió una respuesta que no pudimos validar. No se ha aplicado ningún cambio.'
-  return error
-}
-
-function planDiffs(run: CoachRunRecord): string[] {
-  if (run.decision?.kind !== 'propose' || !run.decision.changeSet.futurePlan) return []
-  const before = new Map(((run.request.context.snapshot?.plan ?? []) as FutureSession[]).map((session) => [session.sessionId, session]))
-  const after = new Map(run.decision.changeSet.futurePlan.sessions.map((session) => [session.sessionId, session]))
-  const lines: string[] = []
-  for (const session of after.values()) {
-    const previous = before.get(session.sessionId)
-    if (!previous) { lines.push(`Añadir sesión: ${session.name}`); continue }
-    if (previous.name !== session.name || previous.scheduledAt !== session.scheduledAt) lines.push(`Actualizar programación o nombre: ${previous.name} → ${session.name}`)
-    const previousExercises = new Map(previous.exercises.map((exercise) => [exercise.occurrenceId, exercise]))
-    const nextExercises = new Map(session.exercises.map((exercise) => [exercise.occurrenceId, exercise]))
-    for (const exercise of session.exercises) {
-      const old = previousExercises.get(exercise.occurrenceId)
-      if (!old) lines.push(`${session.name}: añadir ejercicio ${exercise.exerciseId}`)
-      else if (JSON.stringify(old) !== JSON.stringify(exercise)) lines.push(`${session.name}: actualizar ${old.exerciseId} (${exercise.plannedSets} series)`)
-    }
-    for (const exercise of previous.exercises) if (!nextExercises.has(exercise.occurrenceId)) lines.push(`${session.name}: retirar ejercicio ${exercise.exerciseId}`)
-  }
-  for (const session of before.values()) if (!after.has(session.sessionId)) lines.push(`Retirar sesión: ${session.name}`)
-  return lines
-}
+const pageSize = 50
+const statusLabel: Record<CoachRunRecord['status'], string> = { queued: 'Guardado local', running: 'Respondiendo', completed: 'Completado', failed: 'Error', cancelled: 'Cancelado' }
+const pendingCancellation = (run: CoachRunRecord) => Boolean(run.cancelRequestedAt || run.error === 'cancellation-pending')
+const errorLabel = (error?: string) => error === 'provider-rate-limited' ? 'El proveedor limitó temporalmente la consulta.' : error === 'coach-call-timeout' ? 'La respuesta tardó demasiado. Puedes solicitar otro intento.' : error ?? 'No se pudo completar la respuesta.'
 
 export default function CoachPage() {
-  const { getToken, isSignedIn } = useAuth()
-  const ownerId = getCoachAccountId()
-  const consent = Boolean(ownerId && getCoachConsent(ownerId))
-  const [runs, setRuns] = useState<CoachRunRecord[]>([])
-  const [message, setMessage] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [applying, setApplying] = useState(false)
-  const [cancelling, setCancelling] = useState(false)
-  const [actionError, setActionError] = useState<string>()
-  const [selection, setSelected] = useState<CoachRunRecord | undefined>()
-  const [recentOpen, setRecentOpen] = useState(false)
-  const { coachPortalTarget } = useBottomDock()
-  const { byId } = useCatalog()
-  const routines = useLiveQuery(() => db.routines.toArray(), [], [])
-  const selected = selection?.ownerId === ownerId ? selection : undefined
-  const selectedCancellationPending = Boolean(selected && cancellationPending(selected))
-  const activeRunId = runs.find((run) => run.status === 'queued' || run.status === 'running' || cancellationPending(run))?.id
-  const loadInFlight = useRef(false)
-  const refreshInFlight = useRef<string | null>(null)
-  const messageRevision = useRef(0)
-
-  const editMessage = useCallback((value: string) => {
-    messageRevision.current += 1
-    setMessage(value)
-  }, [])
-
-  useEffect(() => {
-    let mounted = true
-    const load = async () => {
-      if (loadInFlight.current) return
-      loadInFlight.current = true
-      try {
-        const next = ownerId ? await db.coachRuns.where('ownerId').equals(ownerId).reverse().sortBy('updatedAt') : []
-        if (mounted) setRuns(next)
-      } catch (cause) {
-        if (mounted) setActionError(cause instanceof Error ? cause.message : 'No se pudieron consultar tus conversaciones del coach.')
-      } finally { loadInFlight.current = false }
-    }
-    void load()
-    const timer = window.setInterval(() => void load(), 2_000)
-    return () => { mounted = false; window.clearInterval(timer) }
-  }, [ownerId])
-
-  useEffect(() => {
-    if (!activeRunId) return
-    let mounted = true
-    const poll = async () => {
-      if (refreshInFlight.current) return
-      refreshInFlight.current = activeRunId
-      try {
-        const next = await refreshCoachRun(getToken, activeRunId)
-        if (next) {
-          setRuns((current) => current.map((run) => run.id === next.id ? next : run))
-          setSelected((current) => current?.id === next.id ? next : current)
-        }
-      } catch (cause) {
-        if (mounted) setActionError(cause instanceof Error ? cause.message : 'No se pudo consultar el estado del coach.')
-      } finally {
-        if (refreshInFlight.current === activeRunId) refreshInFlight.current = null
-      }
-    }
-    void poll()
-    const timer = window.setInterval(() => void poll(), 2_000)
-    return () => { mounted = false; window.clearInterval(timer) }
-  }, [activeRunId, getToken])
-
-  useEffect(() => {
-    if (!selected && runs?.[0]?.ownerId === ownerId) setSelected(runs[0])
-    if (selected) setSelected(runs?.find((run) => run.id === selected.id) ?? selected)
-  }, [runs, selected, ownerId])
-
-  const send = useCallback(async () => {
-    if (!message.trim() || busy) return
-    const sentMessage = message
-    const sentRevision = messageRevision.current
-    setBusy(true)
-    setActionError(undefined)
-    try {
-      const causedByEventId = selected?.decision?.kind === 'ask' ? selected.eventId : undefined
-      const next = await startCoachRun(getToken, sentMessage, { causedByEventId })
-      setRuns((current) => [next, ...current.filter((run) => run.id !== next.id)])
-      setSelected(next)
-      if (next.status !== 'failed') setMessage((current) => messageRevision.current === sentRevision && current === sentMessage ? '' : current)
-    } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'No se pudo enviar el mensaje. Inténtalo de nuevo.') } finally { setBusy(false) }
-  }, [busy, getToken, message, selected])
-
-  const apply = async () => {
-    if (!selected || applying) return
-    setApplying(true)
-    setActionError(undefined)
-    try { await applyCoachChangeSet(selected.id); setSelected(await db.coachRuns.get(selected.id)) } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'No se pudo aplicar la propuesta.') } finally { setApplying(false) }
-  }
-
-  const cancel = async () => {
-    if (!selected || cancelling) return
-    setCancelling(true)
-    setActionError(undefined)
-    try {
-      await cancelCoachRun(getToken, selected.id)
-      const next = await db.coachRuns.get(selected.id)
-      if (next) {
-        setRuns((current) => current.map((run) => run.id === next.id ? next : run))
-        setSelected(next)
-      }
-    } catch (cause) {
-      const next = await db.coachRuns.get(selected.id)
-      if (next) {
-        setRuns((current) => current.map((run) => run.id === next.id ? next : run))
-        setSelected(next)
-      }
-      const error = cause instanceof Error ? cause.message : 'No se pudo cancelar la ejecución del coach.'
-      setActionError(runError(error))
-    } finally { setCancelling(false) }
-  }
-
-  const retry = async () => {
-    if (!selected || busy) return
-    setBusy(true)
-    setActionError(undefined)
-    try {
-      const next = selected.remoteRunId && selected.error && isRecoverableCoachError(selected.error)
-        ? await refreshCoachRun(getToken, selected.id)
-        : await retryCoachRun(getToken, selected.id)
-      if (!next) return
-      setRuns((current) => [next, ...current.filter((run) => run.id !== next.id)])
-      setSelected(next)
-    } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'No se pudo solicitar un nuevo intento.') } finally { setBusy(false) }
-  }
-
+  const { getToken, isSignedIn } = useAuth(); const ownerId = getCoachAccountId(); const consent = Boolean(ownerId && getCoachConsent(ownerId)); const { coachPortalTarget } = useBottomDock()
+  const [conversations, setConversations] = useState<CoachConversation[]>([]); const [selectedId, setSelectedId] = useState<string>(); const [messages, setMessages] = useState<CoachMessage[]>([]); const [runs, setRuns] = useState<CoachRunRecord[]>([]); const [draft, setDraft] = useState(''); const [busy, setBusy] = useState(false); const [applying, setApplying] = useState(false); const [loadingOlder, setLoadingOlder] = useState(false); const [hasOlder, setHasOlder] = useState(false); const [historyOpen, setHistoryOpen] = useState(false); const [menuConversation, setMenuConversation] = useState<CoachConversation>(); const [confirmDelete, setConfirmDelete] = useState<CoachConversation>(); const [editingTitle, setEditingTitle] = useState<CoachConversation>(); const [titleDraft, setTitleDraft] = useState(''); const [actionError, setActionError] = useState<string>(); const revision = useRef(0)
+  const selected = conversations.find((item) => item.id === selectedId); const selectedRuns = useMemo(() => runs.filter((run) => run.conversationId === selectedId), [runs, selectedId]); const activeRun = selectedRuns.find((run) => run.status === 'queued' || run.status === 'running' || pendingCancellation(run))
+  const loadConversations = useCallback(async () => { if (!ownerId) return; const next = (await db.coachConversations.where('ownerId').equals(ownerId).reverse().limit(pageSize).toArray()).filter((item) => !item.pendingDeletion).sort((a, b) => b.updatedAt - a.updatedAt); setConversations(next); const preferred = getCoachConversationId(ownerId); const id = next.find((item) => item.id === preferred)?.id ?? next[0]?.id; if (id) { setSelectedId(id); setCoachConversationId(ownerId, id) } }, [ownerId])
+  const loadMessages = useCallback(async (conversationId: string, older = false) => { const query = db.coachMessages.where('[conversationId+sequence]').between([conversationId, Dexie.minKey], [conversationId, Dexie.maxKey]); const total = await query.count(); const batch = (await query.reverse().offset(older ? pageSize : 0).limit(pageSize).toArray()).reverse(); setHasOlder((older ? total > pageSize * 2 : total > pageSize)); setMessages((current) => older ? [...batch, ...current] : batch) }, [])
+  useEffect(() => { if (consent) void loadConversations() }, [consent, loadConversations])
+  useEffect(() => { if (!ownerId || !selectedId) return; void Promise.all([loadMessages(selectedId), db.coachRuns.where('ownerId').equals(ownerId).toArray(), getCoachDraft(ownerId, selectedId)]).then(([, nextRuns, savedDraft]) => { setRuns(nextRuns); setDraft(savedDraft) }) }, [loadMessages, ownerId, selectedId])
+  useEffect(() => { if (!ownerId || !selectedId) return; const timer = window.setInterval(() => { void Promise.all([loadMessages(selectedId), db.coachRuns.where('ownerId').equals(ownerId).toArray(), loadConversations()]).then(([, nextRuns]) => setRuns(nextRuns)) }, 2000); return () => window.clearInterval(timer) }, [loadConversations, loadMessages, ownerId, selectedId])
+  const selectConversation = async (id: string) => { if (!ownerId) return; await flushCoachDraft(ownerId, selectedId ?? id); setSelectedId(id); setCoachConversationId(ownerId, id); setHistoryOpen(false) }
+  const newConversation = async () => { if (!ownerId) return; const conversation = await createCoachConversation(ownerId); await loadConversations(); await selectConversation(conversation.id); setDraft(''); setHistoryOpen(false) }
+  const submitTitle = async () => { if (!ownerId || !editingTitle) return; const updated = await renameCoachConversation(ownerId, editingTitle.id, titleDraft); setConversations((current) => current.map((item) => item.id === updated.id ? updated : item)); setEditingTitle(undefined) }
+  const doDelete = async () => { if (!ownerId || !confirmDelete) return; const id = confirmDelete.id; await deleteCoachConversation(ownerId, id); setConfirmDelete(undefined); setMenuConversation(undefined); await loadConversations(); const next = conversations.find((item) => item.id !== id); if (next) await selectConversation(next.id); else { setSelectedId(undefined); setMessages([]); setDraft('') } }
+  const send = async () => { if (!ownerId || !draft.trim() || busy || activeRun) return; let conversation = selected ?? await ensureCoachConversation(ownerId); if (!selectedId) { setSelectedId(conversation.id); setCoachConversationId(ownerId, conversation.id); await loadConversations() }; const text = draft; const sentRevision = revision.current; setBusy(true); setActionError(undefined); try { const next = await startCoachRun(getToken, text); setRuns((current) => [next, ...current.filter((run) => run.id !== next.id)]); if (conversation.title === 'Nueva conversación') { conversation = await renameCoachConversation(ownerId, conversation.id, text.slice(0, 48)); setConversations((current) => current.map((item) => item.id === conversation.id ? conversation : item)) }; if (revision.current === sentRevision) { setDraft(''); setCoachDraft(ownerId, conversation.id, '') }; await loadMessages(conversation.id) } catch (cause) { setActionError(errorLabel(cause instanceof Error ? cause.message : undefined)) } finally { setBusy(false) } }
+  const refresh = async (run: CoachRunRecord) => { const next = await refreshCoachRun(getToken, run.id); if (next) setRuns((current) => current.map((item) => item.id === next.id ? next : item)); if (selectedId) await loadMessages(selectedId) }
+  const proposal = selectedRuns.at(-1)?.decision
+  const applyProposal = async () => { const run = selectedRuns.at(-1); if (!run || run.decision?.kind !== 'propose' || applying) return; setApplying(true); try { await applyCoachChangeSet(run.id); setRuns((current) => current.map((item) => item.id === run.id ? { ...item, appliedAt: Date.now() } : item)) } catch (cause) { setActionError(errorLabel(cause instanceof Error ? cause.message : undefined)) } finally { setApplying(false) } }
   if (!isSignedIn) return <section className="page-content pt-3"><PageHeader title="Coach" /><p className="mt-4 text-base leading-6 text-muted">Inicia sesión para usar el coach privado.</p><Link className="btn btn-primary mt-4 w-full" to="/perfil">Ir a Perfil</Link></section>
   if (!consent) return <section className="page-content pt-3"><PageHeader title="Coach" /><p className="mt-4 text-base leading-6 text-muted">Activa el consentimiento desde Perfil para enviar contexto al coach.</p><Link className="btn btn-primary mt-4 w-full" to="/perfil">Resolver en Perfil</Link></section>
-
-  const decision = selected?.decision
-  return (
-    <><div className="page-content pb-4 pt-3">
-      <PageHeader title="Coach" action={<button className="page-header__profile pressable text-xs" onClick={() => setRecentOpen((open) => !open)} aria-label="Conversaciones recientes">{runs.length}</button>} />
-      <p className="mt-4 text-base leading-6 text-muted">Revisa tu entrenamiento y pregunta al coach. Tú confirmas cada cambio antes de aplicarlo.</p>
-      {actionError && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{actionError}</p>}
-      {runs.length === 0 && <section className="mt-5" aria-labelledby="coach-suggestions-title"><h2 id="coach-suggestions-title" className="text-xl font-semibold">¿Qué quieres revisar?</h2><div className="mt-3 grid gap-2">{['Revisar mi último entreno', 'Ajustar mi rutina', 'Resolver una duda'].map((suggestion) => <button key={suggestion} className="btn btn-surface justify-start text-left" onClick={() => editMessage(suggestion)}>{suggestion}</button>)}</div></section>}
-
-      {selected && (
-        <section className="card mt-4 p-4" aria-live="polite">
-          <div className="flex items-center justify-between"><h2 className="text-xl font-semibold">Respuesta del coach</h2><span className="text-sm text-muted">{selectedCancellationPending ? 'Cancelación pendiente' : runLabels[selected.status]}</span></div>
-          <div className="mt-3 rounded-xl bg-surface-2 px-3 py-2.5 text-sm"><span className="font-semibold">Tu pregunta</span><p className="pt-1 text-muted">{String(selected.request.event.payload?.message ?? '—')}</p></div>
-          {selectedCancellationPending ? <><p className="mt-3 text-sm text-muted">La solicitud de cancelación está pendiente de confirmación remota.</p>{selected.lastError && <p className="mt-2 text-sm text-danger">{runError(selected.lastError)}</p>}</> : selected.error ? <p className="mt-3 text-sm text-danger">{runError(selected.error)}</p> : selected.status === 'queued' || selected.status === 'running' ? <p className="mt-3 text-sm text-muted">{selected.status === 'queued' && selected.id.startsWith('coach-local-') ? 'Guardado localmente; se enviará cuando haya conexión y sesión disponible.' : 'El coach está procesando tu contexto. Puede tardar unos minutos…'}</p> : null}
-          {selected.status === 'failed' && isRetryableCoachError(selected.error) && <button className="btn btn-surface mt-3 w-full" type="button" disabled={busy} onClick={() => void retry()}>Solicitar un nuevo intento</button>}
-          {selected.remoteRunId && selected.status !== 'completed' && selected.status !== 'cancelled' && !selectedCancellationPending && selected.error && isRecoverableCoachError(selected.error) && <button className="btn btn-surface mt-3 w-full" type="button" disabled={busy} onClick={() => void retry()}>Consultar de nuevo</button>}
-          {decision && <>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">{decision.explanation}</p>
-            {decision.kind === 'ask' && <div className="mt-3 rounded-xl bg-surface-2 p-3 text-sm"><p className="font-semibold">Necesito saber:</p><ul className="mt-2 list-disc pl-5">{decision.questions.map((question) => <li key={question}>{question}</li>)}</ul></div>}
-            {decision.kind === 'propose' && <>
-              <div className="mt-3 rounded-xl bg-surface-2 p-3 text-sm"><p className="font-semibold">Cambios propuestos</p><ul className="mt-2 list-disc space-y-1 pl-5">{decision.changeSet.operations.map((operation) => <li key={operation.operationId}>{operation.kind === 'routine' ? `Actualizar rutina ${routines.find((routine) => routine.id === operation.routineId)?.name ?? operation.routineId}` : operation.kind === 'exercise-substitution' ? `Sustituir ${byId.get(operation.exerciseId)?.name ?? operation.exerciseId} en ${routines.find((routine) => routine.id === operation.routineId)?.name ?? operation.routineId}` : operation.kind === 'routine-create' ? `Añadir rutina ${operation.name}` : operation.kind === 'routine-retire' ? `Retirar rutina ${routines.find((routine) => routine.id === operation.routineId)?.name ?? operation.routineId}` : 'Objetivos nutricionales'}</li>)}</ul></div>
-              {planDiffs(selected).length > 0 && <div className="mt-3 rounded-xl border border-border p-3 text-sm"><p className="font-semibold">Diferencias reales de sesiones</p><ul className="mt-2 list-disc space-y-1 pl-5">{planDiffs(selected).map((line) => <li key={line}>{line}</li>)}</ul></div>}
-              {decision.evidence.length > 0 && <details className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted"><summary className="cursor-pointer font-semibold text-text">Evidencia</summary>{decision.evidence.map((item) => <p className="mt-2" key={`${item.sourceId}:${item.location}`}>{item.sourceId} · {item.location}</p>)}</details>}
-              <button className="btn btn-primary mt-4 w-full" type="button" disabled={applying || !!selected.appliedAt} onClick={() => void apply()}>{selected.appliedAt ? 'Aplicado' : applying ? 'Aplicando…' : 'Confirmar y aplicar'}</button>
-            </>}
-            {(decision.kind === 'abstain' || decision.kind === 'unavailable') && <p className="mt-3 rounded-xl bg-surface-2 p-3 text-xs text-muted">{decision.reason}</p>}
-          </>}
-          <div className="mt-3 flex gap-2"><button className="btn btn-surface flex-1" type="button" onClick={() => void cancel()} disabled={cancelling || selected.status === 'completed' || selected.status === 'failed' || selected.status === 'cancelled'}>{cancelling ? (selectedCancellationPending ? 'Reintentando cancelación…' : 'Cancelando…') : selectedCancellationPending ? 'Reintentar cancelación' : 'Cancelar'}</button></div>
-        </section>
-      )}
-      {recentOpen && runs && runs.length > 0 && <div className="mt-5"><h2 className="text-xl font-semibold">Conversaciones recientes</h2><div className="mt-2 flex flex-col gap-2">{runs.filter((run) => run.ownerId === ownerId).slice(0, 8).map((run) => <button className="card flex items-center justify-between px-3 py-3 text-left text-sm" key={run.id} type="button" onClick={() => { setSelected(run); setRecentOpen(false) }}><span className="line-clamp-2">{String(run.request.event.payload?.message ?? 'Ejecución del coach')}</span><span className="ml-2 shrink-0 text-xs text-muted">{runLabel(run)}</span></button>)}</div></div>}
-    </div>{coachPortalTarget && createPortal(<CoachComposer message={message} busy={busy} sendDisabled={Boolean(activeRunId)} followUp={selected?.decision?.kind === 'ask'} onChange={editMessage} onSend={() => void send()} />, coachPortalTarget)}</>
-  )
+  const history = <CoachConversationHistory conversations={conversations} selectedId={selectedId} onSelect={(id) => void selectConversation(id)} onNew={() => void newConversation()} onRename={(conversation) => { setMenuConversation(conversation); setTitleDraft(conversation.title) }} onDelete={setConfirmDelete} />
+  return <div className="page-content coach-page pb-4 pt-3"><PageHeader title="Coach" action={<><button className="btn btn-primary min-h-11 px-3 text-sm coach-new-mobile" type="button" onClick={() => void newConversation()}>Nuevo chat</button><button className="page-header__profile pressable coach-history-mobile" type="button" aria-label="Abrir historial" onClick={() => setHistoryOpen(true)}>☰</button></>} /><div className="coach-layout">{history}<main className="coach-conversation" aria-labelledby="coach-conversation-title"><div className="coach-conversation__header"><div className="min-w-0"><h2 id="coach-conversation-title" className="truncate text-lg font-bold">{selected?.title ?? 'Nuevo chat'}</h2><p className="text-xs text-muted">{activeRun ? statusLabel[activeRun.status] : 'Guardado local'}</p></div><button className="btn btn-primary coach-new-desktop min-h-10 px-3 text-sm" type="button" onClick={() => void newConversation()}>Nuevo chat</button></div>{actionError && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{actionError}</p>}{activeRun?.error && <p className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{pendingCancellation(activeRun) ? 'Cancelación pendiente' : errorLabel(activeRun.error)}{isRetryableCoachError(activeRun.error) && <button className="ml-2 underline" type="button" onClick={() => void refresh(activeRun)}>Reintentar</button>}</p>}{proposal?.kind === 'propose' && <section className="card mt-3 p-3" aria-label="Propuesta del coach"><p className="text-sm font-semibold">Propuesta lista para revisar</p><p className="mt-1 text-sm text-muted">{proposal.explanation}</p><button className="btn btn-primary mt-3 w-full" type="button" disabled={applying || Boolean(selectedRuns.at(-1)?.appliedAt)} onClick={() => void applyProposal()}>{selectedRuns.at(-1)?.appliedAt ? 'Aplicado' : applying ? 'Aplicando…' : 'Confirmar y aplicar'}</button></section>}<CoachTranscript messages={messages} runs={selectedRuns} hasOlder={hasOlder} loadingOlder={loadingOlder} onLoadOlder={() => { if (!selectedId || loadingOlder) return; setLoadingOlder(true); void loadMessages(selectedId, true).finally(() => setLoadingOlder(false)) }} /></main></div>{coachPortalTarget && createPortal(<CoachComposer message={draft} busy={busy} sendDisabled={Boolean(activeRun)} followUp={Boolean(selectedRuns.at(-1)?.decision?.kind === 'ask')} onChange={(value) => { revision.current += 1; setDraft(value); if (ownerId && selectedId) setCoachDraft(ownerId, selectedId, value) }} onSend={() => void send()} />, coachPortalTarget)}<Sheet open={historyOpen} onClose={() => setHistoryOpen(false)} title="Historial">{history}</Sheet><Sheet open={Boolean(menuConversation)} onClose={() => setMenuConversation(undefined)} title={menuConversation?.title}><div className="flex flex-col gap-2 pb-2"><button className="btn btn-surface" type="button" onClick={() => { setEditingTitle(menuConversation); setMenuConversation(undefined) }}>Renombrar</button><button className="btn btn-danger" type="button" onClick={() => { setConfirmDelete(menuConversation); setMenuConversation(undefined) }}>Eliminar historial</button></div></Sheet><Sheet open={Boolean(editingTitle)} onClose={() => setEditingTitle(undefined)} title="Renombrar conversación"><form className="flex flex-col gap-3 pb-2" onSubmit={(event) => { event.preventDefault(); void submitTitle() }}><label className="text-sm font-semibold" htmlFor="coach-title">Nombre</label><input id="coach-title" className="input" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} autoFocus /><button className="btn btn-primary" type="submit">Guardar nombre</button></form></Sheet><Confirm open={Boolean(confirmDelete)} onClose={() => setConfirmDelete(undefined)} title="Eliminar conversación" message={`Se eliminará “${confirmDelete?.title ?? ''}” de este dispositivo. Las rutinas aplicadas no se revierten.`} confirmLabel="Eliminar" danger onConfirm={() => void doDelete()} /></div>
 }

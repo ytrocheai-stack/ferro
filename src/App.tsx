@@ -66,15 +66,15 @@ export default function App() {
 
   return (
     <BottomDockProvider>
-      <AppShell hideTabs={hideTabs} />
+      <AppShell hideTabs={hideTabs} coach={pathname === '/coach'} />
     </BottomDockProvider>
   )
 }
 
-function AppShell({ hideTabs }: { hideTabs: boolean }) {
+function AppShell({ hideTabs, coach }: { hideTabs: boolean; coach: boolean }) {
   const [dockSpace, setDockSpace] = useState(0)
   return (
-    <div className="app-shell min-h-dvh pt-[env(safe-area-inset-top)]">
+    <div className={`app-shell min-h-dvh pt-[env(safe-area-inset-top)]${coach ? ' app-shell--coach' : ''}`}>
       <a className="skip-link" href="#main-content">Saltar al contenido</a>
       <main id="main-content" style={{ paddingBottom: `${Math.max(hideTabs ? 16 : 112, dockSpace + 16)}px` }} tabIndex={-1}>
         <Suspense fallback={<PageFallback />}>
