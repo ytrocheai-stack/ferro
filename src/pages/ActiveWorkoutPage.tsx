@@ -16,7 +16,7 @@ import { useWakeLock } from '../lib/wakeLock'
 import { clock, displayToKg, formatDuration, formatVolume, kgToDisplay } from '../lib/format'
 import { REST_OPTIONS, restLabel } from '../lib/constants'
 import { suggestProgression, warmupSets } from '../lib/progression'
-import { toastUndo } from '../stores/toasts'
+import { toastUndo, useToasts } from '../stores/toasts'
 import { ExercisePicker } from '../components/ExercisePicker'
 import { ExerciseThumb } from '../components/ExerciseThumb'
 import { PlateCalculatorSheet } from '../components/PlateCalculator'
@@ -74,6 +74,8 @@ export default function ActiveWorkoutPage() {
     try {
       const wid = await useActive.getState().finish()
       if (wid) navigate(`/historial/${wid}${editing ? '' : '?nuevo=1'}`, { replace: true })
+    } catch {
+      useToasts.getState().show('No se pudo guardar: conserva la sesión y vuelve a intentarlo.')
     } finally {
       setSaving(false)
     }

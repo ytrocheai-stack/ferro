@@ -665,9 +665,11 @@ async function doFinish(get: Getter, set: Setter): Promise<string | null> {
     routineRevision: s.routineRevision,
     postWorkoutFeedback: s.postWorkoutFeedback,
   }
-  const all = await db.workouts.toArray()
-  const normalized = recalculateWorkoutHistory([...all.filter((item) => item.id !== workout.id), workout])
-  await db.transaction('rw', [db.workouts, db.adaptationJobs, db.adaptationProposals], async () => {
+  await db.transaction('rw', [db.workouts, db.routines, db.adaptationJobs, db.adaptationProposals], async () => {
+    // Leer el historial dentro de la misma transacción que escribe los campos
+    // derivados evita que dos guardados calculen sobre snapshots distintos.
+    const all = await db.workouts.toArray()
+    const normalized = recalculateWorkoutHistory([...all.filter((item) => item.id !== workout.id), workout])
     await db.workouts.bulkPut(normalized)
     if (isEdit) {
       await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())

@@ -48,4 +48,19 @@ describe('recalculateWorkoutHistory', () => {
     expect(result.totalSets).toBe(1)
     expect(result.prs).toEqual([])
   })
+
+  it('mantiene las estadísticas coherentes al eliminar y restaurar un registro previo', () => {
+    const earlier = workout('earlier', 1_000, 60)
+    const deleted = workout('deleted', 2_000, 80)
+    const later = workout('later', 3_000, 70)
+
+    const afterDelete = recalculateWorkoutHistory([earlier, later])
+    expect(afterDelete.map((item) => item.id)).toEqual(['earlier', 'later'])
+    expect(afterDelete[1].prs[0]).toMatchObject({ value: 70, prev: 60 })
+
+    const afterUndo = recalculateWorkoutHistory([...afterDelete, deleted])
+    expect(afterUndo.map((item) => item.id)).toEqual(['earlier', 'deleted', 'later'])
+    expect(afterUndo[1].prs[0]).toMatchObject({ value: 80, prev: 60 })
+    expect(afterUndo[2].prs).toEqual([])
+  })
 })
