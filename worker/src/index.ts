@@ -5,7 +5,7 @@ import { verifyToken } from '@clerk/backend'
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers'
 import { z } from 'zod'
 import { analyzeAdaptation, canonicalJson, type ExerciseAnalysisInput, type ExerciseDecision } from '../../packages/adaptation-core/src/index'
-import { agentDecisionSchema, agentRunSchema, analysisResponseSchema, analyzeRequestSchema, coachRunRequestSchema, coachRunResponseSchema, type AgentDecision, type AnalysisSource, type ChangeOperation, type CoachRunRequest, type FutureSession } from '../../packages/adaptation-core/src/contract'
+import { agentDecisionSchema, agentRunSchema, analysisResponseSchema, analyzeRequestSchema, coachRunRequestSchema, coachRunResponseSchema, coachRunSnapshotSchema, type AgentDecision, type AnalysisSource, type ChangeOperation, type CoachRunRequest, type CoachRunSnapshot, type FutureSession } from '../../packages/adaptation-core/src/contract'
 import { AGENT_INSTRUCTION_VERSION, agentWireResponseSchema, buildAgentInstructions, buildAgentPrompt, runAgentProtocol } from '../../packages/adaptation-core/src/agent'
 import { SafeDecisionExplanationParser } from '../../packages/adaptation-core/src/streaming'
 import { buildVectorizeFilter } from '../../packages/corpus-retrieval/src/index'
@@ -687,6 +687,16 @@ interface CoachAttemptRow {
   retry_after_ms?: number | null
 }
 
+interface CoachSnapshotRow {
+  run_id: string
+  sequence: number
+  text: string
+  status: CoachRunRow['status']
+  decision_json?: string | null
+  error_code?: string | null
+  created_at: number
+}
+
 function parseCoachRowJson<T>(value: string | null | undefined): T | undefined {
   if (!value) return undefined
   try { return JSON.parse(value) as T } catch { return undefined }
@@ -823,6 +833,8 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
   let decision: AgentDecision | undefined
   let streamedExplanation: string | undefined
   let failure: string | undefined
+  let lastSnapshot: CoachSnapshotRow | undefined
+  let snapshotWrites = Promise.resolve()
   const assertActive = async () => {
     const current = await db.prepare('SELECT status, deadline_at FROM coach_runs WHERE id = ?').bind(runId).first<{ status: string; deadline_at: number }>()
     if (!current || current.status !== 'running') throw new Error('cancelled')
@@ -884,7 +896,10 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
               const stream = shouldStreamGeneration(env, model, generation)
               streamedExplanation = undefined
               response = generationResult(await withDeadline(inner => stream
-                ? generation.generateStream!(prompt, model, inner, text => { streamedExplanation = text })
+                ? generation.generateStream!(prompt, model, inner, text => {
+                  streamedExplanation = text
+                  snapshotWrites = snapshotWrites.then(() => persistCoachSnapshot(db, runId, text, 'running', clock()).then(snapshot => { if (snapshot) lastSnapshot = snapshot }).catch(() => undefined))
+                })
                 : generation.generate(prompt, model, inner), Math.min(COACH_CALL_TIMEOUT_MS, row.deadline_at - clock()), signal))
               await assertActive()
             } catch (cause) {
@@ -929,13 +944,36 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
   // La escritura final es reintentable y nunca transforma completed/cancelled en failed.
   await step('coach-run-persist', async () => {
     const ended = clock()
-    if (failure) await db.prepare("UPDATE coach_runs SET status = 'failed', error_code = ?, usage_json = ?, ended_at = ?, updated_at = ?, workflow_status = 'errored' WHERE id = ? AND status = 'running'").bind(failure, JSON.stringify(usage), ended, ended, runId).run()
-    else await db.prepare("UPDATE coach_runs SET status = 'completed', decision_json = ?, usage_json = ?, ended_at = ?, updated_at = ?, workflow_status = 'complete' WHERE id = ? AND status = 'running'").bind(JSON.stringify(decision), JSON.stringify(usage), ended, ended, runId).run()
+    await snapshotWrites
+    if (failure) {
+      await db.prepare("UPDATE coach_runs SET status = 'failed', error_code = ?, usage_json = ?, ended_at = ?, updated_at = ?, workflow_status = 'errored' WHERE id = ? AND status = 'running'").bind(failure, JSON.stringify(usage), ended, ended, runId).run()
+      lastSnapshot = await persistCoachSnapshot(db, runId, streamedExplanation ?? lastSnapshot?.text ?? '', 'failed', ended, true, undefined, failure)
+    } else {
+      await db.prepare("UPDATE coach_runs SET status = 'completed', decision_json = ?, usage_json = ?, ended_at = ?, updated_at = ?, workflow_status = 'complete' WHERE id = ? AND status = 'running'").bind(JSON.stringify(decision), JSON.stringify(usage), ended, ended, runId).run()
+      lastSnapshot = await persistCoachSnapshot(db, runId, decision?.explanation ?? streamedExplanation ?? lastSnapshot?.text ?? '', 'completed', ended, true, decision)
+    }
     return true
   })
   if (!failure && decision && streamedExplanation === decision.explanation) {
     try { await deps.onCoachExplanation?.(runId, decision.explanation) } catch { /* la observabilidad no cambia el estado durable ya completado */ }
   }
+}
+
+function coachSnapshotResponse(row: CoachSnapshotRow): CoachRunSnapshot {
+  return coachRunSnapshotSchema.parse({
+    runId: row.run_id, sequence: row.sequence, text: row.text, status: row.status, createdAt: row.created_at,
+    ...(parseCoachRowJson<AgentDecision>(row.decision_json) ? { decision: parseCoachRowJson<AgentDecision>(row.decision_json) } : {}),
+    ...(row.error_code ? { error: row.error_code } : {}),
+  })
+}
+
+/** Escribe como máximo un snapshot por segundo; el terminal siempre se fuerza. */
+async function persistCoachSnapshot(db: D1Database, runId: string, text: string, status: CoachRunRow['status'], now: number, terminal = false, decision?: AgentDecision, errorCode?: string): Promise<CoachSnapshotRow | undefined> {
+  const latest = await db.prepare('SELECT * FROM coach_run_snapshots WHERE run_id = ? ORDER BY sequence DESC LIMIT 1').bind(runId).first<CoachSnapshotRow>()
+  if (!terminal && latest && now - latest.created_at < 1_000) return latest
+  const row: CoachSnapshotRow = { run_id: runId, sequence: (latest?.sequence ?? 0) + 1, text: text.slice(0, 32_000), status, decision_json: decision ? JSON.stringify(decision) : null, error_code: errorCode ?? null, created_at: now }
+  await db.prepare('INSERT INTO coach_run_snapshots (run_id, sequence, text, status, decision_json, error_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(row.run_id, row.sequence, row.text, row.status, row.decision_json, row.error_code, row.created_at).run()
+  return row
 }
 
 /** Repara ejecuciones interrumpidas sin reenviar solicitudes al proveedor. */
@@ -1009,6 +1047,22 @@ async function getCoachRunByEvent(request: Request, env: Env, userId: string, us
   return json(request, coachRunResponse(row, userId), 200, env)
 }
 
+/** SSE de snapshots: el cursor es solo una secuencia y siempre queda aislado por owner. */
+async function getCoachRunEvents(request: Request, env: Env, userHash: string, runId: string): Promise<Response> {
+  if (!env.DB) return error(request, 503, 'D1 es obligatorio para el coach', env)
+  const run = await env.DB.prepare('SELECT id FROM coach_runs WHERE id = ? AND account_hash = ?').bind(runId, userHash).first<{ id: string }>()
+  if (!run) return error(request, 404, 'Ejecución no encontrada', env)
+  const rawCursor = request.headers.get('Last-Event-ID') ?? new URL(request.url).searchParams.get('after') ?? '0'
+  const cursor = Number(rawCursor)
+  if (!Number.isInteger(cursor) || cursor < 0) return error(request, 400, 'Cursor de snapshot inválido', env)
+  const rows = await env.DB.prepare('SELECT * FROM coach_run_snapshots WHERE run_id = ? AND sequence > ? ORDER BY sequence ASC').bind(runId, cursor).all<CoachSnapshotRow>()
+  const body = rows.results.map((row) => {
+    const snapshot = coachSnapshotResponse(row)
+    return `id: ${snapshot.sequence}\nevent: snapshot\ndata: ${JSON.stringify({ type: 'snapshot', snapshot })}\n\n`
+  }).join('')
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-store', 'X-Accel-Buffering': 'no', ...corsHeaders(request, env) } })
+}
+
 async function cancelCoachRun(request: Request, env: Env, deps: WorkerDependencies, userHash: string, userId: string, runId: string, now: number): Promise<Response> {
   if (!env.DB) return error(request, 503, 'D1 es obligatorio para el coach', env)
   const row = await env.DB.prepare('SELECT * FROM coach_runs WHERE id = ? AND account_hash = ?').bind(runId, userHash).first<CoachRunRow>()
@@ -1037,17 +1091,19 @@ export async function handleRequest(request: Request, env: Env, deps: WorkerDepe
   const url = new URL(request.url)
   const coachCancelMatch = url.pathname.match(/^\/v1\/coach\/runs\/([^/]+)\/cancel$/)
   const coachEventMatch = url.pathname.match(/^\/v1\/coach\/runs\/by-event\/([^/]+)$/)
+  const coachEventsMatch = url.pathname.match(/^\/v1\/coach\/runs\/([^/]+)\/events$/)
   const coachRunMatch = url.pathname.match(/^\/v1\/coach\/runs\/([^/]+)$/)
   const coachCollection = url.pathname === '/v1/coach/runs'
   if (request.method === 'GET' && url.pathname === '/health') return json(request, { ok: true, policyVersion: 'v1' }, 200, env)
   if (request.method !== 'GET' && request.method !== 'POST') return error(request, 404, 'Ruta no encontrada', env)
-  if (request.method === 'GET' && !['/readiness', '/v1/readiness'].includes(url.pathname) && !coachRunMatch && !coachEventMatch) return error(request, 404, 'Ruta no encontrada', env)
+  if (request.method === 'GET' && !['/readiness', '/v1/readiness'].includes(url.pathname) && !coachRunMatch && !coachEventMatch && !coachEventsMatch) return error(request, 404, 'Ruta no encontrada', env)
   if (request.method === 'POST' && !['/v1/adaptations/analyze', '/v1/adaptations/events', '/v1/providers/probe'].includes(url.pathname) && !coachCollection && !coachRunMatch && !coachCancelMatch) return error(request, 404, 'Ruta no encontrada', env)
   const configurationError = productionConfigError(env)
   if (configurationError) return error(request, 503, configurationError, env)
   const auth = await authenticate(request, env, deps); if (auth instanceof Response) return auth
   const pseudonymKey = env.PSEUDONYMIZATION_KEY ?? env.CLERK_JWT_KEY
   const userHash = await hmac(auth.sub, pseudonymKey)
+  if (coachEventsMatch && request.method === 'GET') return getCoachRunEvents(request, env, userHash, decodeURIComponent(coachEventsMatch[1]))
   if (coachEventMatch && request.method === 'GET') return getCoachRunByEvent(request, env, auth.sub, userHash, decodeURIComponent(coachEventMatch[1]), now)
   if (coachRunMatch && request.method === 'GET') return getCoachRun(request, env, auth.sub, userHash, decodeURIComponent(coachRunMatch[1]), now)
   if (request.method === 'GET') {

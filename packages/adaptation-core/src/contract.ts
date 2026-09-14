@@ -387,6 +387,18 @@ export const coachRunResponseSchema = z.object({
   appliedAt: finite.optional(),
 }).strict()
 
+/** Snapshot durable del texto parcial; nunca es una propuesta aplicable por sí mismo. */
+export const coachRunSnapshotSchema = z.object({
+  runId: eventId,
+  sequence: z.number().int().positive(),
+  text: z.string().max(32_000),
+  status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']),
+  decision: agentDecisionSchema.optional(),
+  error: nonEmpty.max(1000).optional(),
+  createdAt: finite,
+}).strict()
+export const coachRunSnapshotEventSchema = z.object({ type: z.literal('snapshot'), snapshot: coachRunSnapshotSchema }).strict()
+
 export const autonomyPolicySchema = z.object({
   accountId,
   version: nonEmpty.max(120),
@@ -414,6 +426,8 @@ export type AgentDecision = z.infer<typeof agentDecisionSchema>
 export type CoachRunRequest = z.input<typeof coachRunRequestSchema>
 export type ParsedCoachRunRequest = z.output<typeof coachRunRequestSchema>
 export type CoachRunResponse = z.infer<typeof coachRunResponseSchema>
+export type CoachRunSnapshot = z.infer<typeof coachRunSnapshotSchema>
+export type CoachRunSnapshotEvent = z.infer<typeof coachRunSnapshotEventSchema>
 export type EvidenceReference = z.infer<typeof evidenceReferenceSchema>
 export type ChangeOperation = z.infer<typeof changeOperationSchema>
 export type ChangeSet = z.infer<typeof changeSetSchema>

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Dexie from 'dexie'
 import { db, FerroDB } from '../db/db'
 import { setCoachAccountId } from './coachAccount'
-import { applyCoachChangeSet, boundConversation, buildCoachRequest, cancelCoachRun, contextVersionFromSnapshot, fetchCoach, normalizeCoachRequestForTransport, queueCoachSessionFinished, refreshCoachRun, retryCoachRun, startCoachRun, syncPendingCoachRuns } from './coachClient'
+import { applyCoachChangeSet, boundConversation, buildCoachRequest, cancelCoachRun, contextVersionFromSnapshot, fetchCoach, normalizeCoachRequestForTransport, queueCoachSessionFinished, refreshCoachRun, retryCoachRun, startCoachRun, streamCoachRun, syncPendingCoachRuns } from './coachClient'
 import { grantCoachConsent, getSelectedCoachConversation } from './coachConsent'
 import type { CoachRunRecord, Routine } from '../db/types'
 import { coachRunRequestSchema, type CoachRunRequest, type CoachRunResponse } from '../../packages/adaptation-core/src/contract'
@@ -122,6 +122,22 @@ describe('coach submission failures', () => {
     await rejection
     expect(signal?.aborted).toBe(true)
     vi.useRealTimers()
+  })
+
+  it('reconecta snapshots sin POST y reemplaza el parcial con la secuencia nueva', async () => {
+    const local = await startCoachRun(async () => null, 'Hola')
+    await db.coachRuns.update(local.id, { remoteRunId: 'remote-stream', status: 'running' })
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      'id: 1\nevent: snapshot\ndata: {"type":"snapshot","snapshot":{"runId":"remote-stream","sequence":1,"text":"viejo","status":"running","createdAt":1}}\n\n' +
+      'id: 2\nevent: snapshot\ndata: {"type":"snapshot","snapshot":{"runId":"remote-stream","sequence":2,"text":"nuevo","status":"completed","createdAt":2}}\n\n',
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await streamCoachRun(async () => 'token', local.id)
+    expect(result).toMatchObject({ partialExplanation: 'nuevo', snapshotSequence: 2, status: 'completed' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://coach.example/v1/coach/runs/remote-stream/events')
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ 'Last-Event-ID': '0' })
   })
   it('an explicit retry does not require the uncertain run to be a completed conversation turn', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Network error')))

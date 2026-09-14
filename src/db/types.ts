@@ -272,6 +272,9 @@ export interface CoachRunRecord {
   startedAt?: number
   endedAt?: number
   appliedAt?: number
+  /** Último snapshot parcial remoto aplicado; solo presentación, nunca aplicable. */
+  snapshotSequence?: number
+  partialExplanation?: string
 }
 
 export interface CoachMessage {

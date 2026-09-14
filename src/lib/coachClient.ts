@@ -1,5 +1,5 @@
 import { canonicalJson, fnv1a64 } from '../../packages/adaptation-core/src/index'
-import { agentDecisionSchema, coachRunRequestSchema, coachRunResponseSchema, COACH_MAX_CONVERSATION_CHARS, COACH_MAX_CONVERSATION_MESSAGES, COACH_MAX_MESSAGE_CHARS, type CoachEvent, type CoachRunRequest, type FutureSession, type ParsedCoachRunRequest } from '../../packages/adaptation-core/src/contract'
+import { agentDecisionSchema, coachRunRequestSchema, coachRunResponseSchema, coachRunSnapshotEventSchema, COACH_MAX_CONVERSATION_CHARS, COACH_MAX_CONVERSATION_MESSAGES, COACH_MAX_MESSAGE_CHARS, type CoachEvent, type CoachRunRequest, type CoachRunSnapshot, type FutureSession, type ParsedCoachRunRequest } from '../../packages/adaptation-core/src/contract'
 import { db } from '../db/db'
 import type { CoachMessage, CoachRunRecord, Routine } from '../db/types'
 import { getCoachAccountId } from './coachAccount'
@@ -411,6 +411,59 @@ export async function refreshCoachRun(getToken: () => Promise<string | null>, ru
   }
   if (!response.ok) return persistTransportError(runId, coachStatusError(response, await response.text()))
   return reconcileRun(local.id, await response.json())
+}
+
+async function applyCoachSnapshot(localId: string, snapshot: CoachRunSnapshot): Promise<CoachRunRecord | undefined> {
+  return db.transaction('rw', db.coachRuns, async () => {
+    const local = await db.coachRuns.get(localId)
+    if (!local || remoteId(local) !== snapshot.runId || (local.snapshotSequence ?? 0) >= snapshot.sequence) return local
+    const terminal = snapshot.status === 'completed' || snapshot.status === 'failed' || snapshot.status === 'cancelled'
+    const next: CoachRunRecord = {
+      ...local, snapshotSequence: snapshot.sequence, partialExplanation: snapshot.text,
+      ...(terminal ? { status: snapshot.status, error: snapshot.error, endedAt: local.endedAt ?? snapshot.createdAt } : { status: 'running' }),
+      ...(snapshot.decision ? { decision: snapshot.decision } : {}), updatedAt: Date.now(),
+    }
+    await db.coachRuns.put(next)
+    return next
+  })
+}
+
+function sseRecords(buffer: string): { records: string[]; rest: string } {
+  const parts = buffer.split(/\r?\n\r?\n/)
+  return { records: parts.slice(0, -1), rest: parts.at(-1) ?? '' }
+}
+
+/** Cliente de reconexión opt-in: nunca crea un run ni sustituye el polling existente. */
+export async function streamCoachRun(getToken: () => Promise<string | null>, runId: string, signal?: AbortSignal): Promise<CoachRunRecord | undefined> {
+  const local = await db.coachRuns.get(runId)
+  const url = workerUrl()
+  const remoteRunId = local ? remoteId(local) : undefined
+  if (!local || !remoteRunId || !url || !navigator.onLine) return local
+  const token = await getToken()
+  if (!token) return local
+  const response = await fetch(`${url}/v1/coach/runs/${encodeURIComponent(remoteRunId)}/events`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream', 'Last-Event-ID': String(local.snapshotSequence ?? 0) }, signal,
+  })
+  if (!response.ok) return persistTransportError(runId, coachStatusError(response, await response.text()))
+  const reader = response.body?.getReader()
+  if (!reader) return local
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let current = local
+  while (true) {
+    const part = await reader.read()
+    buffer += decoder.decode(part.value ?? new Uint8Array(), { stream: !part.done })
+    const parsed = sseRecords(buffer); buffer = parsed.rest
+    for (const record of parsed.records) {
+      const data = record.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('')
+      if (!data) continue
+      const event = coachRunSnapshotEventSchema.parse(JSON.parse(data))
+      const next = await applyCoachSnapshot(runId, event.snapshot)
+      if (next) current = next
+    }
+    if (part.done) break
+  }
+  return current
 }
 
 /** Reconcilia pendientes sin ID remoto usando siempre la misma clave idempotente. */

@@ -10,12 +10,18 @@ function requestBody() {
 
 function fakeDb() {
   const rows = new Map<string, Record<string, unknown>>()
+  const snapshots: Record<string, unknown>[] = []
   const db: D1Database = {
     prepare(sql: string) {
       let values: unknown[] = []
       const statement = {
         bind(...bound: unknown[]) { values = bound; return statement },
         async first<T = Record<string, unknown>>() {
+          if (sql.includes('FROM coach_run_snapshots')) return (snapshots.filter((item) => item.run_id === values[0]).sort((a, b) => Number(b.sequence) - Number(a.sequence))[0] ?? null) as T | null
+          if (sql.includes('SELECT id FROM coach_runs WHERE id = ?')) {
+            const row = [...rows.values()].find((item) => item.id === values[0] && item.account_hash === values[1])
+            return (row ? { id: row.id } : null) as T | null
+          }
           if (sql.includes('WHERE event_id = ? AND account_hash = ? AND conversation_id = ?')) {
             const row = [...rows.values()].find((item) => item.event_id === values[0] && item.account_hash === values[1] && item.conversation_id === values[2])
             return (row ? { status: row.status, request_json: row.request_json, decision_json: row.decision_json } : null) as T | null
@@ -39,7 +45,7 @@ function fakeDb() {
           }
           return null
         },
-        async all<T = Record<string, unknown>>() { return { results: [] as T[] } },
+        async all<T = Record<string, unknown>>() { return { results: (sql.includes('FROM coach_run_snapshots') ? snapshots.filter((item) => item.run_id === values[0] && Number(item.sequence) > Number(values[1])).sort((a, b) => Number(a.sequence) - Number(b.sequence)) : []) as T[] } },
         async run() {
           if (sql.includes('INSERT INTO coach_runs')) {
             const [id, accountHash, eventId, conversationId, contextVersion, requestHash, idempotencyKey, requestJson, createdAt, updatedAt] = values
@@ -54,7 +60,7 @@ function fakeDb() {
     },
     async batch() { return [] },
   }
-  return { db, rows }
+  return { db, rows, snapshots }
 }
 
 const authHeaders = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json', 'Idempotency-Key': 'event-1', 'X-NextRep-Consent-Version': 'coach-context-v2', 'X-NextRep-Device-Id': 'device-1' }
@@ -117,6 +123,25 @@ describe('private coach runs', () => {
     rows.values().next().value!.account_hash = 'other-account'
     const hidden = await handleRequest(new Request('https://worker.test/v1/coach/runs/by-event/event-1', { headers: authHeaders }), env, deps)
     expect(hidden.status).toBe(404)
+  })
+
+  it('streams only owned snapshots and resumes strictly after Last-Event-ID', async () => {
+    const { db, rows, snapshots } = fakeDb()
+    const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
+    const created = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
+    const id = (await created.json() as { run: { id: string } }).run.id
+    snapshots.push({ run_id: id, sequence: 1, text: 'parcial', status: 'running', created_at: 10 })
+    snapshots.push({ run_id: id, sequence: 2, text: 'final', status: 'completed', decision_json: JSON.stringify({ kind: 'maintain', explanation: 'final', observations: [], evidence: [] }), created_at: 20 })
+    const resumed = await handleRequest(new Request(`https://worker.test/v1/coach/runs/${id}/events`, { headers: { ...authHeaders, 'Last-Event-ID': '1' } }), env, deps)
+    expect(resumed.status).toBe(200)
+    expect(resumed.headers.get('Content-Type')).toContain('text/event-stream')
+    const body = await resumed.text()
+    expect(body).toContain('id: 2')
+    expect(body).not.toContain('id: 1')
+    rows.get(id)!.account_hash = 'other-account'
+    expect((await handleRequest(new Request(`https://worker.test/v1/coach/runs/${id}/events`, { headers: authHeaders }), env, deps)).status).toBe(404)
   })
 
   it('does not continue a completed turn from another conversation', async () => {
