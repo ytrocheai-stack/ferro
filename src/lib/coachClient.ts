@@ -91,9 +91,9 @@ export function normalizeCoachRequestForTransport(value: unknown): ParsedCoachRu
   const rawConversation = Array.isArray(rawSnapshot.conversation) ? rawSnapshot.conversation : []
   const conversation = boundConversation(rawConversation.filter((candidate) => {
     if (!validHistoricalMessage(candidate)) return false
-    if (!selectedConversationId || !candidate || typeof candidate !== 'object') return true
+    if (!selectedConversationId || !candidate || typeof candidate !== 'object') return false
     const candidateConversationId = (candidate as Partial<CoachMessage>).conversationId
-    return candidateConversationId === undefined || candidateConversationId === selectedConversationId
+    return candidateConversationId === selectedConversationId
   }))
   const normalizedSnapshot = { ...rawSnapshot, conversation, conversationVersion: conversationVersion(conversation) }
   const version = contextVersionFromSnapshot(normalizedSnapshot)
@@ -121,7 +121,7 @@ export async function buildCoachRequest(message: string, causedByEventId?: strin
   ])
   const recentFinished = workouts.filter((workout) => Number.isFinite(workout.endedAt)).slice(0, 6)
   const conversation = await getSelectedCoachConversation(accountId)
-  const messages = boundConversation(previousMessages.filter((message) => message.conversationId === conversation.id || (!message.conversationId && message.ownerId === accountId)))
+  const messages = boundConversation(previousMessages.filter((message) => message.conversationId === conversation.id))
   const conversationId = conversation.id
   const consentRevision = consentRecord?.revision ?? consent.acceptedAt
   const plan = routines.filter((routine) => !routine.retiredAt).map((routine) => ({ sessionId: routine.id, name: routine.name, expectedRevision: routine.revision, scheduledAt: routine.scheduledAt, exercises: normalizeRoutine(routine).exercises.map((exercise, order) => ({ occurrenceId: exercise.occurrenceId ?? `${routine.id}:${order}:${exercise.exerciseId}`, exerciseId: exercise.exerciseId, order, plannedSets: exercise.plannedSets, setTargets: exercise.setTargets ?? [], repRangeMin: exercise.repRangeMin, repRangeMax: exercise.repRangeMax, targetRpeMin: exercise.targetRpeMin, targetRpeMax: exercise.targetRpeMax, notes: exercise.notes })) }))

@@ -33,6 +33,7 @@ describe('conversaciones locales del coach', () => {
     const ownerB = await ensureCoachConversation('owner-b', 'shared-conversation')
     expect(ownerB.id).not.toBe(ownerA.id)
     expect(ownerB.ownerId).toBe('owner-b')
+    await expect(ensureCoachConversation('owner-b', 'shared-conversation')).resolves.toEqual(ownerB)
     expect(await db.coachConversations.get(ownerA.id)).toMatchObject({ ownerId: 'owner-a' })
     expect(await db.coachMessages.get('owner-a-message')).toMatchObject({ conversationId: ownerA.id, ownerId: 'owner-a' })
   })
@@ -44,11 +45,12 @@ describe('conversaciones locales del coach', () => {
     await db.coachMessages.bulkPut([
       { id: 'selected', ownerId: 'account-a', runId: 'run-a', conversationId: selected.id, sequence: 1, deliveryState: 'delivered' as const, role: 'user' as const, content: 'seleccionada', createdAt: 1, contextVersion: 'ctx' },
       { id: 'other', ownerId: 'account-a', runId: 'run-b', conversationId: other.id, sequence: 1, deliveryState: 'delivered' as const, role: 'user' as const, content: 'privada', createdAt: 2, contextVersion: 'ctx' },
+      { id: 'legacy-without-conversation', ownerId: 'account-a', runId: 'run-legacy', role: 'user' as const, content: 'legacy mezclado', createdAt: 3, contextVersion: 'ctx' },
     ])
     const request = await buildCoachRequest('nuevo')
     expect(request?.event.conversationId).toBe(selected.id)
     expect(request?.context.snapshot.conversation.map((message) => message.content)).toEqual(['semilla', 'seleccionada'])
-    expect(await db.coachMessages.count()).toBe(3)
+    expect(await db.coachMessages.count()).toBe(4)
   })
 
   it('marca eliminación pendiente y cancelación sin borrar contenido, y elimina después', async () => {
@@ -93,6 +95,7 @@ describe('conversaciones locales del coach', () => {
     snapshot.conversation = [
       { id: 'selected', conversationId: request!.event.conversationId, role: 'user', content: 'sí', createdAt: 1, contextVersion: 'ctx' },
       { id: 'other', conversationId: 'other-conversation', role: 'user', content: 'no', createdAt: 2, contextVersion: 'ctx' },
+      { id: 'undefined', role: 'user', content: 'tampoco', createdAt: 3, contextVersion: 'ctx' },
     ]
     const normalized = normalizeCoachRequestForTransport(legacy)
     expect(normalized.context.snapshot.conversation.map((message) => message.content)).toEqual(['sí'])

@@ -32,7 +32,8 @@ export async function ensureCoachConversation(ownerId: string, requestedId?: str
     let id = baseId
     let collision = await db.coachConversations.get(id)
     let suffix = 0
-    while (collision && collision.ownerId !== ownerId) {
+    while (collision) {
+      if (collision.ownerId === ownerId && !collision.pendingDeletion) return collision
       suffix += 1
       id = `${alternateConversationId(ownerId, baseId)}${suffix === 1 ? '' : `:${suffix}`}`
       collision = await db.coachConversations.get(id)

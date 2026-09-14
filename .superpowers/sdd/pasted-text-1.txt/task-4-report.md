@@ -56,3 +56,29 @@ exit 0
 $ git diff --check
 exit 0
 ```
+
+## Round 2 — correcciones del reviewer
+
+- `buildCoachRequest` y `normalizeCoachRequestForTransport` solo aceptan mensajes con `conversationId` exactamente igual a la conversación seleccionada. Los legacy sin ID quedan fuera hasta que la migración les asigne explícitamente una conversación.
+- `ensureCoachConversation` reutiliza una identidad alternativa ya existente del mismo propietario y continúa generando sufijos deterministas para colisiones de otros propietarios, sin sobrescribir filas.
+- Se añadieron pruebas de mensaje sin conversación junto a otra conversación, colisión entre propietarios y segunda ejecución idempotente de la identidad alternativa.
+
+## Verificación Round 2 (comandos y salida)
+
+```text
+$ npx tsc --noEmit
+exit 0
+
+$ npx eslint src/lib/coachClient.ts src/lib/coachConversations.ts src/lib/coachClient.test.ts src/lib/coachConversations.test.ts
+exit 0
+
+$ npx vitest run src/lib/coachConversations.test.ts src/lib/coachClient.test.ts src/lib/backup.test.ts
+✓ src/lib/backup.test.ts (5 tests)
+✓ src/lib/coachConversations.test.ts (9 tests)
+✓ src/lib/coachClient.test.ts (52 tests)
+Test Files 3 passed (3)
+Tests 66 passed (66)
+exit 0
+```
+
+`git diff --check` ✅ (sin errores; solo advertencias de normalización LF/CRLF de Git).

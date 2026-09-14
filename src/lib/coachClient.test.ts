@@ -3,7 +3,7 @@ import Dexie from 'dexie'
 import { db, FerroDB } from '../db/db'
 import { setCoachAccountId } from './coachAccount'
 import { applyCoachChangeSet, boundConversation, buildCoachRequest, cancelCoachRun, contextVersionFromSnapshot, fetchCoach, normalizeCoachRequestForTransport, queueCoachSessionFinished, refreshCoachRun, retryCoachRun, startCoachRun, syncPendingCoachRuns } from './coachClient'
-import { grantCoachConsent } from './coachConsent'
+import { grantCoachConsent, getSelectedCoachConversation } from './coachConsent'
 import type { CoachRunRecord, Routine } from '../db/types'
 import { coachRunRequestSchema, type CoachRunRequest, type CoachRunResponse } from '../../packages/adaptation-core/src/contract'
 
@@ -133,9 +133,10 @@ describe('coach submission failures', () => {
   })
 
   it('projects the strict transport contract and bounds old conversation history', async () => {
+    const selectedConversation = await getSelectedCoachConversation(accountId)
     await db.coachMessages.bulkPut(Array.from({ length: 105 }, (_, index) => ({
       id: `old-${index}`, ownerId: accountId, runId: `run-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const,
-      content: 'x'.repeat(300), createdAt: index, contextVersion: `ctx-${index}`,
+      conversationId: selectedConversation.id, content: 'x'.repeat(300), createdAt: index, contextVersion: `ctx-${index}`,
     })))
     const built = await buildCoachRequest('Primer mensaje')
     expect(built).not.toBeNull()
@@ -156,7 +157,7 @@ describe('coach submission failures', () => {
     legacy.context.snapshot.conversation = legacy.context.snapshot.conversation.map((message) => ({ ...message, ownerId: accountId }))
     const normalized = normalizeCoachRequestForTransport(legacy)
     expect(normalized.event.id).toBe(request!.event.id)
-    expect(normalized.context.snapshot.conversation[0]).not.toHaveProperty('ownerId')
+    expect(normalized.context.snapshot.conversation).toHaveLength(0)
     expect(() => coachRunRequestSchema.parse(normalized)).not.toThrow()
   })
 
