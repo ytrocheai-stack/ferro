@@ -239,7 +239,7 @@ const candidateRecordSchema = z.object({
 
 export const backupSchema = z.object({
   app: z.literal('ferro'),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10)]),
   exportedAt: z.string(),
   settings: settingsSchema.optional(),
   nutritionGoals: nutritionGoalsSchema.optional(),
@@ -308,6 +308,8 @@ export const backupSchema = z.object({
   coachMessages: z.array(z.unknown()).optional(),
   coachProfiles: z.array(z.unknown()).optional(),
   coachConsents: z.array(z.unknown()).optional(),
+  coachConversations: z.array(z.unknown()).optional(),
+  coachDrafts: z.array(z.unknown()).optional(),
 })
 
 export const photosBackupSchema = z.object({

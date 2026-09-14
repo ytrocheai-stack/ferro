@@ -20,6 +20,8 @@ import type {
   CoachMessage,
   CoachProfile,
   CoachConsentRecord,
+  CoachConversation,
+  CoachDraft,
 } from '../db/types'
 import { useSettings, type SettingsValues } from '../stores/settings'
 import { useNutrition, type NutritionGoals } from '../stores/nutrition'
@@ -30,7 +32,7 @@ import { CONTEXT_INVALIDATED_MESSAGE } from './adaptationErrors'
 
 interface BackupFile {
   app: 'ferro'
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10
   exportedAt: string
   settings: SettingsValues
   nutritionGoals?: NutritionGoals
@@ -52,10 +54,12 @@ interface BackupFile {
   coachMessages?: CoachMessage[]
   coachProfiles?: CoachProfile[]
   coachConsents?: CoachConsentRecord[]
+  coachConversations?: CoachConversation[]
+  coachDrafts?: CoachDraft[]
 }
 
 export async function exportBackup(): Promise<void> {
-  const [workouts, routines, customExercises, folders, measurements, foods, dishes, foodLog, importBatches, externalRefs, adaptationProposals, adaptationJobs, routineRevisionSnapshots, adaptationEventJobs, coachRuns, coachMessages, coachProfiles, coachConsents] =
+  const [workouts, routines, customExercises, folders, measurements, foods, dishes, foodLog, importBatches, externalRefs, adaptationProposals, adaptationJobs, routineRevisionSnapshots, adaptationEventJobs, coachRuns, coachMessages, coachProfiles, coachConsents, coachConversations, coachDrafts] =
     await Promise.all([
       db.workouts.toArray(),
       db.routines.toArray(),
@@ -75,10 +79,12 @@ export async function exportBackup(): Promise<void> {
       db.coachMessages.toArray(),
       db.coachProfiles.toArray(),
       db.coachConsents.toArray(),
+      db.coachConversations.toArray(),
+      db.coachDrafts.toArray(),
     ])
   const payload: BackupFile = {
     app: 'ferro',
-    version: 9,
+    version: 10,
     exportedAt: new Date().toISOString(),
     settings: { ...useSettings.getState() },
     nutritionGoals: { ...useNutrition.getState().goals },
@@ -100,6 +106,8 @@ export async function exportBackup(): Promise<void> {
     coachMessages,
     coachProfiles,
     coachConsents,
+    coachConversations,
+    coachDrafts,
   }
   await downloadJson(payload, `nextrep-backup-${format(new Date(), 'yyyy-MM-dd')}.json`)
 }
@@ -184,7 +192,7 @@ export async function importBackup(file: File): Promise<ImportResult> {
 
   await db.transaction(
     'rw',
-    [db.workouts, db.routines, db.customExercises, db.folders, db.measurements, db.foods, db.dishes, db.foodLog, db.importBatches, db.externalRefs, db.adaptationProposals, db.adaptationJobs, db.routineRevisionSnapshots, db.adaptationEventJobs, db.coachRuns, db.coachMessages, db.coachProfiles, db.coachConsents],
+    [db.workouts, db.routines, db.customExercises, db.folders, db.measurements, db.foods, db.dishes, db.foodLog, db.importBatches, db.externalRefs, db.adaptationProposals, db.adaptationJobs, db.routineRevisionSnapshots, db.adaptationEventJobs, db.coachRuns, db.coachMessages, db.coachProfiles, db.coachConsents, db.coachConversations, db.coachDrafts],
     async () => {
       await Promise.all([
         db.workouts.clear(),
@@ -205,6 +213,8 @@ export async function importBackup(file: File): Promise<ImportResult> {
         db.coachMessages.clear(),
         db.coachProfiles.clear(),
         db.coachConsents.clear(),
+        db.coachConversations.clear(),
+        db.coachDrafts.clear(),
       ])
       await Promise.all([
         db.workouts.bulkPut(data.workouts),
@@ -225,6 +235,8 @@ export async function importBackup(file: File): Promise<ImportResult> {
         db.coachMessages.bulkPut((data.coachMessages ?? []).filter((message) => !!message.ownerId)),
         db.coachProfiles.bulkPut((data.coachProfiles ?? []).filter((profile) => !!profile.ownerId)),
         db.coachConsents.bulkPut((data.coachConsents ?? []).filter((consent) => !!consent.ownerId)),
+        db.coachConversations.bulkPut((data.coachConversations ?? []).filter((conversation) => !!conversation.ownerId)),
+        db.coachDrafts.bulkPut((data.coachDrafts ?? []).filter((draft) => !!draft.ownerId)),
       ])
     },
   )

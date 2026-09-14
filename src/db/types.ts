@@ -252,6 +252,9 @@ export interface CoachRunRecord {
   dispatchLeaseExpiresAt?: number
   ownerId: string
   eventId: string
+  conversationId?: string
+  messageId?: string
+  reconciliationState?: 'pending' | 'reconciled' | 'uncertain'
   contextVersion: string
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
   request: CoachRunRequest
@@ -273,10 +276,31 @@ export interface CoachMessage {
   id: string
   ownerId: string
   runId: string
+  conversationId?: string
+  sequence?: number
   role: 'user' | 'assistant'
   content: string
   createdAt: number
   contextVersion: string
+  deliveryState?: 'pending' | 'sent' | 'delivered' | 'failed'
+}
+
+export interface CoachConversation {
+  id: string
+  ownerId: string
+  title: string
+  createdAt: number
+  updatedAt: number
+  nextSequence: number
+  pendingDeletion?: boolean
+}
+
+export interface CoachDraft {
+  id: string
+  ownerId: string
+  conversationId: string
+  content: string
+  updatedAt: number
 }
 
 export interface CoachProfile {

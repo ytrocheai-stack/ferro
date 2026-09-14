@@ -19,6 +19,8 @@ import type {
   CoachMessage,
   CoachProfile,
   CoachConsentRecord,
+  CoachConversation,
+  CoachDraft,
 } from './types'
 import { CONTEXT_INVALIDATED_MESSAGE } from '../lib/adaptationErrors'
 
@@ -42,6 +44,8 @@ export class FerroDB extends Dexie {
   coachMessages!: Table<CoachMessage, string>
   coachProfiles!: Table<CoachProfile, string>
   coachConsents!: Table<CoachConsentRecord, string>
+  coachConversations!: Table<CoachConversation, string>
+  coachDrafts!: Table<CoachDraft, string>
 
   constructor(name = 'ferro') {
     super(name)
@@ -273,12 +277,28 @@ export class FerroDB extends Dexie {
       adaptationJobs: 'id, workoutId, status, createdAt, nextRetryAt, updatedAt, ownerId, requestId, leaseExpiresAt',
       adaptationEventJobs: 'id, analysisId, status, createdAt, nextRetryAt, ownerId',
       routineRevisionSnapshots: 'id, routineId, revision, createdAt, analysisId',
-      coachRuns: 'id, ownerId, eventId, status, createdAt, updatedAt, contextVersion, remoteRunId, [ownerId+eventId]',
-      coachMessages: 'id, ownerId, runId, createdAt, [runId+createdAt]',
+      coachRuns: 'id, ownerId, eventId, conversationId, status, createdAt, updatedAt, contextVersion, remoteRunId, [ownerId+eventId]',
+      coachMessages: 'id, ownerId, runId, conversationId, createdAt, [runId+createdAt], [conversationId+sequence]',
       coachProfiles: 'id, ownerId, revision, updatedAt',
       coachConsents: 'id, ownerId, deviceId, version, enabled, revision, updatedAt',
+      coachConversations: 'id, ownerId, updatedAt, [ownerId+updatedAt]',
+      coachDrafts: 'id, ownerId, conversationId, updatedAt, [ownerId+conversationId]',
     }).upgrade(async (tx) => {
       const runs = await tx.table<CoachRunRecord>('coachRuns').toArray()
+      const conversations = tx.table<CoachConversation>('coachConversations')
+      const messages = tx.table<CoachMessage>('coachMessages')
+      const created = new Map<string, CoachConversation>()
+      const runMap = new Map<string, CoachRunRecord>()
+      const ensureConversation = async (ownerId: string, id: string, title = 'Nueva conversación') => {
+        const key = `${ownerId}:${id}`
+        const cached = created.get(key)
+        if (cached) return cached
+        const existing = await conversations.get(id)
+        if (existing?.ownerId === ownerId) { created.set(key, existing); return existing }
+        const now = Date.now()
+        const next = { id, ownerId, title, createdAt: now, updatedAt: now, nextSequence: 1 } satisfies CoachConversation
+        await conversations.put(next); created.set(key, next); return next
+      }
       const localIds = new Set(runs.map((run) => run.id))
       for (const run of runs) {
         if (!run.remoteRunId && !run.id.startsWith('coach-local-')) {
@@ -292,6 +312,27 @@ export class FerroDB extends Dexie {
               .modify({ runId: run.id })
           }
         }
+        const explicitConversationId = run.request?.event?.conversationId
+        const conversationId = explicitConversationId || `coach-local-${run.eventId}`
+        const repairedRun = { ...run, remoteRunId: run.remoteRunId ?? (!run.id.startsWith('coach-local-') ? run.id : undefined), ...(explicitConversationId ? { conversationId, reconciliationState: run.reconciliationState ?? 'reconciled' } : {}) }
+        if (repairedRun.remoteRunId !== run.remoteRunId || (explicitConversationId && run.conversationId !== conversationId)) await tx.table<CoachRunRecord>('coachRuns').put(repairedRun)
+        runMap.set(run.id, repairedRun)
+        await ensureConversation(run.ownerId, conversationId)
+      }
+      const legacy = new Map<string, CoachConversation>()
+      const ordered = (await messages.toArray()).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+      for (const message of ordered) {
+        const run = runMap.get(message.runId)
+        let conversationId = message.conversationId ?? run?.conversationId ?? (run ? `coach-local-${run.eventId}` : undefined)
+        if (!conversationId) {
+          let fallback = legacy.get(message.ownerId)
+          if (!fallback) { fallback = await ensureConversation(message.ownerId, `coach-history-${message.ownerId}`, 'Historial anterior'); legacy.set(message.ownerId, fallback) }
+          conversationId = fallback.id
+        }
+        const conversation = await ensureConversation(message.ownerId, conversationId)
+        const sequence = message.sequence ?? conversation.nextSequence
+        await messages.put({ ...message, conversationId, sequence, deliveryState: message.deliveryState ?? 'delivered' })
+        await conversations.put({ ...conversation, nextSequence: Math.max(conversation.nextSequence, sequence + 1), updatedAt: Math.max(conversation.updatedAt, message.createdAt) })
       }
     })
   }

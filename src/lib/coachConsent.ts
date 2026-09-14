@@ -4,6 +4,7 @@ const DEVICE_KEY = 'ferro-coach-device-id'
 const CONVERSATION_PREFIX = 'ferro-coach-conversation:'
 import { db } from '../db/db'
 import type { CoachConsentRecord, CoachProfile } from '../db/types'
+import { ensureCoachConversation } from './coachConversations'
 
 export interface CoachConsent {
   userId: string
@@ -46,6 +47,11 @@ export function getCoachConversationId(userId: string): string {
   const id = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `conversation-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
   if (typeof localStorage?.setItem === 'function') localStorage.setItem(key, id)
   return id
+}
+
+/** Returns the durable selected conversation while preserving the old localStorage identity. */
+export async function getSelectedCoachConversation(userId: string) {
+  return ensureCoachConversation(userId, getCoachConversationId(userId))
 }
 
 export function getCoachConsent(userId: string | null | undefined): CoachConsent | null {

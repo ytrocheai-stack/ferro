@@ -3,7 +3,7 @@ import { agentDecisionSchema, coachRunRequestSchema, coachRunResponseSchema, COA
 import { db } from '../db/db'
 import type { CoachMessage, CoachRunRecord, Routine } from '../db/types'
 import { getCoachAccountId } from './coachAccount'
-import { COACH_CONSENT_VERSION, getCoachConsent, getCoachConversationId, getCoachDeviceId, getCoachProfile, readCoachConsentRecord } from './coachConsent'
+import { COACH_CONSENT_VERSION, getCoachConsent, getSelectedCoachConversation, getCoachDeviceId, getCoachProfile, readCoachConsentRecord } from './coachConsent'
 import { normalizeRoutine } from './adaptation'
 import { uid } from './format'
 import { useNutrition } from '../stores/nutrition'
@@ -114,8 +114,9 @@ export async function buildCoachRequest(message: string, causedByEventId?: strin
     readCoachConsentRecord(accountId, consent.deviceId),
   ])
   const recentFinished = workouts.filter((workout) => Number.isFinite(workout.endedAt)).slice(0, 6)
-  const messages = boundConversation(previousMessages)
-  const conversationId = getCoachConversationId(accountId)
+  const conversation = await getSelectedCoachConversation(accountId)
+  const messages = boundConversation(previousMessages.filter((message) => message.conversationId === conversation.id || (!message.conversationId && message.ownerId === accountId)))
+  const conversationId = conversation.id
   const consentRevision = consentRecord?.revision ?? consent.acceptedAt
   const plan = routines.filter((routine) => !routine.retiredAt).map((routine) => ({ sessionId: routine.id, name: routine.name, expectedRevision: routine.revision, scheduledAt: routine.scheduledAt, exercises: normalizeRoutine(routine).exercises.map((exercise, order) => ({ occurrenceId: exercise.occurrenceId ?? `${routine.id}:${order}:${exercise.exerciseId}`, exerciseId: exercise.exerciseId, order, plannedSets: exercise.plannedSets, setTargets: exercise.setTargets ?? [], repRangeMin: exercise.repRangeMin, repRangeMax: exercise.repRangeMax, targetRpeMin: exercise.targetRpeMin, targetRpeMax: exercise.targetRpeMax, notes: exercise.notes })) }))
   const catalogEntries: Array<[string, { id: string; name: string; equipment: string[]; muscles: string[] }]> = [
@@ -199,7 +200,7 @@ async function findRemoteRunByEvent(getToken: () => Promise<string | null>, requ
 
 /** IndexedDB serializa estas transacciones incluso entre conexiones/pestañas. */
 async function admitRun(request: CoachRunRequest): Promise<CoachRunRecord> {
-  return db.transaction('rw', [db.coachRuns, db.coachMessages], async () => {
+  return db.transaction('rw', [db.coachRuns, db.coachMessages, db.coachConversations], async () => {
     const ownerId = request.event.accountId
     const runs = await db.coachRuns.where('ownerId').equals(ownerId).toArray()
     const existing = runs.find((run) => run.eventId === request.event.id || (
@@ -210,12 +211,17 @@ async function admitRun(request: CoachRunRequest): Promise<CoachRunRecord> {
     if (existing) return existing
     if (runs.some(activeRun)) throw new Error('Ya existe una ejecución activa del coach. Espera a que termine o cancélala.')
     const now = Date.now()
+    const conversationId = request.event.conversationId ?? `coach-local-${request.event.id}`
+    const conversation = await db.coachConversations.get(conversationId)
+    const sequence = conversation?.nextSequence ?? 1
     const run: CoachRunRecord = {
       id: `coach-local-${request.event.id}`, ownerId, eventId: request.event.id,
+      conversationId, messageId: `coach-message-${request.event.id}`, reconciliationState: 'pending',
       contextVersion: request.context.version, status: 'queued', request, createdAt: now, updatedAt: now,
     }
     await db.coachRuns.add(run)
-    await db.coachMessages.add({ id: `coach-message-${run.id}`, ownerId, runId: run.id, role: 'user', content: String(request.event.payload?.message ?? ''), createdAt: now, contextVersion: run.contextVersion })
+    await db.coachMessages.add({ id: `coach-message-${run.id}`, ownerId, runId: run.id, conversationId, sequence, deliveryState: 'pending', role: 'user', content: String(request.event.payload?.message ?? ''), createdAt: now, contextVersion: run.contextVersion })
+    if (conversation) await db.coachConversations.put({ ...conversation, nextSequence: sequence + 1, updatedAt: now })
     return run
   })
 }
@@ -223,7 +229,7 @@ async function admitRun(request: CoachRunRequest): Promise<CoachRunRecord> {
 /** Fusiona la fila vigente dentro de la transacción, no el snapshot anterior al fetch. */
 async function reconcileRun(localId: string, value: unknown): Promise<CoachRunRecord> {
   const parsed = coachRunResponseSchema.parse(value)
-  return db.transaction('rw', [db.coachRuns, db.coachMessages], async () => {
+  return db.transaction('rw', [db.coachRuns, db.coachMessages, db.coachConversations], async () => {
     const local = await db.coachRuns.get(localId)
     if (!local) throw new Error('La ejecución local del coach ya no existe')
     if (parsed.run.accountId !== local.ownerId || parsed.run.eventId !== local.eventId || parsed.run.contextVersion !== local.contextVersion ||
@@ -251,10 +257,12 @@ async function reconcileRun(localId: string, value: unknown): Promise<CoachRunRe
         .filter((message) => message.ownerId === next.ownerId && message.role === 'assistant').first()
       const content = next.decision.kind === 'ask'
         ? [next.decision.explanation, ...next.decision.questions].join('\n\n') : next.decision.explanation
+      const assistantConversation = next.conversationId ? await db.coachConversations.get(next.conversationId) : undefined
       await db.coachMessages.put({
         ...previous, id: previous?.id ?? `coach-assistant-${localId}`, ownerId: next.ownerId,
-        runId: localId, role: 'assistant', content, createdAt: previous?.createdAt ?? Date.now(), contextVersion: next.contextVersion,
+        runId: localId, conversationId: next.conversationId, sequence: previous?.sequence ?? assistantConversation?.nextSequence, deliveryState: 'delivered', role: 'assistant', content, createdAt: previous?.createdAt ?? Date.now(), contextVersion: next.contextVersion,
       })
+      if (!previous && assistantConversation) await db.coachConversations.update(assistantConversation.id, { nextSequence: assistantConversation.nextSequence + 1, updatedAt: Date.now() })
     }
     return next
   })
