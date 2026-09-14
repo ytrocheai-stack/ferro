@@ -155,21 +155,67 @@ export async function buildCoachRequest(message: string, causedByEventId?: strin
   })
 }
 
-async function saveRun(request: CoachRunRequest, run: Partial<CoachRunRecord> & Pick<CoachRunRecord, 'id' | 'status'>): Promise<void> {
-  const ownerId = request.event.accountId
-  const now = Date.now()
-  const record: CoachRunRecord = {
-    id: run.id, ownerId, eventId: request.event.id, contextVersion: request.context.version, status: run.status, request,
-    createdAt: run.createdAt ?? now, updatedAt: now, ...(run.decision ? { decision: run.decision } : {}), ...(run.error ? { error: run.error } : {}), ...(run.usage ? { usage: run.usage } : {}), ...(run.startedAt ? { startedAt: run.startedAt } : {}), ...(run.endedAt ? { endedAt: run.endedAt } : {}), ...(run.appliedAt ? { appliedAt: run.appliedAt } : {}),
-  }
-  await db.coachRuns.put(record)
+const activeRun = (run: CoachRunRecord) => run.status === 'queued' || run.status === 'running'
+const remoteId = (run: CoachRunRecord) => run.remoteRunId ?? (run.id.startsWith('coach-local-') ? undefined : run.id)
+const DISPATCH_LEASE_MS = 60_000
+
+/** IndexedDB serializa estas transacciones incluso entre conexiones/pestañas. */
+async function admitRun(request: CoachRunRequest): Promise<CoachRunRecord> {
+  return db.transaction('rw', [db.coachRuns, db.coachMessages], async () => {
+    const ownerId = request.event.accountId
+    const runs = await db.coachRuns.where('ownerId').equals(ownerId).toArray()
+    const existing = runs.find((run) => run.eventId === request.event.id || (
+      request.event.type === 'session-finished' && run.request.event.type === 'session-finished' &&
+      (run.request.event.payload?.workoutId === request.event.payload?.workoutId ||
+        String(run.request.event.payload?.message ?? '').includes(`Sesión terminada ${request.event.payload?.workoutId}.`))
+    ))
+    if (existing) return existing
+    if (runs.some(activeRun)) throw new Error('Ya existe una ejecución activa del coach. Espera a que termine o cancélala.')
+    const now = Date.now()
+    const run: CoachRunRecord = {
+      id: `coach-local-${request.event.id}`, ownerId, eventId: request.event.id,
+      contextVersion: request.context.version, status: 'queued', request, createdAt: now, updatedAt: now,
+    }
+    await db.coachRuns.add(run)
+    await db.coachMessages.add({ id: `coach-message-${run.id}`, ownerId, runId: run.id, role: 'user', content: String(request.event.payload?.message ?? ''), createdAt: now, contextVersion: run.contextVersion })
+    return run
+  })
 }
 
-async function saveAssistantMessage(run: CoachRunRecord): Promise<void> {
-  if (!run.decision) return Promise.resolve()
-  const content = run.decision.kind === 'ask' ? run.decision.questions.join('\n') : run.decision.explanation
-  const message: CoachMessage = { id: `coach-message-${run.id}`, ownerId: run.ownerId, runId: run.id, role: 'assistant', content, createdAt: Date.now(), contextVersion: run.contextVersion }
-  await db.coachMessages.put(message)
+/** Fusiona la fila vigente dentro de la transacción, no el snapshot anterior al fetch. */
+async function reconcileRun(localId: string, value: unknown): Promise<CoachRunRecord> {
+  const parsed = coachRunResponseSchema.parse(value)
+  return db.transaction('rw', [db.coachRuns, db.coachMessages], async () => {
+    const local = await db.coachRuns.get(localId)
+    if (!local) throw new Error('La ejecución local del coach ya no existe')
+    if (parsed.run.accountId !== local.ownerId || parsed.run.eventId !== local.eventId || parsed.run.contextVersion !== local.contextVersion ||
+      (remoteId(local) && remoteId(local) !== parsed.run.id)) throw new Error('La respuesta del coach no corresponde a la ejecución local')
+    const ignoreStatus = local.status === 'cancelled' || local.status === 'completed' ||
+      (local.status === 'failed' && (!isRetryableCoachError(local.error) || parsed.run.status === 'queued' || parsed.run.status === 'running')) ||
+      (local.status === 'running' && parsed.run.status === 'queued')
+    const next: CoachRunRecord = {
+      ...local, remoteRunId: parsed.run.id, updatedAt: Date.now(),
+      dispatchToken: undefined, dispatchLeaseExpiresAt: undefined,
+      ...(!ignoreStatus ? {
+        status: parsed.run.status, decision: parsed.decision ?? local.decision,
+        error: parsed.error, usage: parsed.run.usage ?? local.usage,
+        startedAt: parsed.run.startedAt ?? local.startedAt, endedAt: parsed.run.endedAt ?? local.endedAt,
+        appliedAt: local.appliedAt ?? parsed.appliedAt,
+      } : {}),
+    }
+    await db.coachRuns.put(next)
+    if (next.decision && next.status !== 'cancelled') {
+      const previous = await db.coachMessages.where('runId').equals(localId)
+        .filter((message) => message.ownerId === next.ownerId && message.role === 'assistant').first()
+      const content = next.decision.kind === 'ask'
+        ? [next.decision.explanation, ...next.decision.questions].join('\n\n') : next.decision.explanation
+      await db.coachMessages.put({
+        ...previous, id: previous?.id ?? `coach-assistant-${localId}`, ownerId: next.ownerId,
+        runId: localId, role: 'assistant', content, createdAt: previous?.createdAt ?? Date.now(), contextVersion: next.contextVersion,
+      })
+    }
+    return next
+  })
 }
 
 export function isRetryableCoachError(error: string | undefined): boolean {
@@ -180,28 +226,31 @@ export function isRetryableCoachError(error: string | undefined): boolean {
   ]).has(error))
 }
 
-function fromResponse(value: unknown, request: CoachRunRequest, ownerId: string): CoachRunRecord {
-  const parsed = coachRunResponseSchema.parse(value)
-  return { id: parsed.run.id, ownerId, eventId: parsed.run.eventId, contextVersion: parsed.run.contextVersion, status: parsed.run.status, request, ...(parsed.decision ? { decision: parsed.decision } : {}), ...(parsed.error ? { error: parsed.error } : {}), ...(parsed.run.usage ? { usage: parsed.run.usage } : {}), createdAt: parsed.run.startedAt ?? Date.now(), updatedAt: Date.now(), ...(parsed.run.startedAt ? { startedAt: parsed.run.startedAt } : {}), ...(parsed.run.endedAt ? { endedAt: parsed.run.endedAt } : {}), ...(parsed.appliedAt ? { appliedAt: parsed.appliedAt } : {}) }
-}
-
-export async function startCoachRun(getToken: () => Promise<string | null>, message: string, options: { causedByEventId?: string } = {}): Promise<CoachRunRecord> {
-  const request = await buildCoachRequest(message, options.causedByEventId)
-  if (!request) throw new Error('Activa el consentimiento del coach y escribe un mensaje')
-  const ownerId = request.event.accountId
-  const localId = `coach-local-${request.event.id}`
-  const existing = await db.coachRuns.get(localId)
-  if (existing) return existing
-  const active = (await db.coachRuns.where('ownerId').equals(ownerId).toArray()).find((run) => run.status === 'queued' || run.status === 'running')
-  if (active) throw new Error('Ya existe una ejecución activa del coach. Espera a que termine o cancélala.')
-  await saveRun(request, { id: localId, status: 'queued' })
-  await db.coachMessages.put({ id: `coach-message-${localId}`, ownerId, runId: localId, role: 'user', content: String(request.event.payload?.message ?? ''), createdAt: Date.now(), contextVersion: request.context.version })
+async function dispatchRun(getToken: () => Promise<string | null>, localId: string): Promise<CoachRunRecord> {
+  const initial = (await db.coachRuns.get(localId))!
   const url = workerUrl()
-  if (!url || !navigator.onLine) return (await db.coachRuns.get(localId))!
+  if (!url || !navigator.onLine) return initial
+  const token = await getToken()
+  if (!token) return (await db.coachRuns.get(localId))!
+  const claimed = await db.transaction('rw', db.coachRuns, async () => {
+    const local = await db.coachRuns.get(localId)
+    if (!local || !activeRun(local) || remoteId(local) || (local.dispatchLeaseExpiresAt ?? 0) > Date.now() ||
+      local.ownerId !== getCoachAccountId() || !getCoachConsent(local.ownerId)) return undefined
+    // Las bases antiguas pueden contener varios pendientes: se envían de uno
+    // en uno, conservando todas las filas del historial heredado.
+    const siblings = await db.coachRuns.where('ownerId').equals(local.ownerId).toArray()
+    if (siblings.some((run) => run.id !== localId && activeRun(run) &&
+      (remoteId(run) || (run.dispatchLeaseExpiresAt ?? 0) > Date.now()))) return undefined
+    const request = normalizeCoachRequestForTransport(local.request)
+    const next: CoachRunRecord = { ...local, request, contextVersion: request.context.version, dispatchToken: uid(), dispatchLeaseExpiresAt: Date.now() + DISPATCH_LEASE_MS, updatedAt: Date.now() }
+    await db.coachRuns.put(next)
+    return next
+  })
+  if (!claimed) return (await db.coachRuns.get(localId))!
+  const request = claimed.request
   let outcomeUnknown = false
+  let value: unknown
   try {
-    const token = await getToken()
-    if (!token) return (await db.coachRuns.get(localId))!
     outcomeUnknown = true
     const response = await fetch(`${url}/v1/coach/runs`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Idempotency-Key': request.event.id, 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': request.event.deviceId }, body: JSON.stringify(request) })
     const text = await response.text()
@@ -210,45 +259,47 @@ export async function startCoachRun(getToken: () => Promise<string | null>, mess
       const reason = (() => { try { return JSON.parse(text).error } catch { return undefined } })()
       throw new Error(typeof reason === 'string' ? reason : `No se pudo iniciar el coach (${response.status})`)
     }
-    const remote = fromResponse(JSON.parse(text), request, ownerId)
-    await db.coachRuns.delete(localId)
-    await saveRun(request, remote)
-    await saveAssistantMessage(remote)
-    return remote
+    value = JSON.parse(text)
   } catch (cause) {
-    const failed = { ...(await db.coachRuns.get(localId))!, status: 'failed' as const, error: outcomeUnknown ? 'unknown-outcome' : cause instanceof Error ? cause.message : 'No se pudo iniciar el coach', endedAt: Date.now(), updatedAt: Date.now() }
-    await db.coachRuns.put(failed)
-    return failed
+    return db.transaction('rw', db.coachRuns, async () => {
+      const current = (await db.coachRuns.get(localId))!
+      if (!activeRun(current) || remoteId(current) || current.dispatchToken !== claimed.dispatchToken) return current
+      const failed: CoachRunRecord = { ...current, status: 'failed', error: outcomeUnknown ? 'unknown-outcome' : cause instanceof Error ? cause.message : 'No se pudo iniciar el coach', endedAt: Date.now(), updatedAt: Date.now(), dispatchToken: undefined, dispatchLeaseExpiresAt: undefined }
+      await db.coachRuns.put(failed)
+      return failed
+    })
   }
+  // Un fallo de persistencia aborta la fusión y conserva la solicitud encolada.
+  // Al vencer el lease se puede reenviar con la misma clave tras una interrupción.
+  return reconcileRun(localId, value)
+}
+
+export async function startCoachRun(getToken: () => Promise<string | null>, message: string, options: { causedByEventId?: string } = {}): Promise<CoachRunRecord> {
+  const request = await buildCoachRequest(message, options.causedByEventId)
+  if (!request) throw new Error('Activa el consentimiento del coach y escribe un mensaje')
+  const local = await admitRun(request)
+  return dispatchRun(getToken, local.id)
 }
 
 /** Encola el evento durable de una sesión terminada; App lo sincroniza cuando hay cuenta/red. */
 export async function queueCoachSessionFinished(workoutId: string): Promise<void> {
   const request = await buildCoachRequest(`Sesión terminada ${workoutId}. Revisa el contexto y dime si hay algo que deba observar antes de mi próximo entrenamiento.`, undefined, 'session-finished', { eventId: `coach-session-finished-${workoutId}`, payload: { workoutId } })
   if (!request) return
-  const localId = `coach-local-${request.event.id}`
-  if (await db.coachRuns.get(localId)) return
-  const legacyDuplicate = (await db.coachRuns.where('ownerId').equals(request.event.accountId).toArray()).some((run) => run.request.event.type === 'session-finished' && (run.request.event.payload?.workoutId === workoutId || String(run.request.event.payload?.message ?? '').includes(`Sesión terminada ${workoutId}.`)))
-  if (legacyDuplicate) return
-  await saveRun(request, { id: localId, status: 'queued' })
-  await db.coachMessages.put({ id: `coach-message-${localId}`, ownerId: request.event.accountId, runId: localId, role: 'user', content: String(request.event.payload?.message ?? ''), createdAt: Date.now(), contextVersion: request.context.version })
+  await admitRun(request)
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('nextrep:coach-wake'))
 }
 
 export async function refreshCoachRun(getToken: () => Promise<string | null>, runId: string): Promise<CoachRunRecord | undefined> {
   const local = await db.coachRuns.get(runId)
-  if (!local || runId.startsWith('coach-local-') || !workerUrl() || !navigator.onLine) return local
+  if (!local || !remoteId(local) || !workerUrl() || !navigator.onLine) return local
   const token = await getToken()
   if (!token) return local
-  const response = await fetch(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(runId)}`, { headers: { Authorization: `Bearer ${token}` } })
+  const response = await fetch(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(remoteId(local)!)}`, { headers: { Authorization: `Bearer ${token}` } })
   if (!response.ok) throw new Error(`No se pudo consultar el estado del coach (${response.status})`)
-  const remote = fromResponse(await response.json(), local.request, local.ownerId)
-  await db.coachRuns.put(remote)
-  if (remote.decision) await saveAssistantMessage(remote)
-  return remote
+  return reconcileRun(local.id, await response.json())
 }
 
-/** Reenvía únicamente runs locales que nunca llegaron al Worker; la misma clave evita duplicados. */
+/** Reconcilia pendientes sin ID remoto usando siempre la misma clave idempotente. */
 let coachSync: { ownerId: string; promise: Promise<void> } | undefined
 
 export function syncPendingCoachRuns(getToken: () => Promise<string | null>): Promise<void> {
@@ -270,35 +321,11 @@ async function syncPendingCoachRunsInternal(getToken: () => Promise<string | nul
     try { await cancelCoachRun(getToken, run.id) } catch { /* Se conserva para reconciliar al reconectar. */ }
   }
   if (!getCoachConsent(ownerId)) return
-  let token: string | null
-  try { token = await getToken() } catch { return }
-  if (!token) return
-  const pending = (await db.coachRuns.toArray()).filter((run) => run.ownerId === ownerId && run.id.startsWith('coach-local-') && run.status === 'queued')
+  const pending = (await db.coachRuns.where('ownerId').equals(ownerId).toArray()).filter((run) => !remoteId(run) && activeRun(run))
   for (const local of pending) {
     if (getCoachAccountId() !== ownerId) return
     if (!getCoachConsent(ownerId)) return
-    let outcomeUnknown = false
-    try {
-      const request = normalizeCoachRequestForTransport(local.request)
-      const normalizedLocal = request.context.version === local.contextVersion ? { ...local, request } : { ...local, request, contextVersion: request.context.version }
-      await db.coachRuns.put(normalizedLocal)
-      outcomeUnknown = true
-      const response = await fetch(`${url}/v1/coach/runs`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Idempotency-Key': request.event.id, 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': request.event.deviceId }, body: JSON.stringify(request) })
-      const text = await response.text()
-      outcomeUnknown = false
-      if (!response.ok) {
-        const reason = (() => { try { return JSON.parse(text).error } catch { return undefined } })()
-        await db.coachRuns.put({ ...normalizedLocal, status: 'failed', error: typeof reason === 'string' ? reason : `Worker ${response.status}`, endedAt: Date.now(), updatedAt: Date.now() })
-        continue
-      }
-      const remote = fromResponse(JSON.parse(text), request, ownerId)
-      await db.coachRuns.delete(normalizedLocal.id)
-      await db.coachRuns.put(remote)
-      await saveAssistantMessage(remote)
-    } catch (cause) {
-      const current = await db.coachRuns.get(local.id)
-      if (current) await db.coachRuns.put({ ...current, status: 'failed', error: outcomeUnknown ? 'unknown-outcome' : cause instanceof Error ? cause.message : 'No se pudo iniciar el coach', endedAt: Date.now(), updatedAt: Date.now() })
-    }
+    await dispatchRun(getToken, local.id)
   }
 }
 
@@ -308,12 +335,15 @@ export async function cancelCoachRun(getToken: () => Promise<string | null>, run
   if (workerUrl() && navigator.onLine) {
     const token = await getToken()
     if (!token) throw new Error('Falta sesión para confirmar la cancelación remota')
-    if (!runId.startsWith('coach-local-')) {
-      const response = await fetch(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': local.request.event.deviceId }, body: '{}' })
+    if (remoteId(local)) {
+      const response = await fetch(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(remoteId(local)!)}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': local.request.event.deviceId }, body: '{}' })
       if (!response.ok && response.status !== 404) throw new Error('No se pudo confirmar la cancelación remota')
     }
   }
-  await db.coachRuns.put({ ...local, status: 'cancelled', error: 'cancelled', endedAt: Date.now(), updatedAt: Date.now() })
+  await db.transaction('rw', db.coachRuns, async () => {
+    const current = await db.coachRuns.get(runId)
+    if (current) await db.coachRuns.put({ ...current, status: 'cancelled', error: 'cancelled', endedAt: current.endedAt ?? Date.now(), updatedAt: Date.now() })
+  })
 }
 
 /** Reintento explícito: una ejecución incierta no es una continuación completada. */

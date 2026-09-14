@@ -22,7 +22,7 @@ import type {
 } from './types'
 import { CONTEXT_INVALIDATED_MESSAGE } from '../lib/adaptationErrors'
 
-class FerroDB extends Dexie {
+export class FerroDB extends Dexie {
   workouts!: Table<Workout, string>
   routines!: Table<Routine, string>
   customExercises!: Table<CustomExercise, string>
@@ -43,8 +43,8 @@ class FerroDB extends Dexie {
   coachProfiles!: Table<CoachProfile, string>
   coachConsents!: Table<CoachConsentRecord, string>
 
-  constructor() {
-    super('ferro')
+  constructor(name = 'ferro') {
+    super(name)
     this.version(1).stores({
       workouts: 'id, startedAt',
       routines: 'id, sortOrder',
@@ -254,6 +254,45 @@ class FerroDB extends Dexie {
       coachMessages: 'id, ownerId, runId, createdAt, [runId+createdAt]',
       coachProfiles: 'id, ownerId, revision, updatedAt',
       coachConsents: 'id, ownerId, deviceId, version, enabled, revision, updatedAt',
+    })
+    // v10 (compartida con T4): aditiva. Conserva todos los stores, índices e IDs
+    // anteriores; los IDs remotos heredados siguen siendo identidades locales válidas.
+    this.version(10).stores({
+      workouts: 'id, startedAt, routineId, routineRevision',
+      routines: 'id, sortOrder, folderId, revision, coachReviewed, scheduledAt, retiredAt',
+      customExercises: 'id',
+      folders: 'id, sortOrder',
+      measurements: 'id, date, kind, [kind+date]',
+      photos: 'id, date',
+      foods: 'id, name, source, usedAt, offCode, usdaFdcId',
+      dishes: 'id, name',
+      foodLog: 'id, date, [date+meal]',
+      importBatches: 'id, source, createdAt, status',
+      externalRefs: '&key, source, entity, localId, batchId',
+      adaptationProposals: 'id, analysisId, baseRoutineId, baseRoutineRevision, status, createdAt, candidateId, occurrenceId, supersedesProposalId, ownerId, workoutId, requestId',
+      adaptationJobs: 'id, workoutId, status, createdAt, nextRetryAt, updatedAt, ownerId, requestId, leaseExpiresAt',
+      adaptationEventJobs: 'id, analysisId, status, createdAt, nextRetryAt, ownerId',
+      routineRevisionSnapshots: 'id, routineId, revision, createdAt, analysisId',
+      coachRuns: 'id, ownerId, eventId, status, createdAt, updatedAt, contextVersion, remoteRunId, [ownerId+eventId]',
+      coachMessages: 'id, ownerId, runId, createdAt, [runId+createdAt]',
+      coachProfiles: 'id, ownerId, revision, updatedAt',
+      coachConsents: 'id, ownerId, deviceId, version, enabled, revision, updatedAt',
+    }).upgrade(async (tx) => {
+      const runs = await tx.table<CoachRunRecord>('coachRuns').toArray()
+      const localIds = new Set(runs.map((run) => run.id))
+      for (const run of runs) {
+        if (!run.remoteRunId && !run.id.startsWith('coach-local-')) {
+          await tx.table<CoachRunRecord>('coachRuns').put({ ...run, remoteRunId: run.id })
+          // v8/v9 dejaban el mensaje del usuario apuntando al ID local eliminado.
+          // Repara solo la referencia, sin borrar burbujas ni modificar timestamps.
+          const oldId = `coach-local-${run.eventId}`
+          if (!localIds.has(oldId)) {
+            await tx.table<CoachMessage>('coachMessages').where('runId').equals(oldId)
+              .filter((message) => message.ownerId === run.ownerId)
+              .modify({ runId: run.id })
+          }
+        }
+      }
     })
   }
 }

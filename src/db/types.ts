@@ -244,7 +244,12 @@ export interface AdaptationEventJob {
 }
 
 export interface CoachRunRecord {
+  /** Identidad local estable; nunca se sustituye al adoptar una respuesta. */
   id: string
+  remoteRunId?: string
+  /** Lease local de transporte compartido entre pestañas; no se envía al Worker. */
+  dispatchToken?: string
+  dispatchLeaseExpiresAt?: number
   ownerId: string
   eventId: string
   contextVersion: string
