@@ -30,7 +30,7 @@ import { backupSchema, normalizeBackup, photosBackupSchema, type ValidBackup } f
 import { normalizeRoutine } from './adaptation'
 import { CONTEXT_INVALIDATED_MESSAGE } from './adaptationErrors'
 import { getCoachAccountId } from './coachAccount'
-import { getCoachDeviceId } from './coachConsent'
+import { getCoachConsent, getCoachDeviceId, readCoachConsentRecord } from './coachConsent'
 
 interface BackupFile {
   app: 'ferro'
@@ -191,6 +191,8 @@ export async function importBackup(file: File): Promise<ImportResult> {
   const problem = validateBackup(parsed)
   if (problem) throw new Error(`El backup está dañado (${problem}); no se ha modificado nada`)
   const data = normalizeBackup(parsed as ValidBackup) as BackupFile
+  const normalizedProblem = validateBackup(data)
+  if (normalizedProblem) throw new Error(`El backup está dañado tras normalizar (${normalizedProblem}); no se ha modificado nada`)
   const activeOwner = getCoachAccountId()
   const coachOwners = new Set([
     ...(data.coachRuns ?? []).map((record) => record.ownerId),
@@ -200,8 +202,15 @@ export async function importBackup(file: File): Promise<ImportResult> {
     ...(data.coachConversations ?? []).map((record) => record.ownerId),
     ...(data.coachDrafts ?? []).map((record) => record.ownerId),
   ])
+  if (coachOwners.size > 0 && !activeOwner) throw new Error('Se requiere una cuenta activa para importar datos del Coach; no se ha modificado nada')
   if (activeOwner && [...coachOwners].some((ownerId) => ownerId !== activeOwner)) throw new Error('El backup pertenece a otra cuenta; no se ha modificado nada')
-  if ((data.coachConsents ?? []).some((consent) => consent.enabled && consent.deviceId !== getCoachDeviceId())) throw new Error('El consentimiento del backup no es válido en este dispositivo; no se ha modificado nada')
+  const preservedConsents = await db.coachConsents.toArray()
+  if (activeOwner) {
+    const currentDeviceId = getCoachDeviceId()
+    const localConsent = getCoachConsent(activeOwner)
+    const storedConsent = await readCoachConsentRecord(activeOwner, currentDeviceId)
+    if (localConsent && !storedConsent) preservedConsents.push({ id: `${activeOwner}:${currentDeviceId}`, ownerId: activeOwner, deviceId: currentDeviceId, version: localConsent.version, enabled: true, revision: localConsent.acceptedAt, acceptedAt: localConsent.acceptedAt, updatedAt: localConsent.acceptedAt })
+  }
 
   await db.transaction(
     'rw',
@@ -244,12 +253,12 @@ export async function importBackup(file: File): Promise<ImportResult> {
         db.adaptationJobs.bulkPut((data.adaptationJobs ?? []).map(sanitizeImportedJob).filter((job) => job !== null)),
         db.routineRevisionSnapshots.bulkPut(data.routineRevisionSnapshots ?? []),
         db.adaptationEventJobs.bulkPut((data.adaptationEventJobs ?? []).filter((job) => !!job.ownerId)),
-        db.coachRuns.bulkPut((data.coachRuns ?? []).filter((run) => !!run.ownerId)),
-        db.coachMessages.bulkPut((data.coachMessages ?? []).filter((message) => !!message.ownerId)),
-        db.coachProfiles.bulkPut((data.coachProfiles ?? []).filter((profile) => !!profile.ownerId)),
-        db.coachConsents.bulkPut((data.coachConsents ?? []).filter((consent) => !!consent.ownerId)),
-        db.coachConversations.bulkPut((data.coachConversations ?? []).filter((conversation) => !!conversation.ownerId)),
-        db.coachDrafts.bulkPut((data.coachDrafts ?? []).filter((draft) => !!draft.ownerId)),
+        db.coachRuns.bulkPut(data.coachRuns ?? []),
+        db.coachMessages.bulkPut(data.coachMessages ?? []),
+        db.coachProfiles.bulkPut(data.coachProfiles ?? []),
+        db.coachConsents.bulkPut(preservedConsents),
+        db.coachConversations.bulkPut(data.coachConversations ?? []),
+        db.coachDrafts.bulkPut(data.coachDrafts ?? []),
       ])
     },
   )

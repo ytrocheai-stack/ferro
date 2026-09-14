@@ -282,7 +282,7 @@ async function reconcileRun(localId: string, value: unknown): Promise<CoachRunRe
 
 export function isRetryableCoachError(error: string | undefined): boolean {
   return Boolean(error && new Set([
-    'unknown-outcome', 'uncertain-outcome', 'coach-call-timeout', 'provider-timeout',
+    'legacy-imported', 'unknown-outcome', 'uncertain-outcome', 'coach-call-timeout', 'provider-timeout',
     'agent-deadline-exceeded', 'coach-global-deadline-exceeded', 'provider-rate-limited',
     'provider-server-error', 'server-error', 'workflow-create-failed', 'workflow-not-configured',
   ]).has(error))
@@ -328,7 +328,7 @@ async function dispatchRun(getToken: () => Promise<string | null>, localId: stri
   if (!token) return (await db.coachRuns.get(localId))!
   const claimed = await db.transaction('rw', db.coachRuns, async () => {
     const local = await db.coachRuns.get(localId)
-    if (!local || !activeRun(local) || remoteId(local) || (local.dispatchLeaseExpiresAt ?? 0) > Date.now() ||
+    if (!local || local.legacy || !activeRun(local) || remoteId(local) || (local.dispatchLeaseExpiresAt ?? 0) > Date.now() ||
       local.ownerId !== getCoachAccountId() || !getCoachConsent(local.ownerId)) return undefined
     // Las bases antiguas pueden contener varios pendientes: se envían de uno
     // en uno, conservando todas las filas del historial heredado.
@@ -428,7 +428,7 @@ async function syncPendingCoachRunsInternal(getToken: () => Promise<string | nul
     try { await cancelCoachRun(getToken, run.id) } catch { /* Se conserva para reconciliar al reconectar. */ }
   }
   if (!getCoachConsent(ownerId)) return
-  const pending = (await db.coachRuns.where('ownerId').equals(ownerId).toArray()).filter((run) => !remoteId(run) && activeRun(run))
+  const pending = (await db.coachRuns.where('ownerId').equals(ownerId).toArray()).filter((run) => !run.legacy && !remoteId(run) && activeRun(run))
   for (const local of pending) {
     if (getCoachAccountId() !== ownerId) return
     if (!getCoachConsent(ownerId)) return
@@ -473,7 +473,7 @@ export async function cancelCoachRun(getToken: () => Promise<string | null>, run
 export async function retryCoachRun(getToken: () => Promise<string | null>, runId: string): Promise<CoachRunRecord> {
   const previous = await db.coachRuns.get(runId)
   if (!previous || previous.ownerId !== getCoachAccountId() || !isRetryableCoachError(previous.error)) throw new Error('Esta ejecución no tiene un fallo recuperable para reintentar')
-  await db.coachRuns.update(runId, { status: 'queued', error: undefined, endedAt: undefined, updatedAt: Date.now() })
+  await db.coachRuns.update(runId, { status: 'queued', legacy: false, error: undefined, endedAt: undefined, updatedAt: Date.now() })
   return dispatchRun(getToken, runId)
 }
 

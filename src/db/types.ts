@@ -255,6 +255,8 @@ export interface CoachRunRecord {
   conversationId?: string
   messageId?: string
   reconciliationState?: 'pending' | 'reconciled' | 'uncertain'
+  /** Importado desde un backup; requiere reintento local explícito antes de enviar. */
+  legacy?: boolean
   contextVersion: string
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
   request: CoachRunRequest
