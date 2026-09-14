@@ -1,5 +1,4 @@
 /* eslint-disable react-refresh/only-export-components -- keypad constants are shared by its input controls. */
-import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import { IconCheck } from './icons'
 
@@ -8,6 +7,7 @@ import { IconCheck } from './icons'
 
 interface KeypadTarget {
   kind: 'weight' | 'reps'
+  input: HTMLInputElement
   /** suma delta al valor actual del input registrado */
   apply: (delta: number) => void
 }
@@ -24,52 +24,27 @@ export const useKeypad = create<KeypadState>()((set) => ({
   unregister: () => set({ target: null }),
 }))
 
-/**
- * Desplazamiento (px) que hay que subir un elemento `fixed bottom-0` para que no quede tapado
- * por el teclado en iOS: allí el teclado encoge `visualViewport` pero no el layout viewport, así
- * que un elemento fijo sigue anclado al fondo de la pantalla completa, bajo el teclado. En
- * Android/desktop `visualViewport` ya sigue al teclado y el offset resultante es 0.
- */
-function useVisualViewportOffset(): number {
-  const [offset, setOffset] = useState(0)
-  useEffect(() => {
-    const vv = window.visualViewport
-    if (!vv) return
-    const update = () => {
-      const covered = window.innerHeight - (vv.height + vv.offsetTop)
-      setOffset(Math.max(0, Math.round(covered)))
-    }
-    update()
-    vv.addEventListener('resize', update)
-    vv.addEventListener('scroll', update)
-    return () => {
-      vv.removeEventListener('resize', update)
-      vv.removeEventListener('scroll', update)
-    }
-  }, [])
-  return offset
-}
-
 export function GymKeypadBar() {
   const target = useKeypad((s) => s.target)
-  const keyboardOffset = useVisualViewportOffset()
   if (!target) return null
 
   const deltas = target.kind === 'weight' ? [-2.5, 2.5, 5] : [-1, 1]
 
   return (
     <div
-      className="fixed inset-x-0 bottom-0 z-[70]"
-      style={{
-        paddingBottom: 'env(safe-area-inset-bottom)',
-        transform: keyboardOffset ? `translateY(-${keyboardOffset}px)` : undefined,
+      className="gym-keypad dock-card"
+      role="group"
+      aria-label="Ajustar peso o repeticiones"
+      onBlur={(event) => {
+        if (event.relatedTarget === target.input || (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) return
+        useKeypad.getState().unregister()
       }}
     >
-      <div className="mx-auto flex max-w-md items-center gap-2 border-t border-border bg-surface-2/98 px-3 py-2 backdrop-blur">
+      <div className="flex items-center gap-2 px-3 py-2">
         {deltas.map((d) => (
           <button
             key={d}
-            className="pressable min-h-11 flex-1 rounded-xl bg-surface font-mono text-sm font-bold tabular-nums"
+            className="pressable min-h-11 flex-1 rounded-xl bg-surface text-sm font-bold tabular-nums"
             // preventDefault evita robarle el foco al input
             onPointerDown={(e) => e.preventDefault()}
             onClick={() => target.apply(d)}
@@ -78,9 +53,13 @@ export function GymKeypadBar() {
           </button>
         ))}
         <button
-          className="pressable flex min-h-11 flex-1 items-center justify-center rounded-xl bg-primary text-white"
-          onClick={() => (document.activeElement as HTMLElement | null)?.blur()}
-          aria-label="Listo"
+          className="pressable flex min-h-11 flex-1 items-center justify-center rounded-xl bg-primary-strong text-on-primary"
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => {
+            target.input.blur()
+            useKeypad.getState().unregister()
+          }}
+          aria-label="Listo, terminar edición"
         >
           <IconCheck size={17} />
         </button>

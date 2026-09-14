@@ -85,6 +85,8 @@ export interface AgentLoopAttempt {
   sent: boolean
 }
 
+export const DEFAULT_AGENT_CALL_TIMEOUT_MS = 120_000
+
 /** Adaptadores comparten el orden de turnos; los pasos pueden guardar sus resultados. */
 export async function runAgentProtocol<D>(options: {
   maxCalls: number
@@ -98,13 +100,15 @@ export async function runAgentProtocol<D>(options: {
   turns?: unknown[]
   now?: () => number
   signal?: AbortSignal
+  callTimeoutMs?: number
 }): Promise<{ decision: D; turns: unknown[] }> {
   const now = options.now ?? Date.now
   const turns = [...(options.turns ?? [])]
   for (let number = 1; number <= options.maxCalls; number++) {
     if (options.signal?.aborted) throw new Error('cancelled')
-    const remaining = options.adapterChecksDeadline ? 120_000 : options.deadlineAt - now()
+    const remaining = options.adapterChecksDeadline ? (options.callTimeoutMs ?? DEFAULT_AGENT_CALL_TIMEOUT_MS) : options.deadlineAt - now()
     if (remaining <= 0) throw new Error('agent-deadline-exceeded')
+    const callTimeoutMs = options.callTimeoutMs ?? DEFAULT_AGENT_CALL_TIMEOUT_MS
     const controller = new AbortController()
     const abort = () => controller.abort()
     options.signal?.addEventListener('abort', abort, { once: true })
@@ -112,7 +116,7 @@ export async function runAgentProtocol<D>(options: {
     try {
       const timeout = new Promise<never>((_, reject) => {
         controller.signal.addEventListener('abort', () => reject(new Error('agent-deadline-exceeded')), { once: true })
-        timer = setTimeout(abort, Math.min(120_000, remaining))
+        timer = setTimeout(abort, Math.min(callTimeoutMs, remaining))
       })
       const remainingCalls = options.maxCalls - number
       const limit = remainingCalls === 0
@@ -147,6 +151,7 @@ export async function runAgentLoop(options: {
   now?: () => number
   signal?: AbortSignal
   instructions?: string
+  callTimeoutMs?: number
 }): Promise<{ decision: AgentDecision; attempts: AgentLoopAttempt[]; turns: unknown[] }> {
   const attempts: AgentLoopAttempt[] = []
   const result = await runAgentProtocol({

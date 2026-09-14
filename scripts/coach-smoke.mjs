@@ -74,7 +74,7 @@ function sampleInput(seed, previousExposures = [0, 1, 2].map(index => comparable
 function validateAuthorization(value) {
   if (!value || value.accessVerified !== true || value.budgetVerified !== true || value.maxAdditionalCost !== 0) fail('la autorización no demuestra acceso y coste adicional cero')
   for (const key of ['reviewer', 'evidence', 'canaryAccountId', 'expectedCorpusVersion', 'expectedConsentVersion']) if (typeof value[key] !== 'string' || !value[key].trim()) fail(`autorización sin ${key}`)
-  if (value.expectedConsentVersion !== 'coach-beta-v1') fail('el consentimiento de smoke debe ser coach-beta-v1')
+  if (value.expectedConsentVersion !== 'coach-context-v2') fail('el consentimiento de smoke debe ser coach-context-v2')
   const flags = value.temporaryFlags
   if (!flags || flags.ENABLE_BETA !== true || flags.ENABLE_EMBEDDINGS !== true || flags.ENABLE_FLASH !== true || flags.ENABLE_PRO !== false || flags.ENABLE_RERANKING !== false || flags.ENABLE_PROVIDER_PROBE !== false) fail('la activación temporal no está restringida a beta, embeddings y Flash')
   if (!Number.isInteger(value.maxRequests) || value.maxRequests < 4 || value.maxRequests > 4) fail('el smoke canario debe limitarse exactamente a cuatro requests')

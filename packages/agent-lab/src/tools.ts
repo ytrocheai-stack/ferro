@@ -128,11 +128,12 @@ export function searchEvidence(corpus: LabCorpus, query: string, limit = 5): Lab
 }
 
 /** Recuperación semántica compartida con Worker/benchmark; los abstracts se añaden por fuente. */
-export function createSemanticSearchEvidence(corpus: LabCorpus, matrix: EmbeddingMatrix, embedQuery: (query: string) => Promise<number[]>): (query: string) => Promise<LabEvidence[]> {
+export function createSemanticSearchEvidence(corpus: LabCorpus, matrix: EmbeddingMatrix, embedQuery: (query: string) => Promise<number[]>): (query: string, population?: string[]) => Promise<LabEvidence[]> {
   const manifest: CorpusManifest = { corpusVersion: corpus.version, status: corpus.status, sources: corpus.sources, chunks: corpus.chunks }
-  const retriever = createLocalRetriever({ manifest, matrix, dimensions: 512, embedQuery: async (query) => embedQuery(query) })
-  return async (query) => {
-    const result = await retriever.retrieve(query, { mode: 'research' })
+  const retriever = createLocalRetriever({ manifest, matrix, dimensions: 512, allowSyntheticLegacy: false, embedQuery: async (query) => embedQuery(query) })
+  return async (query, population = []) => {
+    if (!population.length) return []
+    const result = await retriever.retrieve(query, { mode: 'recommendation', population })
     return result.evidence.map((item) => ({ claim: item.claim, sourceId: item.sourceId, location: item.location, excerpt: item.excerpt, chunkId: item.chunkId, relevance: item.relevance }))
   }
 }

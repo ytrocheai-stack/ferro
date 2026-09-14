@@ -11,6 +11,7 @@ import { enqueueAdaptationJob } from '../lib/adaptationClient'
 import { invalidateStaleAdaptationJobsInTransaction } from '../lib/adaptationContext'
 import { getCoachAccountId } from '../lib/coachAccount'
 import { queueCoachSessionFinished } from '../lib/coachClient'
+import { isRoutineStartable } from '../lib/routineEditing'
 
 export interface ActiveSet {
   type: SetType
@@ -201,6 +202,7 @@ export const useActive = create<ActiveState>()(
       },
 
       startFromRoutine: async (routine) => {
+        if (!isRoutineStartable(routine)) throw new Error('Esta rutina está retirada y ya no puede iniciar entrenamientos.')
         const history = await recentWorkouts()
         const exercises: ActiveExercise[] = routine.exercises.map((re) => ({
           uid: uid(),
@@ -672,8 +674,16 @@ async function doFinish(get: Getter, set: Setter): Promise<string | null> {
     }
   })
   if (!isEdit) {
-    await enqueueAdaptationJob(workout.id)
-    await queueCoachSessionFinished(workout.id)
+    try {
+      await enqueueAdaptationJob(workout.id)
+    } catch {
+      useToasts.getState().show('Entrenamiento guardado. La revisión adaptativa quedó pendiente.')
+    }
+    try {
+      await queueCoachSessionFinished(workout.id)
+    } catch {
+      useToasts.getState().show('Entrenamiento guardado. No se pudo encolar la revisión del coach; puedes continuar desde Coach.')
+    }
   }
   set({ session: null, rest: null })
   return workout.id

@@ -17,17 +17,18 @@ import {
 import { es } from 'date-fns/locale'
 import { db } from '../db/db'
 import type { Workout } from '../db/types'
-import { useCatalog } from '../data/exercises'
 import { useSettings } from '../stores/settings'
 import { formatDay, formatDuration, formatMonth, formatTime, formatVolume } from '../lib/format'
 import { SkeletonList } from '../components/Skeleton'
+import { PageHeader } from '../components/PageHeader'
+import { ProgressNav } from '../components/ProgressNav'
+import { SegmentedControl } from '../components/SegmentedControl'
+import { useUi } from '../stores/ui'
 import {
-  IconCalendar,
   IconChevronLeft,
   IconChevronRight,
   IconDumbbell,
   IconHistory,
-  IconList,
   IconTimer,
   IconTrophy,
 } from '../components/icons'
@@ -40,33 +41,17 @@ export default function History() {
     [],
     undefined as Workout[] | undefined,
   )
-  const [view, setView] = useState<ViewMode>('list')
+  const view = useUi((state) => state.historyView)
+  const setUi = useUi((state) => state.set)
 
   return (
-    <div className="px-4 pt-6">
-      <div className="flex items-center justify-between pb-4">
-        <h1 className="text-2xl font-extrabold">Historial</h1>
-        <div className="flex overflow-hidden rounded-lg border border-border">
-          <button
-            className={`flex min-h-9 items-center gap-1.5 px-3 text-xs font-bold ${
-              view === 'list' ? 'bg-primary text-white' : 'bg-surface-2 text-muted'
-            }`}
-            onClick={() => setView('list')}
-            aria-pressed={view === 'list'}
-          >
-            <IconList size={14} />
-            Lista
-          </button>
-          <button
-            className={`flex min-h-9 items-center gap-1.5 px-3 text-xs font-bold ${
-              view === 'calendar' ? 'bg-primary text-white' : 'bg-surface-2 text-muted'
-            }`}
-            onClick={() => setView('calendar')}
-            aria-pressed={view === 'calendar'}
-          >
-            <IconCalendar size={14} />
-            Calendario
-          </button>
+    <div className="page-content pt-3">
+      <PageHeader title="Progreso" />
+      <ProgressNav />
+      <div className="flex items-center justify-between gap-3 pb-4">
+        <h2 className="text-xl font-semibold">Historial</h2>
+        <div className="w-44">
+          <SegmentedControl value={view} options={[{ value: 'list', label: 'Lista' }, { value: 'calendar', label: 'Calendario' }]} onChange={(value) => setUi({ historyView: value as ViewMode })} ariaLabel="Vista del historial" />
         </div>
       </div>
 
@@ -115,7 +100,6 @@ function ListView({ workouts }: { workouts: Workout[] }) {
 }
 
 function WorkoutRow({ workout: w }: { workout: Workout }) {
-  const { byId } = useCatalog()
   const units = useSettings((s) => s.units)
   return (
     <Link to={`/historial/${w.id}`} className="card pressable block px-4 py-3.5">
@@ -138,14 +122,6 @@ function WorkoutRow({ workout: w }: { workout: Workout }) {
             {w.prs.length} PR{w.prs.length > 1 ? 's' : ''}
           </span>
         )}
-      </div>
-      <div className="pt-2 text-xs leading-relaxed text-muted">
-        {w.exercises.slice(0, 4).map((e) => (
-          <div key={e.exerciseId} className="truncate">
-            {e.sets.length} × {byId.get(e.exerciseId)?.name ?? 'Ejercicio eliminado'}
-          </div>
-        ))}
-        {w.exercises.length > 4 && <div className="pt-0.5 font-semibold">+{w.exercises.length - 4} más…</div>}
       </div>
     </Link>
   )
@@ -192,12 +168,12 @@ function CalendarView({ workouts }: { workouts: Workout[] }) {
         </button>
       </div>
 
-      <div className="grid grid-cols-7 pb-1 text-center text-[10px] font-bold uppercase text-muted">
+      <div className="calendar-grid grid grid-cols-7 pb-1 text-center text-xs font-bold uppercase text-muted">
         {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((d, i) => (
           <span key={i}>{d}</span>
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-1">
+      <div className="calendar-grid grid grid-cols-7 gap-1">
         {days.map((d) => {
           const key = format(d, 'yyyy-MM-dd')
           const items = byDay.get(key) ?? []
@@ -208,13 +184,13 @@ function CalendarView({ workouts }: { workouts: Workout[] }) {
               key={key}
               onClick={() => setSelectedDay(items.length ? d : null)}
               className={`pressable flex aspect-square flex-col items-center justify-center rounded-xl text-xs ${
-                selected ? 'bg-primary text-white' : inMonth ? 'text-text' : 'text-muted/40'
+                selected ? 'bg-primary-strong text-on-primary' : inMonth ? 'text-text' : 'text-muted'
               } ${isToday(d) && !selected ? 'border border-primary' : ''}`}
             >
               <span className="tabular-nums">{format(d, 'd')}</span>
               {items.length > 0 && (
                 <span
-                  className={`mt-0.5 h-1.5 w-1.5 rounded-full ${selected ? 'bg-white' : 'bg-primary'}`}
+                  className={`mt-0.5 h-1.5 w-1.5 rounded-full ${selected ? 'bg-on-primary' : 'bg-primary'}`}
                 />
               )}
             </button>

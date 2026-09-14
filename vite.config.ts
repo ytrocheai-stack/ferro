@@ -22,8 +22,8 @@ export default defineConfig(({ command, isPreview, mode }) => ({
         lang: 'es',
         display: 'standalone',
         orientation: 'portrait',
-        background_color: '#0b0b0f',
-        theme_color: '#0b0b0f',
+        background_color: '#F3F0EA',
+        theme_color: '#F3F0EA',
         icons: [
           { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
           { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
@@ -32,7 +32,7 @@ export default defineConfig(({ command, isPreview, mode }) => ({
       },
       workbox: {
         // Precache: shell + JSON de ejercicios + todas las miniaturas (~15 MB)
-        globPatterns: ['**/*.{js,css,html,ico,svg,png,woff2}', 'data/exercises.json', 'images/*.jpg'],
+        globPatterns: ['**/*.{js,css,html,ico,svg,png,woff2}', 'data/exercises.json', 'images/*.jpg', 'anatomy/*.glb'],
         // Los GIFs (~130 MB) NO se precachean: caché en tiempo de ejecución
         globIgnores: ['videos/**'],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,

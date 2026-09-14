@@ -1,4 +1,4 @@
-import { COACH_MODELS, generationParameters, KIMI_MODEL } from '../../packages/corpus-pipeline/src/generation'
+import { COACH_MODELS, DEEPSEEK_FLASH_MODEL, generationParameters, KIMI_MODEL } from '../../packages/corpus-pipeline/src/generation'
 import { GLOBAL_REQUEST_RESERVATION_SQL, requestReservationValues } from '../../packages/corpus-pipeline/src/request-gate'
 import { enrichWithSourceSummaries } from '../../packages/corpus-retrieval/src/summary-context.mjs'
 import { verifyToken } from '@clerk/backend'
@@ -73,6 +73,8 @@ const MAX_BODY_BYTES = 512 * 1024
 const IDEMPOTENCY_MS = 7 * 24 * 60 * 60 * 1000
 const COACH_MAX_CALLS = 4
 const COACH_OUTPUT_TOKENS = 4_000
+export const COACH_CALL_TIMEOUT_MS = 240_000
+export const COACH_GENERATION_STEP_TIMEOUT = '250 seconds'
 const COACH_EXECUTION_MS = 10 * 60 * 1_000
 
 const eventSchema = z.object({ analysisId: z.string().min(1).max(120), exerciseId: z.string().min(1).max(120), candidateId: z.string().nullable(), event: z.enum(['accepted', 'rejected', 'edited', 'reverted']) }).strict()
@@ -311,7 +313,7 @@ export class NvidiaGenerationProvider implements GenerationProvider {
   async generate(prompt: string, model: string, signal?: AbortSignal): Promise<GenerationResult> {
     if (signal?.aborted) throw new ProviderError('Solicitud cancelada', undefined, 'cancelled')
     const breaker = this.breakers.get(model) ?? this.breakers.set(model, new IsolateCircuitBreaker()).get(model)!
-    const payload = await providerFetchJson<{ choices?: { finish_reason?: string; message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } }>(this.fetcher, 'https://integrate.api.nvidia.com/v1/chat/completions', { method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'system', content: this.systemPrompt }, { role: 'user', content: prompt }], ...generationParameters(model), max_tokens: OUTPUT_TOKENS_PER_ATTEMPT, stream: false }) }, COACH_MODELS.includes(model) ? 120_000 : model.includes('pro') ? 40_000 : 25_000, breaker, signal, this.requestGate)
+    const payload = await providerFetchJson<{ choices?: { finish_reason?: string; message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } }>(this.fetcher, 'https://integrate.api.nvidia.com/v1/chat/completions', { method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'system', content: this.systemPrompt }, { role: 'user', content: prompt }], ...generationParameters(model), max_tokens: OUTPUT_TOKENS_PER_ATTEMPT, stream: false }) }, model === DEEPSEEK_FLASH_MODEL ? COACH_CALL_TIMEOUT_MS : COACH_MODELS.includes(model) ? 120_000 : model.includes('pro') ? 40_000 : 25_000, breaker, signal, this.requestGate)
     const content = payload.choices?.[0]?.message?.content
     if (payload.choices?.[0]?.finish_reason === 'length') throw new ProviderError('Respuesta del generador truncada')
     if (typeof content !== 'string' || !content.trim()) throw new ProviderError('Respuesta del generador vacía')
@@ -386,6 +388,24 @@ export function normalizeGenerationUsage(value: unknown): GenerationUsage {
 }
 function generationResult(value: GenerationResult | string): GenerationResult { return typeof value === 'string' ? { content: value, usage: {} } : { content: value.content, usage: normalizeGenerationUsage(value.usage) } }
 function providerFailure(cause: unknown): { code?: string; status?: number } { return { code: cause instanceof ProviderError ? (cause.code ?? (cause.status && cause.status >= 500 ? 'server-error' : cause.status === 429 ? 'rate-limit' : 'provider-error')) : 'provider-error', status: cause instanceof ProviderError ? cause.status : undefined } }
+function classifyCoachGenerationFailure(cause: unknown, now: number, deadlineAt: number): { runCode: string; attemptStatus: CoachAttemptRow['status']; retryAfterMs?: number } {
+  const provider = providerFailure(cause)
+  if (now >= deadlineAt) return { runCode: 'coach-global-deadline-exceeded', attemptStatus: 'uncertain' }
+  if (provider.code === 'cancelled' || (cause instanceof Error && cause.message === 'cancelled')) return { runCode: 'cancelled', attemptStatus: 'failed' }
+  if (provider.code === 'timeout' || (cause instanceof Error && cause.message === 'agent-deadline-exceeded')) return { runCode: 'coach-call-timeout', attemptStatus: 'uncertain' }
+  if (provider.status === 429 || provider.code === 'rate-limit') return { runCode: 'provider-rate-limited', attemptStatus: 'failed', ...(cause instanceof ProviderError && cause.retryAfterMs !== undefined ? { retryAfterMs: cause.retryAfterMs } : {}) }
+  if (provider.status !== undefined && provider.status >= 500 || provider.code === 'server-error') return { runCode: 'provider-server-error', attemptStatus: 'failed' }
+  if (provider.code === 'circuit-open') return { runCode: 'provider-circuit-open', attemptStatus: 'failed' }
+  return { runCode: 'uncertain-outcome', attemptStatus: 'uncertain' }
+}
+function coachRunFailureCode(cause: unknown, now: number, deadlineAt: number): string {
+  const message = cause instanceof Error ? cause.message : ''
+  if (now >= deadlineAt) return 'coach-global-deadline-exceeded'
+  if (message === 'agent-deadline-exceeded' || message === 'uncertain-outcome' || message === 'cancelled' || message === 'coach-call-timeout') return message
+  if (message === 'coach-global-deadline-exceeded' || message === 'coach-budget-exhausted' || message === 'agent-call-budget-exhausted') return message
+  if (cause instanceof ProviderError) return classifyCoachGenerationFailure(cause, now, deadlineAt).runCode
+  return message ? message.slice(0, 1000) : 'coach-run-failed'
+}
 function sumAttemptUsage(attempts: GenerationAttempt[], field: keyof GenerationUsage): number | undefined {
   const sent = attempts.filter((attempt) => attempt.sent)
   if (!sent.length || sent.some((attempt) => !validTokenCount(attempt.usage?.[field]))) return undefined
@@ -739,7 +759,7 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
   const db = env.DB
   if (!db) throw new Error('D1 es obligatorio para ejecutar el coach')
   const step = <T>(name: string, callback: () => Promise<T>, generation = false): Promise<T> => workflowStep
-    ? workflowStep.do(name, { retries: { limit: generation ? 0 : 3, delay: '1 second', backoff: 'exponential' }, timeout: generation ? '130 seconds' : '2 minutes' }, callback)
+    ? workflowStep.do(name, { retries: { limit: generation ? 0 : 3, delay: '1 second', backoff: 'exponential' }, timeout: generation ? COACH_GENERATION_STEP_TIMEOUT : '2 minutes' }, callback)
     : callback()
   const clock = deps.now ?? Date.now
   const row = await step('coach-run-prepare', async () => {
@@ -778,7 +798,7 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
       })
       let evidence = initial.evidence
       const result = await runAgentProtocol({
-        maxCalls: COACH_MAX_CALLS, deadlineAt: row.deadline_at, adapterChecksDeadline: true, now: clock, turns: initial.turns,
+        maxCalls: COACH_MAX_CALLS, deadlineAt: row.deadline_at, adapterChecksDeadline: true, callTimeoutMs: COACH_CALL_TIMEOUT_MS + 5_000, now: clock, turns: initial.turns,
         prompt: (turns, instructions) => buildAgentPrompt({ request, evidence, turns, mode: 'private-real', instructions }),
         parse: content => {
           const wire = agentWireResponseSchema.parse(JSON.parse(content))
@@ -814,11 +834,12 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
             if (!lease || lease.settled) throw new Error('coach-budget-exhausted')
             let response: GenerationResult
             try {
-              response = generationResult(await withDeadline(inner => generation.generate(prompt, model, inner), Math.min(120_000, row.deadline_at - clock()), signal))
+              response = generationResult(await withDeadline(inner => generation.generate(prompt, model, inner), Math.min(COACH_CALL_TIMEOUT_MS, row.deadline_at - clock()), signal))
+              await assertActive()
             } catch (cause) {
-              const provider = providerFailure(cause)
-              await finishCoachAttempt(db, attempt.id, { status: provider.status === 429 ? 'failed' : 'uncertain', errorCode: provider.code ?? 'provider-error' }, clock())
-              throw new Error(provider.status === 429 ? 'provider-rate-limited' : 'uncertain-outcome', { cause })
+              const classified = classifyCoachGenerationFailure(cause, clock(), row.deadline_at)
+              await finishCoachAttempt(db, attempt.id, { status: classified.attemptStatus, errorCode: classified.runCode, retryAfterMs: classified.retryAfterMs }, clock())
+              throw new Error(classified.runCode, { cause })
             }
             // No se reenvía si falla esta escritura: la reserva queda sent, con resultado desconocido.
             await finishCoachAttempt(db, attempt.id, { status: 'succeeded', responseJson: JSON.stringify(response), usageJson: JSON.stringify(response.usage ?? {}) }, clock())
@@ -847,7 +868,7 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
       decision = validateCoachDecision(result.decision, request, evidence)
     }
   } catch (cause) {
-    failure = cause instanceof Error ? cause.message.slice(0, 1000) : 'coach-run-failed'
+    failure = coachRunFailureCode(cause, clock(), row.deadline_at)
   } finally {
     await step('coach-run-budget-settle', async () => {
       await db.prepare('UPDATE coach_budget_leases SET settled = 1, input_tokens = ?, output_tokens = ? WHERE run_id = ? AND settled = 0').bind(Math.max(usage.inputTokens, estimatedInputTokens), Math.max(usage.outputTokens, callCount * COACH_OUTPUT_TOKENS), runId).run()
@@ -899,7 +920,7 @@ async function createCoachRun(request: Request, env: Env, deps: WorkerDependenci
   const active = await env.DB.prepare("SELECT id FROM coach_runs WHERE account_hash = ? AND status IN ('queued', 'running') LIMIT 1").bind(userHash).first<{ id: string }>()
   if (active) return error(request, 409, 'Ya existe una ejecución activa para esta cuenta', env)
   try {
-    await env.DB.prepare('INSERT INTO coach_runs (id, account_hash, event_id, conversation_id, context_version, request_hash, idempotency_key, status, request_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, \'queued\', ?, ?, ?)').bind(runId, userHash, parsed.data.event.id, conversationId, parsed.data.context.version, requestHash, idemKey, raw, now, now).run()
+    await env.DB.prepare('INSERT INTO coach_runs (id, account_hash, event_id, conversation_id, context_version, request_hash, idempotency_key, status, request_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, \'queued\', ?, ?, ?)').bind(runId, userHash, parsed.data.event.id, conversationId, parsed.data.context.version, requestHash, idemKey, JSON.stringify(parsed.data), now, now).run()
   } catch (cause) {
     if (String(cause).toLowerCase().includes('unique')) return error(request, 409, 'Ya existe una ejecución activa para esta cuenta', env)
     throw cause
@@ -907,13 +928,13 @@ async function createCoachRun(request: Request, env: Env, deps: WorkerDependenci
   const workflow = deps.workflow ?? env.COACH_WORKFLOW
   if (!workflow) {
     await env.DB.prepare("UPDATE coach_runs SET status = 'failed', error_code = 'workflow-not-configured', ended_at = ?, updated_at = ?, workflow_status = 'errored' WHERE id = ?").bind(now, now, runId).run()
-    return error(request, 503, 'Workflow del coach no configurado', env)
+    return error(request, 503, 'workflow-not-configured', env)
   }
   try {
     await workflow.create({ id: runId, params: { runId }, retention: { successRetention: '7 days', errorRetention: '7 days' } })
-  } catch (cause) {
+  } catch {
     await env.DB.prepare("UPDATE coach_runs SET status = 'failed', error_code = 'workflow-create-failed', ended_at = ?, updated_at = ?, workflow_status = 'errored' WHERE id = ?").bind(now, now, runId).run()
-    return error(request, 503, cause instanceof Error ? cause.message : 'No se pudo iniciar el Workflow', env)
+    return error(request, 503, 'workflow-create-failed', env)
   }
   const row = await env.DB.prepare('SELECT * FROM coach_runs WHERE id = ?').bind(runId).first<CoachRunRow>()
   return json(request, row ? coachRunResponse(row, userId) : { run: { id: runId, eventId: parsed.data.event.id, accountId: userId, contextVersion: parsed.data.context.version, specialists: ['orchestrator'], status: 'queued' } }, 202, env)

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { changeSetSchema, evidenceReferenceSchema } from '../../adaptation-core/src/contract.ts'
-import { agentToolRequestSchema, buildAgentInstructions } from '../../adaptation-core/src/agent.ts'
+import { agentToolRequestSchema, buildAgentInstructions, runAgentProtocol } from '../../adaptation-core/src/agent.ts'
 import { DEFAULT_BUDGET } from './orchestrator.ts'
 import { explainMetrics, readCatalog, readGoals, readHistory, readRestrictions, searchEvidence } from './tools.ts'
 import { validateLabInput, decisionViolations, safetyReason } from './validation.ts'
@@ -87,7 +87,7 @@ export interface ProviderRunOptions extends LabConfig {
   /** Distinguishes repetitions while remaining stable across a resume. */
   runKey?: string
   /** Recuperador semántico compartido; el modo proveedor no cae silenciosamente a lexical. */
-  semanticSearchEvidence?: (query: string) => Promise<LabEvidence[]>
+  semanticSearchEvidence?: (query: string, population?: string[]) => Promise<LabEvidence[]>
   /** Se persiste ANTES del intento; un fallo de escritura impide llamar al proveedor. */
   beforeAttempt?: (reservation: { fingerprint: string; calls: number; inputTokens: number; outputTokens: number }) => Promise<void>
 }
@@ -110,7 +110,8 @@ export async function runProviderLab(input: LabInput, corpus: LabCorpus, provide
   const unsafeReason = safetyReason(input)
   if (unsafeReason) return finish({ kind: 'abstain', explanation: 'No puedo ejecutar ni respaldar esa solicitud.', reason: `safety-${unsafeReason}`, observations: [{ text: `Solicitud bloqueada por seguridad: ${unsafeReason}.`, kind: 'limitation', source: 'security' }], evidence: [], trace: [{ agent: 'orchestrator', status: 'blocked', observations: [{ text: `Solicitud bloqueada por seguridad: ${unsafeReason}.`, kind: 'limitation', source: 'security' }], evidence: [], durationMs: 0 }], executionMode: 'provider', qualityEvidence: false })
   if (input.event.type !== 'session-finished' && input.event.type !== 'message-sent') return stop('unsupported-event', 'abstain')
-  const search = config.semanticSearchEvidence ?? ((query: string) => Promise.resolve(searchEvidence(corpus, query)))
+  const population = input.profile.age >= 18 && input.restrictions.injuriesOrPain.length === 0 ? ['adult-general'] : []
+  const search = config.semanticSearchEvidence ? (query: string) => config.semanticSearchEvidence!(query, population) : (query: string) => Promise.resolve(searchEvidence(corpus, query))
   const researchQuery = `${String(input.event.payload.message ?? '')} entrenamiento carga volumen progresión ${input.profile.goals.join(' ')}`
   const researchEvidence = await search(researchQuery)
   const research: AgentTrace = {
@@ -123,76 +124,69 @@ export async function runProviderLab(input: LabInput, corpus: LabCorpus, provide
     durationMs: 0,
   }
   traces.push(research)
-  const turns: unknown[] = []
   const evidence = [...research.evidence]
   const started = Date.now()
-  while (calls < budget.maxCalls) {
-    const prompt = JSON.stringify({ instructions: PRIVATE_TRAINING_INSTRUCTIONS, responseSchema: z.toJSONSchema(responseSchema), input, research, turns })
-    // Bytes UTF-8 como cota conservadora; incluye esquema, instrucciones y todas las herramientas previas.
-    const inputTokens = new TextEncoder().encode(prompt + TRAINING_INSTRUCTIONS).length
-    const requests = config.accountingMode === 'requests'
-    const outputTokens = budget.maxOutputTokens - (requests ? 0 : usage.outputTokens)
-    if ((requests ? inputTokens : usage.inputTokens + inputTokens) > budget.maxInputTokens || outputTokens <= 0) return stop('budget-exhausted-before-call')
-    const remainingMs = budget.timeoutMs - (Date.now() - started)
-    if (remainingMs <= 0 || config.signal?.aborted) return stop('cancelled-or-timeout')
-    const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const cancel = () => controller.abort()
-    config.signal?.addEventListener('abort', cancel, { once: true })
-    try {
-      await config.beforeAttempt?.({ fingerprint: runFingerprint, calls: calls + 1, inputTokens, outputTokens })
-      if (config.signal?.aborted || Date.now() - started >= budget.timeoutMs) return stop('cancelled-or-timeout')
-      calls++
-      uncertainCalls++
-      usage.inputTokens += inputTokens
-      usage.outputTokens += outputTokens
-      const timeout = new Promise<never>((_, reject) => {
-        const rejectAborted = () => reject(new Error('cancelled-or-timeout'))
-        controller.signal.addEventListener('abort', rejectAborted, { once: true })
-        timer = setTimeout(() => controller.abort(), Math.max(1, budget.timeoutMs - (Date.now() - started)))
-      })
-      const response = await Promise.race([provider.generate({ prompt, maxOutputTokens: outputTokens, signal: controller.signal, attemptKey: fingerprint({ runFingerprint, call: calls + 1, prompt }) }), timeout])
-      if (response.usage && Object.values(response.usage).every(v => Number.isSafeInteger(v) && v >= 0)) {
-        uncertainCalls--
-        usage.inputTokens += response.usage.inputTokens - inputTokens
-        usage.outputTokens += response.usage.outputTokens - outputTokens
-      }
-      if ((!requests && (usage.inputTokens > budget.maxInputTokens || usage.outputTokens > budget.maxOutputTokens)) || (response.usage?.outputTokens ?? 0) > outputTokens || new TextEncoder().encode(response.content).length > outputTokens * 8) return stop('provider-exceeded-budget')
-      const parsed = responseSchema.parse(JSON.parse(response.content))
-      if (parsed.type === 'tool') {
-        let result: unknown
+  try {
+    const result = await runAgentProtocol({
+      maxCalls: budget.maxCalls, deadlineAt: started + budget.timeoutMs, signal: config.signal,
+      prompt: (turns, executionLimit) => JSON.stringify({ instructions: PRIVATE_TRAINING_INSTRUCTIONS, responseSchema: z.toJSONSchema(responseSchema), input, research, turns, executionLimit }),
+      parse: content => {
+        const wire = responseSchema.parse(JSON.parse(content))
+        if (wire.type === 'decision') {
+          const candidate = { ...wire.decision, trace: traces, executionMode: 'provider' as const, qualityEvidence: false as const }
+          const failures = decisionViolations(input, candidate, corpus)
+          if (wire.decision.evidence.some(c => !evidence.some(e => c.sourceId === e.sourceId && c.location === e.location && (!c.excerpt || e.excerpt?.includes(c.excerpt))))) failures.push('citation-not-retrieved')
+          if (wire.decision.kind === 'propose' && !wire.decision.evidence.length) failures.push('proposal-without-evidence')
+          if (failures.length) throw new Error(`invalid-provider-decision: ${failures.join('; ')}`)
+        }
+        return wire
+      },
+      generate: async (prompt, signal, number) => {
+        const inputTokens = new TextEncoder().encode(prompt + TRAINING_INSTRUCTIONS).length
+        const requests = config.accountingMode === 'requests'
+        const outputTokens = budget.maxOutputTokens - (requests ? 0 : usage.outputTokens)
+        if ((requests ? inputTokens : usage.inputTokens + inputTokens) > budget.maxInputTokens || outputTokens <= 0) throw new Error('budget-exhausted-before-call')
+        await config.beforeAttempt?.({ fingerprint: runFingerprint, calls: number, inputTokens, outputTokens })
+        if (signal.aborted || Date.now() >= started + budget.timeoutMs) throw new Error('cancelled-or-timeout')
+        calls++
+        uncertainCalls++
+        usage.inputTokens += inputTokens
+        usage.outputTokens += outputTokens
+        const response = await provider.generate({ prompt, maxOutputTokens: outputTokens, signal, attemptKey: fingerprint({ runFingerprint, call: number, prompt }) })
+        if (response.usage && Object.values(response.usage).every(v => Number.isSafeInteger(v) && v >= 0)) {
+          uncertainCalls--
+          usage.inputTokens += response.usage.inputTokens - inputTokens
+          usage.outputTokens += response.usage.outputTokens - outputTokens
+        }
+        if ((!requests && (usage.inputTokens > budget.maxInputTokens || usage.outputTokens > budget.maxOutputTokens)) || (response.usage?.outputTokens ?? 0) > outputTokens || new TextEncoder().encode(response.content).length > outputTokens * 8) throw new Error('provider-exceeded-budget')
+        return response.content
+      },
+      runTool: async parsed => {
         switch (parsed.name) {
-          case 'history': result = readHistory(input.history, input.permissions); break
-          case 'goals': result = readGoals(input); break
-          case 'restrictions': result = readRestrictions(input); break
-          case 'catalog': result = readCatalog(input.catalog, input.permissions); break
-          case 'metrics': result = explainMetrics(input); break
-          case 'plan': result = structuredClone(input.plan); break
+          case 'history': return readHistory(input.history, input.permissions)
+          case 'goals': return readGoals(input)
+          case 'restrictions': return readRestrictions(input)
+          case 'catalog': return readCatalog(input.catalog, input.permissions)
+          case 'metrics': return explainMetrics(input)
+          case 'plan': return structuredClone(input.plan)
           case 'searchEvidence': {
-            if (!parsed.arguments.query) return stop('missing-tool-query')
+            if (!parsed.arguments.query) throw new Error('missing-tool-query')
             const found = await search(parsed.arguments.query)
             evidence.push(...found)
-            result = found
-            break
+            return found
           }
         }
-        turns.push({ request: parsed, result })
-        continue
-      }
-      const training: AgentTrace = { agent: 'training', status: 'completed', observations: parsed.decision.observations, evidence: parsed.decision.evidence, durationMs: Date.now() - started }
+      },
+    })
+      const training: AgentTrace = { agent: 'training', status: 'completed', observations: result.decision.observations, evidence: result.decision.evidence, durationMs: Date.now() - started }
       traces.push(training)
-      const decision = { ...parsed.decision, trace: traces, executionMode: 'provider' as const, qualityEvidence: false as const }
+      const decision = { ...result.decision, trace: traces, executionMode: 'provider' as const, qualityEvidence: false as const }
       const violations = decisionViolations(input, decision, corpus)
       if (decision.evidence.some(c => !evidence.some(e => c.sourceId === e.sourceId && c.location === e.location && (!c.excerpt || e.excerpt?.includes(c.excerpt))))) violations.push('citation-not-retrieved')
       if (decision.kind === 'propose' && !decision.evidence.length) violations.push('proposal-without-evidence')
       if (violations.length) return stop(`invalid-provider-decision: ${violations.join('; ')}`)
       return finish(decision)
-    } catch (error) {
-      return stop(error && typeof error === 'object' && 'status' in error && error.status === 429 ? 'provider-rate-limited' : 'provider-failed-or-invalid')
-    } finally {
-      if (timer) clearTimeout(timer)
-      config.signal?.removeEventListener('abort', cancel)
-    }
+  } catch (error) {
+    return stop(error && typeof error === 'object' && 'status' in error && error.status === 429 ? 'provider-rate-limited' : error instanceof Error && ['budget-exhausted-before-call', 'provider-exceeded-budget', 'missing-tool-query'].includes(error.message) ? error.message : error instanceof Error && error.message === 'agent-call-budget-exhausted' ? 'call-budget-exhausted' : 'provider-failed-or-invalid')
   }
-  return stop('call-budget-exhausted')
 }

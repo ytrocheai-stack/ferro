@@ -52,6 +52,23 @@ function fakeDb() {
 const authHeaders = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json', 'Idempotency-Key': 'event-1', 'X-NextRep-Consent-Version': 'coach-context-v2', 'X-NextRep-Device-Id': 'device-1' }
 
 describe('private coach runs', () => {
+  it('requires the strict transport projection and enforces conversation limits', async () => {
+    const { db, rows } = fakeDb()
+    const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
+    const message = { id: 'message-1', role: 'user' as const, content: 'Hola', runId: 'run-1', createdAt: 1_700_000_000_000, contextVersion: 'ctx-1' }
+    const withOwnerId = { ...requestBody(), context: { ...requestBody().context, snapshot: { ...requestBody().context.snapshot, conversation: [{ ...message, ownerId: 'user_1' }] } } }
+    const ownerLeak = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(withOwnerId) }), env, deps)
+    expect(ownerLeak.status).toBe(400)
+    expect(rows.size).toBe(0)
+
+    const tooMany = { ...requestBody(), event: { ...requestBody().event, id: 'event-too-many' }, context: { ...requestBody().context, snapshot: { ...requestBody().context.snapshot, conversation: Array.from({ length: 101 }, (_, index) => ({ ...message, id: `message-${index}`, createdAt: index })) } } }
+    const response = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: { ...authHeaders, 'Idempotency-Key': 'event-too-many' }, body: JSON.stringify(tooMany) }), env, deps)
+    expect(response.status).toBe(400)
+    expect(rows.size).toBe(0)
+  })
+
   it('creates a durable run, rejects a second active run, reads it, and cancels it', async () => {
     const { db } = fakeDb()
     let created = ''
@@ -92,5 +109,22 @@ describe('private coach runs', () => {
     const continuation = { ...requestBody(), event: { ...requestBody().event, id: 'event-2', causedByEventId: 'event-1', conversationId: 'conversation-2' } }
     const response = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: { ...authHeaders, 'Idempotency-Key': 'event-2' }, body: JSON.stringify(continuation) }), env, deps)
     expect(response.status).toBe(409)
+  })
+
+  it('continues a completed turn only inside the same conversation', async () => {
+    const { db, rows } = fakeDb()
+    const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
+    const first = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
+    expect(first.status).toBe(202)
+    const firstRow = [...rows.values()][0]
+    firstRow!.status = 'completed'
+    firstRow!.decision_json = JSON.stringify({ kind: 'ask', explanation: 'Pregunta', observations: [], evidence: [], questions: ['¿Qué equipo tienes?'] })
+
+    const continuation = { ...requestBody(), event: { ...requestBody().event, id: 'event-2', causedByEventId: 'event-1' } }
+    const response = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: { ...authHeaders, 'Idempotency-Key': 'event-2' }, body: JSON.stringify(continuation) }), env, deps)
+    expect(response.status).toBe(202)
+    expect(rows.size).toBe(2)
   })
 })

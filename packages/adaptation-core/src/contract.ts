@@ -126,6 +126,10 @@ const eventId = nonEmpty.max(160)
 const revision = z.number().int().nonnegative()
 const tokenCount = z.number().int().nonnegative()
 
+export const COACH_MAX_CONVERSATION_MESSAGES = 100
+export const COACH_MAX_MESSAGE_CHARS = 4_000
+export const COACH_MAX_CONVERSATION_CHARS = 36_000
+
 /** Hecho de dominio que inicia una ejecución del coach. El payload no contiene instrucciones ejecutables. */
 export const coachEventSchema = z.object({
   id: eventId,
@@ -137,7 +141,15 @@ export const coachEventSchema = z.object({
   contextVersion: nonEmpty.max(160),
   causedByEventId: eventId.optional(),
   payload: z.record(z.string().max(120), z.unknown()).default({}),
-}).strict()
+}).strict().superRefine((value, ctx) => {
+  const message = value.payload.message
+  if (message === undefined) return
+  if (typeof message !== 'string' || !message.trim()) {
+    ctx.addIssue({ code: 'custom', path: ['payload', 'message'], message: 'El mensaje del coach no puede estar vacío' })
+  } else if (message.length > COACH_MAX_MESSAGE_CHARS) {
+    ctx.addIssue({ code: 'custom', path: ['payload', 'message'], message: `El mensaje del coach no puede superar ${COACH_MAX_MESSAGE_CHARS} caracteres` })
+  }
+})
 
 export const agentRunSchema = z.object({
   id: eventId,
@@ -344,7 +356,7 @@ export const coachContextSnapshotSchema = z.object({
   metrics: coachMetricsSchema.default({ captured: false, bestE1rmByExercise: {} }),
   plan: z.array(futureSessionSchema).max(30).default([]),
   history: z.array(coachHistoryWorkoutSchema).max(6).default([]),
-  conversation: z.array(coachConversationMessageSchema).max(100).default([]),
+  conversation: z.array(coachConversationMessageSchema).max(COACH_MAX_CONVERSATION_MESSAGES).default([]),
   conversationVersion: nonEmpty.max(160).default('coach-conversation-empty'),
 }).strict()
 
@@ -359,7 +371,13 @@ export const coachRunRequestSchema = z.object({
     conversationVersion: nonEmpty.max(160).default('coach-conversation-empty'),
     snapshot: coachContextSnapshotSchema.default({ profileRevision: 0, consentVersion: 'coach-context-v2', consentRevision: 0, profile: { population: [], populationConfirmed: false, goals: [] }, goals: [], restrictions: { injuriesOrPain: [], unavailableEquipment: [], excludedExercises: [], nutritionConstraints: [] }, catalog: [], metrics: { captured: false, bestE1rmByExercise: {} }, plan: [], history: [], conversation: [], conversationVersion: 'coach-conversation-empty' }),
   }).strict(),
-}).strict()
+}).strict().superRefine((value, ctx) => {
+  const conversation = value.context.snapshot.conversation
+  const totalChars = conversation.reduce((total, message) => total + message.content.length, 0)
+  if (totalChars > COACH_MAX_CONVERSATION_CHARS) {
+    ctx.addIssue({ code: 'custom', path: ['context', 'snapshot', 'conversation'], message: `El historial del coach no puede superar ${COACH_MAX_CONVERSATION_CHARS} caracteres` })
+  }
+})
 
 export const coachRunResponseSchema = z.object({
   run: agentRunSchema,

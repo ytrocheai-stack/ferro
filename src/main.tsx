@@ -5,6 +5,11 @@ import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
 import './index.css'
 import App from './App'
+import { applyTheme, readThemePreference } from './lib/theme'
+
+// El estado persistido se resuelve antes de montar React para que la primera pintura
+// use la apariencia elegida y no revele un flash de tema incorrecto.
+applyTheme(readThemePreference())
 
 // Code-splitting por página: recharts y las vistas pesadas salen del bundle inicial
 const Home = lazy(() => import('./pages/Home'))

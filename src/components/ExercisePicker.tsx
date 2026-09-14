@@ -42,6 +42,7 @@ export function ExerciseFilterBar({
         <input
           className="input pl-9"
           placeholder="Buscar ejercicio…"
+          aria-label="Buscar ejercicio"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           type="search"
@@ -190,7 +191,7 @@ export function ExercisePicker({
                 </div>
                 <div
                   className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${
-                    isSel ? 'border-primary bg-primary text-white' : 'border-border text-transparent'
+                    isSel ? 'border-primary bg-primary-strong text-on-primary' : 'border-border text-transparent'
                   }`}
                 >
                   <IconCheck size={13} />

@@ -1,24 +1,22 @@
 import { Link, useLocation } from 'react-router-dom'
-import { IconDumbbell, IconFood, IconHistory, IconList, IconUser } from './icons'
+import { IconDumbbell, IconFood, IconHistory, IconList, IconMessage } from './icons'
 
 const tabs = [
   { to: '/', label: 'Entrenar', Icon: IconDumbbell, end: true, related: [] },
-  { to: '/historial', label: 'Historial', Icon: IconHistory, end: false, related: [] },
-  { to: '/nutricion', label: 'Nutrición', Icon: IconFood, end: false, related: [] },
-  { to: '/ejercicios', label: 'Ejercicios', Icon: IconList, end: false, related: [] },
-  { to: '/perfil', label: 'Perfil', Icon: IconUser, end: false, related: ['/analisis', '/medidas'] },
+  { to: '/nutricion', label: 'Nutrición', Icon: IconFood, end: true, related: [] },
+  { to: '/coach', label: 'Coach', Icon: IconMessage, end: true, related: [] },
+  { to: '/analisis', label: 'Progreso', Icon: IconHistory, end: false, related: ['/historial', '/medidas'] },
+  { to: '/ejercicios', label: 'Biblioteca', Icon: IconList, end: false, related: [] },
 ]
 
-export function TabBar() {
+export function TabBar({ inDock = false }: { inDock?: boolean }) {
   const { pathname } = useLocation()
   return (
-    <nav className="app-nav" aria-label="Navegación principal">
+    <nav className={`app-nav ${inDock ? 'app-nav--embedded' : ''}`} aria-label="Navegación principal">
       <div className="app-nav__dock">
         <div className="app-nav__items">
           {tabs.map(({ to, label, Icon, end, related }) => {
-            const active = end
-              ? pathname === to
-              : pathname.startsWith(to) || related.some((route) => pathname.startsWith(route))
+            const active = end ? pathname === to : pathname.startsWith(to) || related.some((route) => pathname.startsWith(route))
             return (
               <Link
                 key={to}

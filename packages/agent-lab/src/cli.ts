@@ -14,9 +14,10 @@ import { planDiff } from './diff.ts'
 import { acceptanceScenarios, developmentScenarios, safetyScenarios } from './scenarios.ts'
 import { LAB_VERSION, INSTRUCTION_VERSION, TOOL_VERSION, MODEL_CONFIG_VERSION } from './types.ts'
 import type { LabCorpus, LabRun, LabScenario } from './types.ts'
-import { KIMI_MODEL, loadLocalEnv, ProviderSession, readAuthorization, type Authorization } from '../../corpus-pipeline/src/runtime.ts'
+import { loadLocalEnv, ProviderSession, readAuthorization, type Authorization } from '../../corpus-pipeline/src/runtime.ts'
 import type { EmbeddingMatrix } from '../../corpus-retrieval/src/index.ts'
 import { scientificReviewReady } from '../../corpus-evaluation/src/scientific-review.mjs'
+import { COACH_MODELS } from '../../corpus-pipeline/src/generation.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const args = process.argv.slice(3)
@@ -63,7 +64,7 @@ async function main(): Promise<void> {
     if (!authorizationPath) throw new Error('Modo proveedor requiere --authorization con acceso y presupuesto sin gasto adicional verificados')
     loadLocalEnv()
     const baseAuthorization = readAuthorization(authorizationPath)
-    if (baseAuthorization.model !== KIMI_MODEL) throw new Error(`Modo proveedor privado requiere ${KIMI_MODEL}; la autorización Flash histórica no se reutiliza para datos reales`)
+    if (!COACH_MODELS.includes(baseAuthorization.model)) throw new Error('El laboratorio requiere un modelo del coach autorizado explícitamente')
     const reviewAuthorization = z.object({ reviewer: z.string().trim().min(1), evidence: z.string().trim().min(1) }).parse(await json(authorizationPath))
     authorization = { ...baseAuthorization, ...reviewAuthorization }
     if (!process.env.NVIDIA_API_KEY?.trim()) throw new Error('Modo proveedor requiere NVIDIA_API_KEY configurada localmente; no se hicieron llamadas')

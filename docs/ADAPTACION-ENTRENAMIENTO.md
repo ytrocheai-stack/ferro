@@ -18,11 +18,14 @@ y sin gasto adicional. Abrir primero una cuenta; ampliar solo tras revisar fuent
 - RIR es un registro explícito independiente de RPE; no se infiere ni se convierte automáticamente.
 - En el coach heredado cada modificación requiere confirmación; se preservan revisión, transacción y
   snapshot completo. Esto no representa aún la política de autonomía futura.
-- No persistir el payload bruto, entrenamientos completos, feedback, prompts, JWT, correo ni nombre en
-  el backend. D1 sí conserva por siete días la respuesta derivada canónica —incluidos identificadores
-  de exposiciones comparables— para replay idempotente.
-- Mantener beta y proveedores apagados durante las correcciones. No llamar modelos si no se puede
-  garantizar que la operación se ajusta al presupuesto/límites de servicio disponibles sin gasto adicional.
+- El endpoint de adaptación no persiste el payload bruto, entrenamientos completos, feedback, prompts,
+  JWT, correo ni nombre. El coach conversacional durable es la excepción consentida: D1 conserva
+  temporalmente el contexto canónico realmente enviado en `request_json` y la decisión, hasta siete
+  días, para completar Workflow y replay; ese contexto queda limitado a perfil, objetivos,
+  restricciones, rutinas, hasta seis entrenamientos terminados y una ventana de conversación de
+  100 mensajes/4.000 caracteres por mensaje/36.000 caracteres total. Nunca incluye JWT, correo ni nombre.
+- No se evalúa la calidad del modelo en esta entrega. La publicación conserva el presupuesto, la cuenta
+  permitida y las flags configuradas; las verificaciones de salud no llaman modelos.
 
 ## Estado comprobado
 
@@ -83,14 +86,15 @@ Faltan pruebas de cambios compensados de carga/repeticiones y sesiones aisladas.
 Existen consentimiento versionado, autenticación Clerk, allowlist, gate de beta y un presupuesto
 de consumo por tokens con concurrencia limitada. D1 almacena HMAC/identificadores operativos,
 reserva de presupuesto, estados de idempotencia, la respuesta canónica derivada durante siete días,
-telemetría y corpus; no el payload bruto de entrenamiento.
+telemetría y corpus. En el coach durable también conserva temporalmente `request_json` con el
+contexto validado que se envió, y la decisión, durante un máximo de siete días.
 La retención de telemetría está fijada en 30 días y el Cron declarado es `17 3 * * *`.
 
 Quedan sincronización completa de datos por cuenta, coordinación multi-pestaña, recuperación de
 reservas abandonadas y verificaciones reales de D1/Cron. Readiness autenticado prueba ahora consultas D1,
 Vectorize con al menos un fragmento y coherencia del corpus activo, sin modelos. El aviso de privacidad
-declara la retención de la respuesta derivada y el procesamiento transitorio por proveedores; ambos
-deben revisarse antes de datos reales.
+declara el contexto enviado, la retención temporal de `request_json`/decisión y el procesamiento
+transitorio por proveedores.
 
 ### 3. Corpus científico y evaluación
 

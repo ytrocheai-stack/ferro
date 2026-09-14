@@ -4,13 +4,14 @@ import AxeBuilder from '@axe-core/playwright'
 test('la navegación principal funciona en un viewport móvil', async ({ page }) => {
   await page.goto('./')
   await expect(page.getByRole('heading', { name: 'Entrenar' })).toBeVisible()
-  await page.getByRole('link', { name: 'Ejercicios' }).click()
-  await expect(page.getByRole('heading', { name: 'Ejercicios' })).toBeVisible()
+  await page.getByRole('link', { name: 'Biblioteca' }).click()
+  await expect(page.getByRole('heading', { name: 'Biblioteca' })).toBeVisible()
   await expect(page.getByText(/ejercicios|Cargando biblioteca/).first()).toBeVisible()
 })
 
 test('el panel de importación Hevy expone controles accesibles', async ({ page }) => {
   await page.goto('./perfil')
+  await page.locator('summary').filter({ hasText: 'Datos' }).click()
   await page.getByRole('button', { name: /Importar datos de Hevy/ }).click()
   await expect(page.getByRole('heading', { name: 'Importar desde Hevy' })).toBeVisible()
   await expect(page.getByLabel('API key')).toHaveAttribute('type', 'password')
@@ -24,6 +25,7 @@ test('la ruta del coach presenta el gate de cuenta cuando no hay sesión', async
 
 test('importa el dialecto real del CSV de Hevy', async ({ page }) => {
   await page.goto('./perfil')
+  await page.locator('summary').filter({ hasText: 'Datos' }).click()
   await page.getByRole('button', { name: /Importar datos de Hevy/ }).click()
   await page.locator('input[type="file"][accept*=".csv"]').setInputFiles('e2e/fixtures/hevy-workouts.csv')
   await expect(page.getByText(/Hevy importado: 3 registros/)).toBeVisible()
@@ -42,9 +44,9 @@ test('la pantalla inicial no tiene violaciones axe críticas', async ({ page }, 
 
 test('Análisis permite cambiar el periodo sin perder el contexto', async ({ page }) => {
   await page.goto('./analisis')
-  await expect(page.getByRole('heading', { name: 'Análisis' })).toBeVisible()
-  await expect(page.getByRole('group', { name: 'Periodo de análisis' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '8 semanas', pressed: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Progreso' })).toBeVisible()
+  await expect(page.getByRole('tablist', { name: 'Periodo de análisis' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '8 semanas', selected: true })).toBeVisible()
 })
 
 test('Nutrición separa el diario de las tendencias', async ({ page }) => {
@@ -55,4 +57,14 @@ test('Nutrición separa el diario de las tendencias', async ({ page }) => {
   await page.getByRole('tab', { name: 'Tendencias' }).click()
   await expect(page.getByRole('heading', { name: 'Inteligencia nutricional' })).toBeVisible()
   await expect(page.getByText('Registra comidas para ver tu patrón de ingesta')).toBeVisible()
+})
+
+test('Apariencia cambia y conserva el tema elegido', async ({ page }) => {
+  await page.goto('./perfil')
+  await page.getByRole('button', { name: 'Sistema', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Apariencia' })).toBeVisible()
+  await page.getByRole('button', { name: 'Oscuro', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark')
+  await page.reload()
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark')
 })

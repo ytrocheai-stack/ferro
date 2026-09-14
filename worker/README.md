@@ -18,7 +18,7 @@ incluyen consentimiento versionado y dispositivo.
 | `GET /readiness`, `GET /v1/readiness` | Autenticadas; prueban consultas D1, disponibilidad de Vectorize y corpus activo, sin modelos |
 | `POST /v1/adaptations/analyze` | Auth, beta, consentimiento, presupuesto/reserva, candidatos y explicación opcional |
 | `POST /v1/adaptations/events` | Auth/beta y eventos operativos de aceptación; no persiste el payload del entrenamiento |
-| `POST /v1/coach/runs` | Auth, beta, consentimiento e idempotencia; crea una ejecución durable de Kimi mediante Workflow |
+| `POST /v1/coach/runs` | Auth, beta, consentimiento e idempotencia; crea una ejecución durable de DeepSeek Flash mediante Workflow |
 | `GET /v1/coach/runs/:id` | Consulta autenticada de una ejecución propia |
 | `POST /v1/coach/runs/:id/cancel` | Cancela una ejecución propia y termina su Workflow |
 | `POST /v1/coach/runs/:id` | Alias legado de cancelación; los clientes nuevos usan `/cancel` |
@@ -35,11 +35,12 @@ D1 guarda HMAC del usuario/request, identificadores, estados, presupuesto, laten
 de error y eventos. Conserva hasta siete días la respuesta canónica derivada de un análisis para
 replay idempotente —puede contener ejercicio, cargas, repeticiones, decisiones, citas e
 identificadores de exposiciones comparables—, pero no
-persiste el payload bruto, sets, feedback completo, prompts, JWT, correo, nombre ni respuestas
-crudas de proveedores. Las ejecuciones del coach son la excepción consentida: conservan
-temporalmente el contexto enviado y su decisión para permitir la ejecución durable y la consulta
-del estado; el cron elimina runs terminales después de siete días. También contiene fuentes y
-fragmentos del corpus autorizado.
+persiste el payload bruto de adaptación, sets, feedback completo, prompts, JWT, correo, nombre ni
+respuestas crudas de proveedores. Las ejecuciones del coach son la excepción consentida: conservan
+temporalmente en `request_json` el contexto canónico validado que se envió (perfil, objetivos,
+restricciones, rutinas, hasta seis entrenamientos terminados y conversación limitada a
+100/4.000/36.000 caracteres) y su decisión; el cron elimina runs terminales después de siete días.
+Tampoco se guarda JWT, correo ni nombre. También contiene fuentes y fragmentos del corpus autorizado.
 
 Presupuesto por semana ISO: por defecto 250.000 tokens de entrada, 50.000 de salida y 2 ejecuciones
 concurrentes (la configuración de producción del canario fija 1 ejecución concurrente; ambos límites

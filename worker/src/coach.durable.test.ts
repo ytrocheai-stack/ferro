@@ -1,8 +1,9 @@
 import { DatabaseSync } from 'node:sqlite'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath, URL as NodeURL } from 'node:url'
-import { describe, expect, it } from 'vitest'
-import { executeCoachRun, type D1Database, type D1Statement, type Env } from './index'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { runAgentProtocol } from '../../packages/adaptation-core/src/agent'
+import { COACH_CALL_TIMEOUT_MS, COACH_GENERATION_STEP_TIMEOUT, executeCoachRun, type D1Database, type D1Statement, type Env } from './index'
 import { coachRunRequestSchema } from '../../packages/adaptation-core/src/contract'
 
 const request = coachRunRequestSchema.parse({ event: { id: 'event', accountId: 'user', deviceId: 'device', type: 'message-sent', occurredAt: 1, contextVersion: 'ctx', payload: { message: 'Revisa' } }, context: { version: 'ctx', capturedAt: 1, timezone: 'UTC', isCurrent: true, snapshot: {} } })
@@ -37,6 +38,53 @@ function fixture() {
 }
 
 describe('coach durable execution on SQLite', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('allows a response after 120 seconds while the 240-second call timeout remains open', async () => {
+    vi.useFakeTimers()
+    const result = runAgentProtocol({
+      maxCalls: 1, deadlineAt: 600_000, now: () => 0, callTimeoutMs: COACH_CALL_TIMEOUT_MS,
+      prompt: () => 'prompt',
+      generate: async () => new Promise<string>((resolve) => { setTimeout(() => resolve('response'), 120_001) }),
+      parse: () => ({ type: 'decision' as const, decision: true }), runTool: async () => null,
+    })
+    const assertion = expect(result).resolves.toMatchObject({ decision: true })
+    await vi.advanceTimersByTimeAsync(120_001)
+    await assertion
+  })
+
+  it('reports call timeout at 240 seconds and global exhaustion at 600 seconds', async () => {
+    vi.useFakeTimers()
+    const callTimeout = runAgentProtocol({
+      maxCalls: 1, deadlineAt: 600_000, now: () => 0, callTimeoutMs: COACH_CALL_TIMEOUT_MS,
+      prompt: () => 'prompt', generate: async () => new Promise<string>(() => undefined),
+      parse: () => ({ type: 'decision' as const, decision: true }), runTool: async () => null,
+    })
+    const callAssertion = expect(callTimeout).rejects.toThrow('agent-deadline-exceeded')
+    await vi.advanceTimersByTimeAsync(COACH_CALL_TIMEOUT_MS)
+    await callAssertion
+
+    let now = 0
+    const globalTimeout = runAgentProtocol({
+      maxCalls: 4, deadlineAt: 600_000, now: () => now, callTimeoutMs: COACH_CALL_TIMEOUT_MS,
+      prompt: () => 'prompt', generate: async () => new Promise<string>((resolve) => { setTimeout(() => { now = 600_000; resolve('response') }, 1) }),
+      parse: () => ({ type: 'decision' as const, decision: true }), runTool: async () => null,
+    })
+    const globalAssertion = expect(globalTimeout).rejects.toThrow('agent-deadline-exceeded')
+    await vi.advanceTimersByTimeAsync(1)
+    await globalAssertion
+  })
+
+  it('uses a 250-second durable generation step with no Workflow retry', async () => {
+    const f = fixture()
+    const options: Array<{ name: string; timeout?: string; retries?: { limit?: number } }> = []
+    const steps = { async do<T>(name: string, stepOptions: { timeout?: string; retries?: { limit?: number } }, callback: () => Promise<T>): Promise<T> { options.push({ name, ...stepOptions }); return callback() } }
+    await executeCoachRun(f.env, 'run', { now: () => 100, generation: { generate: async () => content } }, steps)
+    const generationStep = options.find((step) => step.name === 'coach-run-generation-1')
+    expect(generationStep?.timeout).toBe(COACH_GENERATION_STEP_TIMEOUT)
+    expect(generationStep?.retries?.limit).toBe(0)
+  })
+
   it('runs the explicitly configured free Flash model through the durable protocol', async () => {
     const f = fixture()
     f.env.FLASH_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'

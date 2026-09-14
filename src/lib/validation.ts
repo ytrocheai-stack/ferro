@@ -199,6 +199,7 @@ const externalRefSchema = z.object({
 })
 
 const settingsSchema = z.object({
+  theme: z.enum(['system', 'light', 'dark']).optional(),
   units: z.enum(['kg', 'lb']).optional(),
   defaultRestSec: finite.optional(),
   sound: z.boolean().optional(),

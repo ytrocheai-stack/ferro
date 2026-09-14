@@ -12,16 +12,18 @@ describe('TabBar', () => {
     )
 
     expect(screen.getByRole('navigation', { name: 'Navegación principal' })).toBeInTheDocument()
+    const labels = screen.getAllByRole('link').map((link) => link.textContent)
+    expect(labels).toEqual(['Entrenar', 'Nutrición', 'Coach', 'Progreso', 'Biblioteca'])
     expect(screen.getByRole('link', { name: 'Nutrición' })).toHaveAttribute('aria-current', 'page')
   })
 
-  it('mantiene Perfil activo en sus pantallas secundarias', () => {
+  it('mantiene Progreso activo en sus pantallas secundarias', () => {
     render(
       <MemoryRouter initialEntries={['/analisis']}>
         <TabBar />
       </MemoryRouter>,
     )
 
-    expect(screen.getByRole('link', { name: 'Perfil' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Progreso' })).toHaveAttribute('aria-current', 'page')
   })
 })

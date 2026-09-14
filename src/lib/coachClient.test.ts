@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../db/db'
 import { setCoachAccountId } from './coachAccount'
-import { applyCoachChangeSet, contextVersionFromSnapshot, retryCoachRun, startCoachRun } from './coachClient'
+import { applyCoachChangeSet, boundConversation, buildCoachRequest, contextVersionFromSnapshot, normalizeCoachRequestForTransport, queueCoachSessionFinished, retryCoachRun, startCoachRun } from './coachClient'
 import { grantCoachConsent } from './coachConsent'
 import type { CoachRunRecord, Routine } from '../db/types'
+import { coachRunRequestSchema } from '../../packages/adaptation-core/src/contract'
 
 const accountId = 'user_coach_apply_test'
 const routineId = 'routine-coach-test'
@@ -45,6 +46,49 @@ describe('coach submission failures', () => {
     expect(retry.request.event.causedByEventId).toBeUndefined()
     expect(fetch).toHaveBeenCalledTimes(2)
   })
+
+  it('projects the strict transport contract and bounds old conversation history', async () => {
+    await db.coachMessages.bulkPut(Array.from({ length: 105 }, (_, index) => ({
+      id: `old-${index}`, ownerId: accountId, runId: `run-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const,
+      content: 'x'.repeat(300), createdAt: index, contextVersion: `ctx-${index}`,
+    })))
+    const built = await buildCoachRequest('Primer mensaje')
+    expect(built).not.toBeNull()
+    const request = built!
+    const conversation = request.context.snapshot.conversation
+    expect(conversation).toHaveLength(100)
+    expect(conversation[0]).not.toHaveProperty('ownerId')
+    expect(Math.max(...conversation.map((message) => message.content.length))).toBeLessThanOrEqual(4_000)
+    expect(conversation.reduce((total, message) => total + message.content.length, 0)).toBeLessThanOrEqual(36_000)
+    expect(() => coachRunRequestSchema.parse(request)).not.toThrow()
+    const capped = boundConversation(Array.from({ length: 105 }, (_, index) => ({ id: `cap-${index}`, ownerId: accountId, runId: `cap-run-${index}`, role: 'user' as const, content: 'y'.repeat(400), createdAt: index, contextVersion: 'ctx' })))
+    expect(capped.reduce((total, message) => total + message.content.length, 0)).toBe(36_000)
+
+    const legacy = structuredClone(request)
+    legacy.context.snapshot.conversation = legacy.context.snapshot.conversation.map((message) => ({ ...message, ownerId: accountId }))
+    const normalized = normalizeCoachRequestForTransport(legacy)
+    expect(normalized.event.id).toBe(request!.event.id)
+    expect(normalized.context.snapshot.conversation[0]).not.toHaveProperty('ownerId')
+    expect(() => coachRunRequestSchema.parse(normalized)).not.toThrow()
+  })
+
+  it('rejects an invalid new message before persisting it and allows the next valid message', async () => {
+    await expect(startCoachRun(async () => 'test-token', 'x'.repeat(4_001))).rejects.toThrow('4000')
+    expect(await db.coachMessages.count()).toBe(0)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'La beta del coach está cerrada' }), { status: 403 })))
+    const result = await startCoachRun(async () => 'test-token', 'Siguiente mensaje válido')
+    expect(result.status).toBe('failed')
+    expect(await db.coachMessages.count()).toBe(1)
+  })
+
+  it('enqueues one durable coach review per finished workout', async () => {
+    await queueCoachSessionFinished('workout-once')
+    await queueCoachSessionFinished('workout-once')
+    expect(await db.coachRuns.count()).toBe(1)
+    const run = await db.coachRuns.toCollection().first()
+    expect(run?.request.event.id).toBe('coach-session-finished-workout-once')
+    expect(run?.request.event.type).toBe('session-finished')
+  })
 })
 
 function request() {
@@ -56,9 +100,9 @@ function request() {
 
 function routine(): Routine {
   return {
-    id: routineId, name: 'Rutina de prueba', sortOrder: 0, createdAt: 1, revision: 1,
+    id: routineId, name: 'Rutina de prueba', sortOrder: 0, createdAt: 1, revision: 1, scheduledAt: 123_456,
     trainingRole: 'strength', loadIncrementKg: 2.5, coachReviewed: false,
-    exercises: [{ occurrenceId: `${routineId}:0:squat`, exerciseId: 'squat', plannedSets: 3, setTargets: [], restSec: 120, repRangeMin: 5, repRangeMax: 8, trainingRole: 'strength', loadIncrementKg: 2.5 }],
+    exercises: [{ occurrenceId: `${routineId}:0:squat`, exerciseId: 'squat', plannedSets: 3, setTargets: [], restSec: 120, notes: 'Nota existente', repRangeMin: 5, repRangeMax: 8, trainingRole: 'strength', loadIncrementKg: 2.5 }],
   }
 }
 
@@ -113,6 +157,24 @@ describe('applyCoachChangeSet', () => {
     expect((await db.routines.get(routineId))?.exercises[0]?.plannedSets).toBe(3)
     expect(await db.routineRevisionSnapshots.count()).toBe(0)
     expect((await db.coachRuns.get('run-coach-apply'))?.appliedAt).toBeUndefined()
+  })
+
+  it('conserva programación y campos no editados al aplicar un futurePlan', async () => {
+    const next = run()
+    if (next.decision?.kind !== 'propose') throw new Error('fixture inválido')
+    next.decision.changeSet.futurePlan = {
+      horizon: 'next-session',
+      sessions: [{
+        sessionId: routineId, name: 'Rutina de prueba', expectedRevision: 1,
+        exercises: [{ occurrenceId: `${routineId}:0:squat`, exerciseId: 'squat', order: 0, plannedSets: 4, setTargets: [{ type: 'normal' }, { type: 'normal' }, { type: 'normal' }, { type: 'normal' }], repRangeMin: 5, repRangeMax: 8 }],
+      }],
+    }
+    await db.coachRuns.put(next)
+    await applyCoachChangeSet(next.id)
+    const updated = await db.routines.get(routineId)
+    expect(updated?.scheduledAt).toBe(123_456)
+    expect(updated?.exercises[0]?.notes).toBe('Nota existente')
+    expect(updated?.exercises[0]?.plannedSets).toBe(4)
   })
 })
 

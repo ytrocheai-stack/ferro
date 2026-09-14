@@ -7,7 +7,7 @@ import type { Routine } from '../db/types'
 import { useActive } from '../stores/activeWorkout'
 import { useSettings } from '../stores/settings'
 import { useCatalog } from '../data/exercises'
-import { toastUndo } from '../stores/toasts'
+import { toastUndo, useToasts } from '../stores/toasts'
 import { ActionSheet, Confirm, Sheet } from '../components/Sheet'
 import { TemplateBrowserSheet } from '../components/TemplateBrowser'
 import {
@@ -24,11 +24,18 @@ import { invalidateStaleAdaptationJobsInTransaction } from '../lib/adaptationCon
 import { getCoachAccountId } from '../lib/coachAccount'
 import { uid } from '../lib/format'
 import { useLocalDateKey } from '../lib/useLocalDateKey'
+import { useNow } from '../lib/useNow'
+import { clock } from '../lib/format'
+import { isRoutineStartable } from '../lib/routineEditing'
+import { EmptyState } from '../components/EmptyState'
+import { PageHeader } from '../components/PageHeader'
+import { SectionHeader } from '../components/SectionHeader'
+import { IconTimer } from '../components/icons'
 
 export default function Home() {
   const navigate = useNavigate()
   const dateKey = useLocalDateKey()
-  const routines = useLiveQuery(() => db.routines.orderBy('sortOrder').toArray(), [], undefined)
+  const routines = useLiveQuery(() => db.routines.orderBy('sortOrder').filter(isRoutineStartable).toArray(), [], undefined)
   const folders = useLiveQuery(() => db.folders.orderBy('sortOrder').toArray(), [], [])
   const workoutsThisWeek = useLiveQuery(() => {
     const start = startOfWeek(new Date(), { weekStartsOn: 1 }).getTime()
@@ -43,12 +50,17 @@ export default function Home() {
   const [moveFolderFor, setMoveFolderFor] = useState<Routine | null>(null)
   const [templatesOpen, setTemplatesOpen] = useState(false)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const now = useNow(1000, !!session)
 
   const start = async (what: Routine | 'empty') => {
     const { startEmpty, startFromRoutine } = useActive.getState()
-    if (what === 'empty') startEmpty()
-    else await startFromRoutine(what)
-    navigate('/entreno')
+    try {
+      if (what === 'empty') startEmpty()
+      else await startFromRoutine(what)
+      navigate('/entreno')
+    } catch (cause) {
+      useToasts.getState().show(cause instanceof Error ? cause.message : 'No se pudo iniciar la rutina.')
+    }
   }
 
   const requestStart = (what: Routine | 'empty') => {
@@ -69,75 +81,52 @@ export default function Home() {
 
   const unfiled = grouped.get(undefined) ?? []
   const progress = weeklyGoal > 0 ? Math.min(1, (workoutsThisWeek ?? 0) / weeklyGoal) : 0
-  const ringOffset = 2 * Math.PI * 16 * (1 - progress)
 
   return (
-    <div className="px-4 pt-6">
-      <div className="flex items-center justify-between pb-4">
-        <h1 className="text-2xl font-extrabold">Entrenar</h1>
-        {weeklyGoal > 0 && (
-          <div className="flex items-center gap-2 text-xs font-semibold text-muted">
-            <svg width="36" height="36" viewBox="0 0 36 36" className="-rotate-90">
-              <circle cx="18" cy="18" r="16" fill="none" stroke="var(--color-surface-2)" strokeWidth="3.5" />
-              <circle
-                cx="18"
-                cy="18"
-                r="16"
-                fill="none"
-                stroke="var(--color-primary)"
-                strokeWidth="3.5"
-                strokeLinecap="round"
-                strokeDasharray={2 * Math.PI * 16}
-                strokeDashoffset={ringOffset}
-                style={{ transition: 'stroke-dashoffset 0.3s' }}
-              />
-            </svg>
-            <span className="tabular-nums">
-              {workoutsThisWeek ?? 0}/{weeklyGoal} sem.
-            </span>
+    <div className="page-content pt-3">
+      <PageHeader title="Entrenar" />
+
+      <section className="glass-panel week-summary mt-5" aria-labelledby="week-summary-title">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 id="week-summary-title" className="text-base font-semibold">Esta semana</h2>
+            <p className="mt-1 text-sm text-muted">Tu ritmo de entrenamiento</p>
           </div>
-        )}
-      </div>
+          <span className="week-summary__value tabular-nums" aria-label={`${workoutsThisWeek ?? 0} de ${weeklyGoal} entrenamientos`}>
+            {workoutsThisWeek ?? '—'}<span className="week-summary__goal">/ {weeklyGoal}</span>
+          </span>
+        </div>
+        <div className="week-summary__track" aria-hidden="true">
+          <div className="week-summary__fill" style={{ width: `${progress * 100}%` }} />
+        </div>
+      </section>
 
-      <button className="btn btn-primary w-full" onClick={() => requestStart('empty')}>
-        <IconPlus size={18} />
-        Empezar entreno vacío
-      </button>
+      {session && (
+        <section className="glass-panel mt-4 px-4 py-4" aria-labelledby="active-workout-title">
+          <div className="flex items-center gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-[14px] bg-primary/10 text-primary"><IconTimer size={19} /></span>
+            <div className="min-w-0 flex-1">
+              <h2 id="active-workout-title" className="text-base font-semibold">Entrenamiento en curso</h2>
+              <p className="line-clamp-2 text-sm text-muted">{session.name}</p>
+            </div>
+            <span className="text-sm tabular-nums text-muted">{clock((now - session.startedAt) / 1000)}</span>
+          </div>
+          <button className="btn btn-primary mt-3 w-full" onClick={() => navigate('/entreno')}>Continuar entrenamiento</button>
+        </section>
+      )}
 
-      <button
-        className="btn btn-surface mt-2.5 w-full"
-        onClick={() => setTemplatesOpen(true)}
-      >
-        <IconTarget size={17} />
-        Explorar plantillas de programas
-      </button>
-
-      <button className="btn btn-surface mt-2.5 w-full" onClick={() => navigate('/coach')}>
-        Abrir coach privado
-      </button>
-
-      <div className="flex items-center justify-between pb-3 pt-7">
-        <h2 className="text-lg font-bold">
-          Mis rutinas{' '}
-          {routines !== undefined && <span className="text-sm text-muted">({routines.length})</span>}
-        </h2>
-        <button
-          className="flex items-center gap-1 text-sm font-semibold text-primary"
-          onClick={() => navigate('/rutina/nueva')}
-        >
-          <IconPlus size={15} />
-          Nueva rutina
-        </button>
+      <div className="mt-7">
+        <SectionHeader title={`Mis rutinas${routines !== undefined ? ` (${routines.length})` : ''}`} action={<button className="flex min-h-11 items-center gap-1 text-sm font-semibold text-primary" onClick={() => navigate('/rutina/nueva')}><IconPlus size={15} />Nueva</button>} />
       </div>
 
       {routines !== undefined && routines.length === 0 && (
-        <div className="card flex flex-col items-center gap-2 px-4 py-8 text-center">
-          <IconDumbbell size={32} className="text-muted" />
-          <p className="font-semibold">Aún no tienes rutinas</p>
-          <p className="text-sm text-muted">
-            Crea una rutina propia o añade un programa completo desde «Explorar plantillas».
-          </p>
-        </div>
+        <EmptyState
+          icon={<IconDumbbell size={28} />}
+          title="Aún no tienes rutinas"
+          description="Crea una rutina propia o añade un programa completo desde Explorar programas."
+          action={<button className="btn btn-primary w-full" onClick={() => navigate('/rutina/nueva')}>Crear rutina</button>}
+          secondary={<button className="btn btn-surface w-full" onClick={() => setTemplatesOpen(true)}>Explorar programas</button>}
+        />
       )}
 
       {(folders ?? []).map((f) => {
@@ -156,7 +145,7 @@ export default function Home() {
               {isCollapsed ? <IconChevronRight size={15} className="text-muted" /> : <IconChevronDown size={15} className="text-muted" />}
             </button>
             {!isCollapsed && (
-              <div className="flex flex-col gap-3">
+            <div className="card mt-1 flex flex-col divide-y divide-border/70 overflow-hidden">
                 {items.map((r) => (
                   <RoutineCard
                     key={r.id}
@@ -172,17 +161,26 @@ export default function Home() {
         )
       })}
 
-      <div className="flex flex-col gap-3">
-        {unfiled.map((r) => (
-          <RoutineCard
-            key={r.id}
-            routine={r}
-            byId={byId}
-            onStart={() => requestStart(r)}
-            onMenu={() => setMenuFor(r)}
-          />
-        ))}
-      </div>
+      {unfiled.length > 0 && (
+        <div className="card mt-1 flex flex-col divide-y divide-border/70 overflow-hidden">
+          {unfiled.map((r) => (
+            <RoutineCard
+              key={r.id}
+              routine={r}
+              byId={byId}
+              onStart={() => requestStart(r)}
+              onMenu={() => setMenuFor(r)}
+            />
+          ))}
+        </div>
+      )}
+
+      <button className="btn btn-surface mt-4 w-full" onClick={() => requestStart('empty')}>
+        <IconPlus size={17} />Entrenamiento libre
+      </button>
+      {Boolean(routines?.length) && <button className="mt-4 flex min-h-11 w-full items-center justify-center gap-1 text-sm font-semibold text-muted" onClick={() => setTemplatesOpen(true)}>
+        <IconTarget size={16} />Explorar programas
+      </button>}
 
       <ActionSheet
         open={!!menuFor}
@@ -281,12 +279,12 @@ function RoutineCard({
   onMenu: () => void
 }) {
   return (
-    <div className="card px-4 py-3.5">
-      <div className="flex items-start justify-between gap-2">
+    <div className="flex min-h-[88px] items-center gap-3 px-4 py-3">
+      <div className="min-w-0 flex-1">
         <div className="min-w-0">
-          <div className="truncate font-bold">{r.name}</div>
+          <div className="line-clamp-2 font-semibold">{r.name}</div>
           <div className="line-clamp-2 pt-0.5 text-xs leading-relaxed text-muted">
-            {r.exercises.map((e) => byId.get(e.exerciseId)?.name ?? 'Ejercicio eliminado').join(' · ')}
+            {r.exercises.length} ejercicios · {r.exercises.map((e) => byId.get(e.exerciseId)?.name ?? 'Ejercicio eliminado').join(' · ')}
           </div>
         </div>
         <button
@@ -297,9 +295,9 @@ function RoutineCard({
           <IconDots size={18} />
         </button>
       </div>
-      <button className="btn btn-primary mt-3 w-full py-2.5" onClick={onStart}>
-        <IconPlay size={15} />
-        Empezar rutina
+      <button className="btn btn-surface min-h-11 shrink-0 px-3 text-sm" onClick={onStart}>
+        <IconPlay size={14} />
+        Empezar
       </button>
     </div>
   )

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { parseEnv } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
+import { reserveRemoteRequest } from './remote-request-gate.ts'
 
 export const EMBEDDING_MODEL = 'nvidia/nemotron-3-embed-1b'
 export const FLASH_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
@@ -114,6 +115,8 @@ export class ProviderSession {
       if (this.authorization.requestsPerMinute && recent.length >= this.authorization.requestsPerMinute) throw Object.assign(new Error('Límite local de solicitudes por minuto; esperar antes de enviar'), { code: 'LOCAL_RATE_LIMIT', retryAfterMs: Math.max(1, recent[0] + 60_000 - Date.now()) })
       ledger.attempts[id] = { state: 'pending', inputTokens, outputTokens, measured: false, model, at: new Date().toISOString(), ...(retryOf ? { retryOf } : {}) }
       writeJson(path.join(this.directory, 'ledger.json'), ledger)
+      if (this.fetcher === fetch) await reserveRemoteRequest(this.authorization.requestsPerMinute ?? 40, controller.signal)
+      if (controller.signal.aborted) throw new Error('Cancelado antes del envío al proveedor')
       const response = await this.fetcher(`https://integrate.api.nvidia.com/v1/${outputTokens ? 'chat/completions' : 'embeddings'}`, {
         method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal,
       })

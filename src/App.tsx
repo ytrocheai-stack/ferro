@@ -1,8 +1,9 @@
-import { Suspense, useEffect } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router-dom'
 import { TabBar } from './components/TabBar'
 import { Toasts } from './components/Toasts'
 import { GymKeypadBar } from './components/GymKeypad'
+import { BottomDock, BottomDockProvider } from './components/BottomDock'
 import { PageFallback } from './components/Skeleton'
 import { useActive } from './stores/activeWorkout'
 import { useSettings } from './stores/settings'
@@ -15,11 +16,13 @@ import { AuthControls } from './components/AuthControls'
 import { useAuth } from '@clerk/react'
 import { cancelPendingAdaptationProcessing, processPendingAdaptationEvents, processPendingAdaptationJobs, setCoachAccountId } from './lib/adaptationClient'
 import { syncPendingCoachRuns } from './lib/coachClient'
+import { applyTheme } from './lib/theme'
 
 export default function App() {
   const { pathname } = useLocation()
   const hideTabs = pathname.startsWith('/entreno') || pathname.startsWith('/rutina')
   const { isLoaded, isSignedIn, getToken, userId } = useAuth()
+  const theme = useSettings((state) => state.theme)
   // Clerk por sí solo no activa el coach; el gate global se enciende cuando
   // existe un Worker configurado que puede procesar datos de la cuenta.
   const authRequired = Boolean(import.meta.env.VITE_ADAPTATION_WORKER_URL)
@@ -38,38 +41,55 @@ export default function App() {
 
   useEffect(() => {
     if (!isSignedIn) return
-    const process = () => void Promise.all([processPendingAdaptationJobs(getToken, userId), processPendingAdaptationEvents(getToken, userId), syncPendingCoachRuns(getToken)])
+    const process = () => void Promise.all([processPendingAdaptationJobs(getToken, userId), processPendingAdaptationEvents(getToken, userId), syncPendingCoachRuns(getToken)]).catch(() => undefined)
     const onVisible = () => { if (document.visibilityState === 'visible') process() }
     process()
     window.addEventListener('online', process)
     window.addEventListener('nextrep:adaptation-wake', process)
+    window.addEventListener('nextrep:coach-wake', process)
     window.addEventListener('nextrep:coach-consent-changed', process)
     document.addEventListener('visibilitychange', onVisible)
-    return () => { window.removeEventListener('online', process); window.removeEventListener('nextrep:adaptation-wake', process); window.removeEventListener('nextrep:coach-consent-changed', process); document.removeEventListener('visibilitychange', onVisible); cancelPendingAdaptationProcessing(userId) }
+    return () => { window.removeEventListener('online', process); window.removeEventListener('nextrep:adaptation-wake', process); window.removeEventListener('nextrep:coach-wake', process); window.removeEventListener('nextrep:coach-consent-changed', process); document.removeEventListener('visibilitychange', onVisible); cancelPendingAdaptationProcessing(userId) }
   }, [getToken, isSignedIn, userId])
+
+  useEffect(() => {
+    applyTheme(theme)
+    const media = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null
+    if (!media || theme !== 'system') return
+    const onChange = () => applyTheme('system')
+    media.addEventListener?.('change', onChange)
+    return () => media.removeEventListener?.('change', onChange)
+  }, [theme])
 
   if (authRequired && !isLoaded) return <AuthRequiredScreen loading />
   if (authRequired && !isSignedIn) return <AuthRequiredScreen />
 
   return (
-    <div className="mx-auto min-h-dvh w-full max-w-md pt-[env(safe-area-inset-top)]">
+    <BottomDockProvider>
+      <AppShell hideTabs={hideTabs} />
+    </BottomDockProvider>
+  )
+}
+
+function AppShell({ hideTabs }: { hideTabs: boolean }) {
+  const [dockSpace, setDockSpace] = useState(0)
+  return (
+    <div className="app-shell min-h-dvh pt-[env(safe-area-inset-top)]">
       <a className="skip-link" href="#main-content">Saltar al contenido</a>
-      <header className="flex items-center justify-between px-4 pb-1 pt-3">
-        <span className="text-sm font-extrabold tracking-tight text-text">NextRep</span>
-        <AuthControls />
-      </header>
-      <main id="main-content" key={pathname} className="page-enter" tabIndex={-1}>
+      <main id="main-content" style={{ paddingBottom: `${Math.max(hideTabs ? 16 : 112, dockSpace + 16)}px` }} tabIndex={-1}>
         <Suspense fallback={<PageFallback />}>
           <Outlet />
         </Suspense>
       </main>
-      <div className={hideTabs ? 'h-8' : 'app-nav-spacer'} aria-hidden="true" />
       <ScrollRestoration />
-      <RestTimerOverlay hideTabs={hideTabs} />
-      <ActiveBanner hideTabs={hideTabs} />
-      {!hideTabs && <TabBar />}
-      <Toasts hideTabs={hideTabs} />
-      <GymKeypadBar />
+      <BottomDock
+        onHeightChange={setDockSpace}
+        accessory={<GymKeypadBar />}
+        navigation={!hideTabs ? <TabBar inDock /> : undefined}
+        session={<ActiveBanner inDock />}
+        rest={<RestTimerOverlay inDock />}
+        toasts={<Toasts inDock />}
+      />
       <CoachPrivacyNotice />
     </div>
   )
@@ -90,11 +110,11 @@ function AuthRequiredScreen({ loading = false }: { loading?: boolean }) {
 function CoachPrivacyNotice() {
   const { isSignedIn } = useAuth()
   if (!isSignedIn || !import.meta.env.VITE_ADAPTATION_WORKER_URL) return null
-  return <p className="sr-only">El coach solo comparte el contexto tras tu consentimiento: perfil, objetivos, restricciones, rutinas, hasta seis entrenamientos terminados y conversación. Las conversaciones se guardan localmente; el backend conserva temporalmente el contexto necesario para ejecutar y repetir la solicitud. No guarda JWT, correo ni nombre.</p>
+  return <p className="sr-only">El coach solo comparte tras tu consentimiento el perfil, objetivos, restricciones, rutinas, hasta seis entrenamientos terminados y la conversación reciente limitada a 100 mensajes, 4.000 caracteres por mensaje y 36.000 en total. La conversación completa se guarda localmente; D1 conserva temporalmente el request_json y la decisión para ejecutar y consultar la solicitud, y elimina las ejecuciones terminales después de siete días. No guarda JWT, correo ni nombre.</p>
 }
 
 /** Barra "entreno en curso" visible fuera de la pantalla de sesión. */
-function ActiveBanner({ hideTabs }: { hideTabs: boolean }) {
+function ActiveBanner({ inDock = false }: { inDock?: boolean }) {
   const session = useActive((s) => s.session)
   const navigate = useNavigate()
   const { pathname } = useLocation()
@@ -102,37 +122,32 @@ function ActiveBanner({ hideTabs }: { hideTabs: boolean }) {
   const now = useNow(1000, !!session && !onSession)
   if (!session || onSession) return null
 
-  const bottom = hideTabs
-    ? 'calc(0.5rem + env(safe-area-inset-bottom))'
-    : 'calc(5.6rem + env(safe-area-inset-bottom))'
   return (
-    <div className="fixed inset-x-0 z-40" style={{ bottom }}>
+    <div className={inDock ? 'w-full' : 'fixed inset-x-0 z-40'}>
       <button
         onClick={() => navigate('/entreno')}
-        className="pressable mx-auto flex w-[calc(100%-1.5rem)] max-w-md items-center gap-3 rounded-2xl bg-primary px-4 py-3 text-white shadow-lg shadow-black/40"
+        className="pressable dock-card mx-auto flex items-center gap-3 px-4 py-3 text-text"
       >
-        <IconPlay size={18} />
-        <span className="min-w-0 flex-1 truncate text-left font-semibold">
+        <IconPlay size={18} className="shrink-0 text-primary" />
+        <span className="min-w-0 flex-1 text-left font-semibold line-clamp-2">
           {session.editingWorkoutId ? `Editando: ${session.name}` : session.name}
         </span>
         {!session.editingWorkoutId && (
-          <span className="font-mono text-sm tabular-nums">
+          <span className="text-sm tabular-nums">
             {clock((now - session.startedAt) / 1000)}
           </span>
         )}
-        <span className="rounded-lg bg-white/20 px-2 py-1 text-xs font-bold">Reanudar</span>
+        <span className="rounded-lg bg-primary/10 px-2 py-1 text-xs font-bold text-primary">Reanudar</span>
       </button>
     </div>
   )
 }
 
 /** Temporizador de descanso flotante, global para sobrevivir a la navegación. */
-function RestTimerOverlay({ hideTabs }: { hideTabs: boolean }) {
+function RestTimerOverlay({ inDock = false }: { inDock?: boolean }) {
   const rest = useActive((s) => s.rest)
-  const session = useActive((s) => s.session)
   const skipRest = useActive((s) => s.skipRest)
   const adjustRest = useActive((s) => s.adjustRest)
-  const { pathname } = useLocation()
   const now = useNow(250, !!rest)
 
   // aviso exacto al terminar (por timestamp, no por ticks)
@@ -172,17 +187,9 @@ function RestTimerOverlay({ hideTabs }: { hideTabs: boolean }) {
   const remaining = Math.max(0, (rest.endsAt - now) / 1000)
   const pct = Math.max(0, Math.min(100, (remaining / rest.totalSec) * 100))
   const urgent = remaining <= 10
-  const onSession = pathname.startsWith('/entreno')
-  const bannerVisible = !!session && !onSession
-  const base = hideTabs && !onSession ? 8 : onSession ? 8 : 90
-  const offset = base + (bannerVisible ? 60 : 0)
-
   return (
-    <div
-      className="fixed inset-x-0 z-40"
-      style={{ bottom: `calc(${offset}px + env(safe-area-inset-bottom))` }}
-    >
-      <div className="mx-auto w-[calc(100%-1.5rem)] max-w-md overflow-hidden rounded-2xl border border-border bg-surface-2 shadow-lg shadow-black/40">
+    <div className={inDock ? 'w-full' : 'fixed inset-x-0 z-40'}>
+      <div className="dock-card mx-auto overflow-hidden bg-surface-2">
         <div className="flex items-center gap-2 px-3 py-2.5">
           <button
             className="pressable rounded-lg bg-surface px-2.5 py-1.5 text-xs font-bold text-muted"
@@ -195,8 +202,8 @@ function RestTimerOverlay({ hideTabs }: { hideTabs: boolean }) {
           </button>
           <div className="flex-1 text-center">
             <div
-              className={`font-mono text-2xl font-bold tabular-nums text-primary ${
-                urgent ? 'timer-pulse' : ''
+              className={`text-2xl font-bold tabular-nums text-primary ${
+                urgent ? 'text-warning' : ''
               }`}
             >
               {clock(Math.ceil(remaining))}
@@ -220,7 +227,7 @@ function RestTimerOverlay({ hideTabs }: { hideTabs: boolean }) {
           </button>
         </div>
         <div className="h-1 bg-surface">
-          <div className="h-full bg-primary transition-[width]" style={{ width: `${pct}%` }} />
+          <div className={`rest-progress h-full ${urgent ? 'bg-warning' : 'bg-primary'}`} style={{ transform: `scaleX(${pct / 100})` }} />
         </div>
       </div>
     </div>

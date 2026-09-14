@@ -1,5 +1,5 @@
 import { canonicalJson, fnv1a64 } from '../../packages/adaptation-core/src/index'
-import { agentDecisionSchema, coachRunResponseSchema, type CoachEvent, type CoachRunRequest, type FutureSession } from '../../packages/adaptation-core/src/contract'
+import { agentDecisionSchema, coachRunRequestSchema, coachRunResponseSchema, COACH_MAX_CONVERSATION_CHARS, COACH_MAX_CONVERSATION_MESSAGES, COACH_MAX_MESSAGE_CHARS, type CoachEvent, type CoachRunRequest, type FutureSession, type ParsedCoachRunRequest } from '../../packages/adaptation-core/src/contract'
 import { db } from '../db/db'
 import type { CoachMessage, CoachRunRecord, Routine } from '../db/types'
 import { getCoachAccountId } from './coachAccount'
@@ -7,6 +7,7 @@ import { COACH_CONSENT_VERSION, getCoachConsent, getCoachConversationId, getCoac
 import { normalizeRoutine } from './adaptation'
 import { uid } from './format'
 import { useNutrition } from '../stores/nutrition'
+import { withPlannedSetCount } from './routineEditing'
 
 function workerUrl(): string | undefined {
   return (import.meta.env.VITE_ADAPTATION_WORKER_URL as string | undefined)?.replace(/\/$/, '')
@@ -19,18 +20,43 @@ export function contextVersionFromSnapshot(snapshot: Record<string, unknown>): s
   delete data.conversationVersion
   return `coach-context-${fnv1a64(canonicalJson(data))}`
 }
-function conversationVersion(messages: CoachMessage[]): string {
-  return `coach-conversation-${fnv1a64(canonicalJson(messages.map(({ id, role, content, runId, contextVersion }) => ({ id, role, content, runId, contextVersion }))))}`
+function messageError(message: string): Error { return new Error(message) }
+
+type TransportCoachMessage = Pick<CoachMessage, 'id' | 'role' | 'content' | 'createdAt' | 'contextVersion'> & Partial<Pick<CoachMessage, 'runId'>>
+
+/** Projects local records to the strict wire contract; ownerId never leaves IndexedDB. */
+export function projectCoachMessageForTransport(message: CoachMessage): TransportCoachMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    ...(message.runId ? { runId: message.runId } : {}),
+    createdAt: message.createdAt,
+    contextVersion: message.contextVersion,
+  }
 }
 
-const MAX_SENT_CONVERSATION_CHARS = 36_000
+function validHistoricalMessage(value: unknown): value is CoachMessage {
+  if (!value || typeof value !== 'object') return false
+  const message = value as Partial<CoachMessage>
+  return typeof message.id === 'string' && typeof message.role === 'string' &&
+    (message.role === 'user' || message.role === 'assistant') && typeof message.content === 'string' &&
+    message.content.trim().length > 0 && typeof message.createdAt === 'number' && Number.isFinite(message.createdAt) &&
+    typeof message.contextVersion === 'string'
+}
 
-function boundConversation(messages: CoachMessage[]): CoachMessage[] {
-  const selected: CoachMessage[] = []
-  let remaining = MAX_SENT_CONVERSATION_CHARS
-  for (const message of [...messages].sort((a, b) => b.createdAt - a.createdAt)) {
+export function boundConversation(messages: CoachMessage[]): TransportCoachMessage[] {
+  const chronological = messages
+    .filter(validHistoricalMessage)
+    .map((message, index) => ({ message, index }))
+    .sort((a, b) => a.message.createdAt - b.message.createdAt || a.index - b.index)
+    .map(({ message }) => projectCoachMessageForTransport(message))
+    .slice(-COACH_MAX_CONVERSATION_MESSAGES)
+  const selected: TransportCoachMessage[] = []
+  let remaining = COACH_MAX_CONVERSATION_CHARS
+  for (const message of [...chronological].reverse()) {
     if (remaining <= 0) break
-    const content = message.content.slice(0, Math.min(message.content.length, remaining))
+    const content = message.content.slice(0, Math.min(COACH_MAX_MESSAGE_CHARS, remaining))
     if (!content) continue
     selected.unshift({ ...message, content })
     remaining -= content.length
@@ -38,10 +64,47 @@ function boundConversation(messages: CoachMessage[]): CoachMessage[] {
   return selected
 }
 
-export async function buildCoachRequest(message: string, causedByEventId?: string, eventType: CoachEvent['type'] = 'message-sent'): Promise<CoachRunRequest | null> {
+function conversationVersion(messages: Array<{ id: string; role: CoachMessage['role']; content: string; runId?: string; contextVersion: string }>): string {
+  return `coach-conversation-${fnv1a64(canonicalJson(messages.map(({ id, role, content, runId, contextVersion }) => ({ id, role, content, runId, contextVersion }))))}`
+}
+
+function parseCoachRequest(value: unknown, label = 'Solicitud del coach'): ParsedCoachRunRequest {
+  const parsed = coachRunRequestSchema.safeParse(value)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    const path = issue?.path.length ? ` en ${issue.path.join('.')}` : ''
+    throw messageError(`${label} inválida${path}: ${issue?.message ?? 'revisa los datos enviados'}`)
+  }
+  const serialized = JSON.stringify(parsed.data)
+  if (new TextEncoder().encode(serialized).byteLength > 512 * 1024) throw messageError('El contexto del coach es demasiado grande para enviarlo')
+  return parsed.data
+}
+
+/** Normalizes legacy queued requests without changing their event identity. */
+export function normalizeCoachRequestForTransport(value: unknown): ParsedCoachRunRequest {
+  if (!value || typeof value !== 'object') throw messageError('La solicitud pendiente del coach es inválida')
+  const source = value as Record<string, unknown>
+  const context = source.context && typeof source.context === 'object' ? source.context as Record<string, unknown> : {}
+  const rawSnapshot = context.snapshot && typeof context.snapshot === 'object' ? context.snapshot as Record<string, unknown> : {}
+  const rawConversation = Array.isArray(rawSnapshot.conversation) ? rawSnapshot.conversation : []
+  const conversation = boundConversation(rawConversation.filter(validHistoricalMessage))
+  const normalizedSnapshot = { ...rawSnapshot, conversation, conversationVersion: conversationVersion(conversation) }
+  const version = contextVersionFromSnapshot(normalizedSnapshot)
+  const event = source.event && typeof source.event === 'object' ? source.event as Record<string, unknown> : {}
+  return parseCoachRequest({
+    ...source,
+    event: { ...event, contextVersion: version },
+    context: { ...context, version, conversationVersion: conversationVersion(conversation), snapshot: normalizedSnapshot },
+  }, 'Solicitud pendiente del coach')
+}
+
+export async function buildCoachRequest(message: string, causedByEventId?: string, eventType: CoachEvent['type'] = 'message-sent', options: { eventId?: string; payload?: Record<string, unknown> } = {}): Promise<ParsedCoachRunRequest | null> {
+  const trimmedMessage = message.trim()
+  if (!trimmedMessage) throw messageError('Escribe un mensaje para el coach')
+  if (trimmedMessage.length > COACH_MAX_MESSAGE_CHARS) throw messageError(`El mensaje del coach no puede superar ${COACH_MAX_MESSAGE_CHARS} caracteres`)
   const accountId = getCoachAccountId()
   const consent = accountId ? getCoachConsent(accountId) : null
-  if (!accountId || !consent || !message.trim()) return null
+  if (!accountId || !consent) return null
   const [routines, workouts, profile, previousMessages, customExercises, consentRecord] = await Promise.all([
     db.routines.toArray(),
     db.workouts.orderBy('startedAt').reverse().toArray(),
@@ -60,46 +123,36 @@ export async function buildCoachRequest(message: string, causedByEventId?: strin
     ...routines.flatMap((routine) => routine.exercises.map((exercise) => [exercise.exerciseId, { id: exercise.exerciseId, name: exercise.exerciseId, equipment: [], muscles: [] }] as [string, { id: string; name: string; equipment: string[]; muscles: string[] }])),
   ]
   const catalog = [...new Map(catalogEntries).values()]
-  const snapshotForHash = {
+  const nutritionGoals = useNutrition.getState().goals
+  const goals = profile.goals.length ? profile.goals : (nutritionGoals.configured ? [`objetivo nutricional: ${nutritionGoals.goal ?? 'no informado'}`] : [])
+  const snapshot = {
+    message: trimmedMessage,
     profileRevision: profile.revision,
     consentVersion: consent.version,
     consentRevision,
     profile: { population: profile.population, populationConfirmed: profile.populationConfirmed, experience: profile.experience, goals: profile.goals },
-    goals: profile.goals,
+    goals,
     restrictions: { injuriesOrPain: profile.injuriesOrPain, unavailableEquipment: profile.unavailableEquipment, excludedExercises: profile.excludedExercises, nutritionConstraints: profile.nutritionConstraints },
     catalog,
     metrics: { captured: true, workoutCount: workouts.length, totalVolumeKg: workouts.reduce((sum, workout) => sum + (workout.volumeKg ?? 0), 0), bestE1rmByExercise: {} },
     plan,
     history: recentFinished.map((workout) => ({ id: workout.id, startedAt: workout.startedAt, endedAt: workout.endedAt, name: workout.name, exercises: workout.exercises })),
+    conversation: messages,
     conversationVersion: conversationVersion(messages),
   }
-  const version = contextVersionFromSnapshot(snapshotForHash)
+  const version = contextVersionFromSnapshot(snapshot)
   const event: CoachEvent = {
-    id: uid(), accountId, deviceId: getCoachDeviceId(), conversationId, type: eventType, occurredAt: Date.now(), contextVersion: version,
-    ...(causedByEventId ? { causedByEventId } : {}), payload: { message: message.trim() },
+    id: options.eventId ?? uid(), accountId, deviceId: getCoachDeviceId(), conversationId, type: eventType, occurredAt: Date.now(), contextVersion: version,
+    ...(causedByEventId ? { causedByEventId } : {}), payload: { message: trimmedMessage, ...(options.payload ?? {}) },
   }
-  return {
+  return parseCoachRequest({
     event,
     context: {
       version, capturedAt: Date.now(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', isCurrent: true,
-      snapshot: {
-        message: message.trim(),
-        profileRevision: profile.revision,
-        consentVersion: consent.version,
-        consentRevision,
-        profile: { population: profile.population, populationConfirmed: profile.populationConfirmed, experience: profile.experience, goals: profile.goals },
-        goals: profile.goals.length ? profile.goals : (useNutrition.getState().goals.configured ? [`objetivo nutricional: ${useNutrition.getState().goals.goal ?? 'no informado'}`] : []),
-        restrictions: { injuriesOrPain: profile.injuriesOrPain, unavailableEquipment: profile.unavailableEquipment, excludedExercises: profile.excludedExercises, nutritionConstraints: profile.nutritionConstraints },
-        catalog,
-        metrics: snapshotForHash.metrics,
-        plan,
-        history: snapshotForHash.history,
-        conversation: messages,
-        conversationVersion: snapshotForHash.conversationVersion,
-      },
-      conversationVersion: snapshotForHash.conversationVersion,
+      snapshot,
+      conversationVersion: snapshot.conversationVersion,
     },
-  }
+  })
 }
 
 async function saveRun(request: CoachRunRequest, run: Partial<CoachRunRecord> & Pick<CoachRunRecord, 'id' | 'status'>): Promise<void> {
@@ -119,6 +172,14 @@ async function saveAssistantMessage(run: CoachRunRecord): Promise<void> {
   await db.coachMessages.put(message)
 }
 
+export function isRetryableCoachError(error: string | undefined): boolean {
+  return Boolean(error && new Set([
+    'unknown-outcome', 'uncertain-outcome', 'coach-call-timeout', 'provider-timeout',
+    'agent-deadline-exceeded', 'coach-global-deadline-exceeded', 'provider-rate-limited',
+    'provider-server-error', 'server-error', 'workflow-create-failed', 'workflow-not-configured',
+  ]).has(error))
+}
+
 function fromResponse(value: unknown, request: CoachRunRequest, ownerId: string): CoachRunRecord {
   const parsed = coachRunResponseSchema.parse(value)
   return { id: parsed.run.id, ownerId, eventId: parsed.run.eventId, contextVersion: parsed.run.contextVersion, status: parsed.run.status, request, ...(parsed.decision ? { decision: parsed.decision } : {}), ...(parsed.error ? { error: parsed.error } : {}), ...(parsed.run.usage ? { usage: parsed.run.usage } : {}), createdAt: parsed.run.startedAt ?? Date.now(), updatedAt: Date.now(), ...(parsed.run.startedAt ? { startedAt: parsed.run.startedAt } : {}), ...(parsed.run.endedAt ? { endedAt: parsed.run.endedAt } : {}), ...(parsed.appliedAt ? { appliedAt: parsed.appliedAt } : {}) }
@@ -131,18 +192,21 @@ export async function startCoachRun(getToken: () => Promise<string | null>, mess
   const localId = `coach-local-${request.event.id}`
   const existing = await db.coachRuns.get(localId)
   if (existing) return existing
+  const active = (await db.coachRuns.where('ownerId').equals(ownerId).toArray()).find((run) => run.status === 'queued' || run.status === 'running')
+  if (active) throw new Error('Ya existe una ejecución activa del coach. Espera a que termine o cancélala.')
   await saveRun(request, { id: localId, status: 'queued' })
-  await db.coachMessages.put({ id: `coach-message-${localId}`, ownerId, runId: localId, role: 'user', content: message.trim(), createdAt: Date.now(), contextVersion: request.context.version })
+  await db.coachMessages.put({ id: `coach-message-${localId}`, ownerId, runId: localId, role: 'user', content: String(request.event.payload?.message ?? ''), createdAt: Date.now(), contextVersion: request.context.version })
   const url = workerUrl()
-  const token = await getToken()
-  if (!url || !navigator.onLine || !token) return (await db.coachRuns.get(localId))!
-  let requestSent = false
+  if (!url || !navigator.onLine) return (await db.coachRuns.get(localId))!
+  let outcomeUnknown = false
   try {
-    requestSent = true
+    const token = await getToken()
+    if (!token) return (await db.coachRuns.get(localId))!
+    outcomeUnknown = true
     const response = await fetch(`${url}/v1/coach/runs`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Idempotency-Key': request.event.id, 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': request.event.deviceId }, body: JSON.stringify(request) })
     const text = await response.text()
+    outcomeUnknown = false
     if (!response.ok) {
-      if (response.status < 500) requestSent = false
       const reason = (() => { try { return JSON.parse(text).error } catch { return undefined } })()
       throw new Error(typeof reason === 'string' ? reason : `No se pudo iniciar el coach (${response.status})`)
     }
@@ -152,7 +216,7 @@ export async function startCoachRun(getToken: () => Promise<string | null>, mess
     await saveAssistantMessage(remote)
     return remote
   } catch (cause) {
-    const failed = { ...(await db.coachRuns.get(localId))!, status: 'failed' as const, error: requestSent ? 'unknown-outcome' : cause instanceof Error ? cause.message : 'No se pudo iniciar el coach', updatedAt: Date.now() }
+    const failed = { ...(await db.coachRuns.get(localId))!, status: 'failed' as const, error: outcomeUnknown ? 'unknown-outcome' : cause instanceof Error ? cause.message : 'No se pudo iniciar el coach', endedAt: Date.now(), updatedAt: Date.now() }
     await db.coachRuns.put(failed)
     return failed
   }
@@ -160,21 +224,24 @@ export async function startCoachRun(getToken: () => Promise<string | null>, mess
 
 /** Encola el evento durable de una sesión terminada; App lo sincroniza cuando hay cuenta/red. */
 export async function queueCoachSessionFinished(workoutId: string): Promise<void> {
-  const request = await buildCoachRequest(`Sesión terminada ${workoutId}. Revisa el contexto y dime si hay algo que deba observar antes de mi próximo entrenamiento.`, undefined, 'session-finished')
+  const request = await buildCoachRequest(`Sesión terminada ${workoutId}. Revisa el contexto y dime si hay algo que deba observar antes de mi próximo entrenamiento.`, undefined, 'session-finished', { eventId: `coach-session-finished-${workoutId}`, payload: { workoutId } })
   if (!request) return
   const localId = `coach-local-${request.event.id}`
   if (await db.coachRuns.get(localId)) return
+  const legacyDuplicate = (await db.coachRuns.where('ownerId').equals(request.event.accountId).toArray()).some((run) => run.request.event.type === 'session-finished' && (run.request.event.payload?.workoutId === workoutId || String(run.request.event.payload?.message ?? '').includes(`Sesión terminada ${workoutId}.`)))
+  if (legacyDuplicate) return
   await saveRun(request, { id: localId, status: 'queued' })
   await db.coachMessages.put({ id: `coach-message-${localId}`, ownerId: request.event.accountId, runId: localId, role: 'user', content: String(request.event.payload?.message ?? ''), createdAt: Date.now(), contextVersion: request.context.version })
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('nextrep:coach-wake'))
 }
 
 export async function refreshCoachRun(getToken: () => Promise<string | null>, runId: string): Promise<CoachRunRecord | undefined> {
   const local = await db.coachRuns.get(runId)
-  if (!local || !workerUrl() || !navigator.onLine) return local
+  if (!local || runId.startsWith('coach-local-') || !workerUrl() || !navigator.onLine) return local
   const token = await getToken()
   if (!token) return local
   const response = await fetch(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(runId)}`, { headers: { Authorization: `Bearer ${token}` } })
-  if (!response.ok) return local
+  if (!response.ok) throw new Error(`No se pudo consultar el estado del coach (${response.status})`)
   const remote = fromResponse(await response.json(), local.request, local.ownerId)
   await db.coachRuns.put(remote)
   if (remote.decision) await saveAssistantMessage(remote)
@@ -182,34 +249,55 @@ export async function refreshCoachRun(getToken: () => Promise<string | null>, ru
 }
 
 /** Reenvía únicamente runs locales que nunca llegaron al Worker; la misma clave evita duplicados. */
-export async function syncPendingCoachRuns(getToken: () => Promise<string | null>): Promise<void> {
+let coachSync: { ownerId: string; promise: Promise<void> } | undefined
+
+export function syncPendingCoachRuns(getToken: () => Promise<string | null>): Promise<void> {
   const ownerId = getCoachAccountId()
+  if (!ownerId) return Promise.resolve()
+  if (coachSync?.ownerId === ownerId) return coachSync.promise
+  const promise = syncPendingCoachRunsInternal(getToken, ownerId).finally(() => {
+    if (coachSync?.promise === promise) coachSync = undefined
+  })
+  coachSync = { ownerId, promise }
+  return promise
+}
+
+async function syncPendingCoachRunsInternal(getToken: () => Promise<string | null>, ownerId: string): Promise<void> {
   const url = workerUrl()
-  if (!ownerId || !url || !navigator.onLine) return
+  if (!url || !navigator.onLine) return
   const revoked = (await db.coachRuns.where('ownerId').equals(ownerId).toArray()).filter(run => run.error === 'cancelled-by-consent-revocation')
   for (const run of revoked) {
     try { await cancelCoachRun(getToken, run.id) } catch { /* Se conserva para reconciliar al reconectar. */ }
   }
   if (!getCoachConsent(ownerId)) return
-  const token = await getToken()
+  let token: string | null
+  try { token = await getToken() } catch { return }
   if (!token) return
   const pending = (await db.coachRuns.toArray()).filter((run) => run.ownerId === ownerId && run.id.startsWith('coach-local-') && run.status === 'queued')
   for (const local of pending) {
+    if (getCoachAccountId() !== ownerId) return
     if (!getCoachConsent(ownerId)) return
-    let requestSent = false
+    let outcomeUnknown = false
     try {
-      requestSent = true
-      const response = await fetch(`${url}/v1/coach/runs`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Idempotency-Key': local.request.event.id, 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': local.request.event.deviceId }, body: JSON.stringify(local.request) })
+      const request = normalizeCoachRequestForTransport(local.request)
+      const normalizedLocal = request.context.version === local.contextVersion ? { ...local, request } : { ...local, request, contextVersion: request.context.version }
+      await db.coachRuns.put(normalizedLocal)
+      outcomeUnknown = true
+      const response = await fetch(`${url}/v1/coach/runs`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Idempotency-Key': request.event.id, 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': request.event.deviceId }, body: JSON.stringify(request) })
+      const text = await response.text()
+      outcomeUnknown = false
       if (!response.ok) {
-        await db.coachRuns.put({ ...local, status: 'failed', error: response.status >= 500 ? 'unknown-outcome' : `Worker ${response.status}`, endedAt: Date.now(), updatedAt: Date.now() })
+        const reason = (() => { try { return JSON.parse(text).error } catch { return undefined } })()
+        await db.coachRuns.put({ ...normalizedLocal, status: 'failed', error: typeof reason === 'string' ? reason : `Worker ${response.status}`, endedAt: Date.now(), updatedAt: Date.now() })
         continue
       }
-      const remote = fromResponse(await response.json(), local.request, ownerId)
-      await db.coachRuns.delete(local.id)
+      const remote = fromResponse(JSON.parse(text), request, ownerId)
+      await db.coachRuns.delete(normalizedLocal.id)
       await db.coachRuns.put(remote)
       await saveAssistantMessage(remote)
-    } catch {
-      await db.coachRuns.put({ ...local, status: 'failed', error: requestSent ? 'unknown-outcome' : 'No se pudo iniciar el coach', endedAt: Date.now(), updatedAt: Date.now() })
+    } catch (cause) {
+      const current = await db.coachRuns.get(local.id)
+      if (current) await db.coachRuns.put({ ...current, status: 'failed', error: outcomeUnknown ? 'unknown-outcome' : cause instanceof Error ? cause.message : 'No se pudo iniciar el coach', endedAt: Date.now(), updatedAt: Date.now() })
     }
   }
 }
@@ -231,7 +319,7 @@ export async function cancelCoachRun(getToken: () => Promise<string | null>, run
 /** Reintento explícito: una ejecución incierta no es una continuación completada. */
 export async function retryCoachRun(getToken: () => Promise<string | null>, runId: string): Promise<CoachRunRecord> {
   const previous = await db.coachRuns.get(runId)
-  if (!previous || previous.ownerId !== getCoachAccountId() || previous.error !== 'unknown-outcome') throw new Error('Solo se puede reintentar una ejecución con desenlace incierto')
+  if (!previous || previous.ownerId !== getCoachAccountId() || !isRetryableCoachError(previous.error)) throw new Error('Esta ejecución no tiene un fallo recuperable para reintentar')
   const message = String(previous.request.event.payload?.message ?? 'Continúa la revisión anterior')
   return startCoachRun(getToken, message)
 }
@@ -274,7 +362,7 @@ export async function applyCoachChangeSet(runId: string): Promise<void> {
       const exercises = routine.exercises.map((exercise) => {
         if (exercise.occurrenceId !== targetOccurrence) return exercise
         if (operation.kind === 'exercise-substitution') return { ...exercise, exerciseId: operation.exerciseId }
-        return {
+        const patched = {
           ...exercise,
           ...(operation.patch.plannedSets !== undefined ? { plannedSets: operation.patch.plannedSets } : {}),
           ...(operation.patch.repRangeMin !== undefined ? { repRangeMin: operation.patch.repRangeMin } : {}),
@@ -282,6 +370,7 @@ export async function applyCoachChangeSet(runId: string): Promise<void> {
           ...(operation.patch.loadKg !== undefined ? { setTargets: (exercise.setTargets ?? []).map((set) => set.type === 'warmup' ? { ...set } : { ...set, weightKg: operation.patch.loadKg }) } : {}),
           ...(operation.patch.exerciseId ? { exerciseId: operation.patch.exerciseId } : {}),
         }
+        return operation.patch.plannedSets !== undefined ? withPlannedSetCount(patched, operation.patch.plannedSets) : patched
       })
       byRoutine.set(operation.routineId, { ...routine, exercises, revision: normalizedBase.revision + 1 })
     }
@@ -304,11 +393,11 @@ export async function applyCoachChangeSet(runId: string): Promise<void> {
           repRangeMax: exercise.repRangeMax,
           targetRpeMin: exercise.targetRpeMin,
           targetRpeMax: exercise.targetRpeMax,
-          notes: exercise.notes,
+          ...(exercise.notes !== undefined ? { notes: exercise.notes } : {}),
         }))
         const explicitlyRetired = parsed.changeSet.operations.some((operation) => operation.kind === 'routine-retire' && operation.routineId === session.sessionId)
         if ((!exercises.length && !explicitlyRetired) || exercises.some((exercise) => exercise.setTargets && exercise.setTargets.length !== exercise.plannedSets)) throw new Error('futurePlan no cubre los objetivos por serie')
-        byRoutine.set(session.sessionId, { ...normalized, name: session.name, scheduledAt: session.scheduledAt, exercises, revision: byRoutine.has(session.sessionId) ? normalized.revision : normalized.revision })
+        byRoutine.set(session.sessionId, { ...normalized, name: session.name, ...(session.scheduledAt !== undefined ? { scheduledAt: session.scheduledAt } : {}), exercises, revision: byRoutine.has(session.sessionId) ? normalized.revision : normalized.revision })
       }
     }
     for (const operation of parsed.changeSet.operations) {

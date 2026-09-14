@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '@clerk/react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import type { LoggedSet, PRKind, Workout } from '../db/types'
@@ -17,15 +17,15 @@ import {
   formatWeight,
   kgToDisplay,
 } from '../lib/format'
-import { fireConfetti } from '../lib/confetti'
 import { applyAdaptationDecisions, createEditedProposal, revertAdaptationAnalysis, type ProposalDecision } from '../lib/adaptation'
 import { invalidateStaleAdaptationJobsInTransaction } from '../lib/adaptationContext'
 import { enqueueAdaptationEvent, retryFailedAdaptationJob } from '../lib/adaptationClient'
 import { getCoachAccountId } from '../lib/coachAccount'
 import { ExerciseThumb } from '../components/ExerciseThumb'
 import { ActionSheet, Confirm } from '../components/Sheet'
+import { PageHeader } from '../components/PageHeader'
+import { ProgressNav } from '../components/ProgressNav'
 import {
-  IconChevronLeft,
   IconDots,
   IconDumbbell,
   IconPencil,
@@ -41,7 +41,7 @@ const PR_LABEL: Record<PRKind, string> = {
   setVolume: 'Volumen en una serie',
 }
 
-const SUPERSET_COLORS = ['#3d8bfd', '#a78bfa', '#f2a33c', '#33c076']
+const SUPERSET_COLORS = ['var(--color-primary)', 'var(--color-accent)', 'var(--color-warning)', 'var(--color-success)']
 
 function setLine(s: LoggedSet, units: 'kg' | 'lb'): string {
   if (s.durationSec || s.distanceM) {
@@ -57,7 +57,9 @@ export default function WorkoutDetail() {
   const { id } = useParams()
   const [params] = useSearchParams()
   const celebrate = params.get('nuevo') === '1'
+  const location = useLocation()
   const navigate = useNavigate()
+  const [showConfirmation] = useState(celebrate)
   const workout = useLiveQuery(
     () => db.workouts.get(id!).then((w) => w ?? null),
     [id],
@@ -79,15 +81,14 @@ export default function WorkoutDetail() {
   }, [id, userId], null)
   const [proposalDecisions, setProposalDecisions] = useState<Record<string, ProposalDecision['decision']>>({})
 
-  const hasPRs = !!workout && workout.prs.length > 0
   useEffect(() => {
-    if (celebrate && hasPRs) fireConfetti()
-  }, [celebrate, hasPRs])
+    if (celebrate) navigate(location.pathname, { replace: true })
+  }, [celebrate, location.pathname, navigate])
 
   if (workout === undefined) return null
   if (workout === null)
     return (
-      <div className="px-4 pt-10 text-center text-muted">
+      <div className="page-content pt-10 text-center text-muted">
         Entreno no encontrado.
         <button className="btn btn-surface mx-auto mt-4" onClick={() => navigate('/historial')}>
           Volver al historial
@@ -145,25 +146,16 @@ export default function WorkoutDetail() {
   }
 
   return (
-    <div className="px-4 pt-4">
-      <header className="flex items-center justify-between pb-3">
-        <button
-          className="pressable -ml-2 rounded-lg p-1.5 text-muted"
-          onClick={() => navigate(-1)}
-          aria-label="Volver"
-        >
-          <IconChevronLeft size={22} />
-        </button>
-        <button
-          className="pressable rounded-lg p-1.5 text-muted"
-          onClick={() => setMenuOpen(true)}
-          aria-label="Opciones"
-        >
-          <IconDots size={20} />
-        </button>
-      </header>
+    <div className="page-content pt-3">
+      <PageHeader
+        title="Detalle del entreno"
+        subtitle={`${formatDay(workout.startedAt)} · ${formatTime(workout.startedAt)}`}
+        back
+        action={<button className="page-header__profile pressable" onClick={() => setMenuOpen(true)} aria-label="Opciones"><IconDots size={19} /></button>}
+      />
+      <ProgressNav />
 
-      {celebrate && (
+      {showConfirmation && (
         <div className="mb-4 rounded-2xl border border-primary/40 bg-primary/15 px-4 py-3">
           <div className="font-bold text-primary">¡Entreno completado! 💪</div>
           {workout.prs.length > 0 && (
@@ -175,10 +167,7 @@ export default function WorkoutDetail() {
         </div>
       )}
 
-      <h1 className="text-2xl font-extrabold">{workout.name}</h1>
-      <p className="pt-1 text-sm text-muted">
-        {formatDay(workout.startedAt)} · {formatTime(workout.startedAt)}
-      </p>
+      <h2 className="text-2xl font-extrabold tracking-[-0.025em]">{workout.name}</h2>
       {workout.notes && <p className="pt-2 text-sm italic text-muted">“{workout.notes}”</p>}
 
       {isSignedIn && adaptation?.job && (
@@ -242,7 +231,7 @@ export default function WorkoutDetail() {
             <div
               key={`${ex.exerciseId}-${i}`}
               className="card px-4 py-3"
-              style={ssColor ? { borderLeft: `3px solid ${ssColor}` } : undefined}
+              style={ssColor ? { boxShadow: `inset 3px 0 0 ${ssColor}` } : undefined}
             >
               {ssColor && (
                 <div
@@ -271,7 +260,7 @@ export default function WorkoutDetail() {
                             : s.type === 'failure'
                               ? 'text-danger'
                               : s.type === 'drop'
-                                ? 'text-purple-400'
+                                ? 'text-accent'
                                 : 'text-muted'
                         }`}
                       >

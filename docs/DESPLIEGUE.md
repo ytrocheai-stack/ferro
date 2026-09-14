@@ -52,7 +52,7 @@ El Worker vive en `worker/` y se publica por separado. No recrear sus recursos.
 | Cron | `17 3 * * *` | Comprobar retención real antes de abrir |
 | Producción | `wrangler.production.toml`: `ENVIRONMENT=production` | Revisar configuración privada y gates |
 | Desarrollo | `wrangler.toml`: `ENVIRONMENT=development` | No usar su deploy genérico para producción |
-| Beta/proveedores | Todos en `false` en los TOML y en la versión desplegada | No habilitar hasta completar el expediente canario |
+| Beta/proveedores | Desarrollo apagado; producción habilita beta/embeddings/Flash solo para la cuenta permitida; Pro, reranking y probe apagados | Conservar la configuración y verificar la versión desplegada |
 | Corpus | `.cache/corpus/hevy`: 88 fuentes, 2.708 chunks, 47 autores recuperados | Ejecutar `corpus:embed`, `corpus:upload` y verificar ambos índices/D1 antes de seleccionar la versión |
 
 Los dos TOML apuntan al mismo nombre de Worker y a los mismos recursos; el archivo de desarrollo
@@ -75,7 +75,7 @@ Mantener fuera del repositorio y del bundle los valores de `CLERK_JWT_KEY`,
 sus valores en logs o artefactos. No usar variables `VITE_*` para datos privados.
 
 Origen de Pages: `https://ytrocheai-stack.github.io`; `/ferro/` no forma parte del origen.
-El contrato local requiere consentimiento `coach-beta-v1` en payload/cabecera, dispositivo
+El contrato local requiere consentimiento `coach-context-v2` en payload/cabecera, dispositivo
 coincidente e `Idempotency-Key`. El preflight ya permite `X-NextRep-Consent-Version` y
 `X-NextRep-Device-Id`, además de las cabeceras anteriores; el Worker responde 401 desde el origen
 permitido sin JWT y 403 desde un origen no autorizado. Falta verificarlo desde Pages con sesión y

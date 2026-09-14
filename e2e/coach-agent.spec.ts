@@ -45,15 +45,15 @@ test('el flujo del agente crea, continúa y cancela ejecuciones sin proveedor re
   })
 
   await page.goto('./coach')
-  await expect(page.getByRole('heading', { name: 'Coach privado' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Coach' })).toBeVisible()
   await page.getByLabel('Mensaje para el coach').fill('Analiza mi siguiente sesión')
-  await page.getByRole('button', { name: 'Enviar al coach' }).click()
+  await page.getByRole('button', { name: 'Enviar' }).click()
   await expect(page.getByText(/El coach está procesando tu contexto/)).toBeVisible()
   await expect(page.getByText('Necesito una aclaración antes de proponer cambios.')).toBeVisible({ timeout: 10_000 })
   await expect(page.getByText('¿Qué equipo tendrás disponible?')).toBeVisible()
 
   await page.getByLabel('Mensaje para el coach').fill('Tendré barra y discos')
-  await page.getByRole('button', { name: 'Continuar conversación' }).click()
+  await page.getByRole('button', { name: 'Continuar' }).click()
   await expect(page.getByText(/El coach está procesando tu contexto/)).toBeVisible()
   await page.getByRole('button', { name: 'Cancelar' }).click()
   await expect(page.getByText('Cancelado', { exact: true }).first()).toBeVisible()

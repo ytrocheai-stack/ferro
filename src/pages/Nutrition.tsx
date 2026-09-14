@@ -10,13 +10,17 @@ import { useNutrition } from '../stores/nutrition'
 import { ema } from '../lib/stats'
 import { buildNutritionInsights, suggestCalorieAdjustment, weeklyChangePct } from '../lib/nutrition'
 import { parseDec, uid } from '../lib/format'
-import { toastUndo } from '../stores/toasts'
+import { toastUndo, useToasts } from '../stores/toasts'
 import { FoodPickerSheet } from '../components/FoodPicker'
 import { NutritionGoalsWizard } from '../components/NutritionGoalsWizard'
 import { ActionSheet, Sheet } from '../components/Sheet'
 import { SkeletonChart } from '../components/Skeleton'
 import { IconChart, IconChevronLeft, IconChevronRight, IconDots, IconFlame, IconPlus, IconRepeat, IconTarget } from '../components/icons'
 import { useLocalDateKey } from '../lib/useLocalDateKey'
+import { PageHeader } from '../components/PageHeader'
+import { SegmentedControl } from '../components/SegmentedControl'
+import { useUi } from '../stores/ui'
+import { nutritionDateForMode } from '../lib/nutritionDate'
 
 const MEALS: { key: MealKey; label: string }[] = [
   { key: 'breakfast', label: 'Desayuno' },
@@ -28,17 +32,21 @@ const MEALS: { key: MealKey; label: string }[] = [
 const dateKey = (d: Date) => format(d, 'yyyy-MM-dd')
 
 export default function Nutrition() {
-  const [day, setDay] = useState(() => new Date())
   const todayKey = useLocalDateKey()
   const goals = useNutrition((s) => s.goals)
-  const [wizardOpen, setWizardOpen] = useState(!goals.configured)
+  const dayKey = useUi((s) => s.nutritionDate)
+  const followsToday = useUi((s) => s.nutritionFollowsToday)
+  const view = useUi((s) => s.nutritionView)
+  const setUi = useUi((s) => s.set)
+  const [wizardOpen, setWizardOpen] = useState(false)
   const [pickerFor, setPickerFor] = useState<MealKey | null>(null)
-  const [view, setView] = useState<'diary' | 'trends'>('diary')
 
-  const key = dateKey(day)
+  const day = new Date(`${dayKey}T12:00:00`)
+  const key = dayKey
   useEffect(() => {
-    if (key === dateKey(new Date())) setDay(new Date())
-  }, [todayKey, key])
+    const nextDate = nutritionDateForMode(key, todayKey, followsToday)
+    if (nextDate !== key) setUi({ nutritionDate: nextDate })
+  }, [followsToday, todayKey, key, setUi])
   const entries = useLiveQuery(() => db.foodLog.where('date').equals(key).toArray(), [key], undefined)
 
   const totals = useMemo(() => {
@@ -61,69 +69,37 @@ export default function Nutrition() {
       if (prev.length) break
       cursor = subDays(cursor, 1)
     }
-    if (!prev.length) return
+    if (!prev.length) {
+      useToasts.getState().show('No hay días registrados en las últimas dos semanas.')
+      return
+    }
     await db.foodLog.bulkPut(prev.map((e) => ({ ...e, id: uid(), date: key })))
   }
 
   return (
-    <div className="px-4 pt-6">
-      <div className="flex items-start justify-between pb-4">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Energía y recuperación</p>
-          <h1 className="text-2xl font-extrabold tracking-[-0.03em]">Nutrición</h1>
-          <p className="pt-0.5 text-xs text-muted">Decisiones basadas en tu ingesta y tendencia real.</p>
-        </div>
-        <button
-          className="pressable grid h-11 w-11 place-items-center rounded-2xl border border-border bg-surface/80 text-muted"
-          onClick={() => setWizardOpen(true)}
-          aria-label="Ajustar objetivos"
-        >
-          <IconTarget size={20} />
-        </button>
-      </div>
-
-      <div
-        className="mb-4 grid grid-cols-2 gap-1 rounded-2xl border border-border bg-surface/75 p-1"
-        role="tablist"
-        aria-label="Vista de nutrición"
-      >
-        {([
-          ['diary', 'Diario'],
-          ['trends', 'Tendencias'],
-        ] as const).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            role="tab"
-            aria-selected={view === key}
-            aria-controls={`nutrition-${key}`}
-            className={`min-h-11 rounded-xl text-xs font-bold transition-[background-color,color,box-shadow] duration-150 ${
-              view === key ? 'bg-surface-2 text-text shadow-sm shadow-black/30' : 'text-muted'
-            }`}
-            onClick={() => setView(key)}
-          >
-            {label}
-          </button>
-        ))}
+    <div className="page-content pt-3">
+      <PageHeader title="Nutrición" subtitle="Decisiones basadas en tu ingesta y tendencia real." action={<button className="page-header__profile pressable" onClick={() => setWizardOpen(true)} aria-label="Configurar objetivos"><IconTarget size={19} /></button>} />
+      <div className="mt-4">
+        <SegmentedControl value={view} options={[{ value: 'diary', label: 'Diario', panelId: 'nutrition-diary' }, { value: 'trends', label: 'Tendencias', panelId: 'nutrition-trends' }]} onChange={(value) => setUi({ nutritionView: value })} ariaLabel="Vista de nutrición" />
       </div>
 
       {view === 'diary' ? (
         <div id="nutrition-diary" role="tabpanel">
       <div className="flex items-center justify-between pb-4">
-        <button className="pressable rounded-lg p-2 text-muted" onClick={() => setDay((d) => subDays(d, 1))} aria-label="Día anterior">
+        <button className="pressable grid h-11 w-11 place-items-center rounded-[14px] text-muted" onClick={() => setUi({ nutritionDate: dateKey(subDays(day, 1)), nutritionFollowsToday: false })} aria-label="Día anterior">
           <IconChevronLeft size={20} />
         </button>
         <div className="text-center">
           <div className="font-bold">{isToday(day) ? 'Hoy' : format(day, "EEEE d 'de' MMMM", { locale: es })}</div>
           {!isToday(day) && (
-            <button className="text-xs font-semibold text-primary" onClick={() => setDay(new Date())}>
+            <button className="min-h-11 text-xs font-semibold text-primary" onClick={() => setUi({ nutritionDate: todayKey, nutritionFollowsToday: true })}>
               Ir a hoy
             </button>
           )}
         </div>
         <button
-          className="pressable rounded-lg p-2 text-muted disabled:opacity-30"
-          onClick={() => setDay((d) => addDays(d, 1))}
+          className="pressable grid h-11 w-11 place-items-center rounded-[14px] text-muted disabled:opacity-30"
+          onClick={() => setUi({ nutritionDate: dateKey(addDays(day, 1)), nutritionFollowsToday: false })}
           disabled={isToday(day)}
           aria-label="Día siguiente"
         >
@@ -133,10 +109,12 @@ export default function Nutrition() {
 
       <DaySummary totals={totals} goals={goals} />
 
+      {!goals.configured && <button className="mt-3 flex min-h-11 w-full items-center justify-center gap-1 text-sm font-semibold text-primary" onClick={() => setWizardOpen(true)}><IconTarget size={16} />Configurar objetivos</button>}
+
       {entries?.length === 0 && (
         <button className="btn btn-surface mt-3 w-full text-sm" onClick={() => void copyPreviousDay()}>
           <IconRepeat size={15} />
-          Copiar el día anterior
+          Copiar último día registrado
         </button>
       )}
 
@@ -209,7 +187,6 @@ function NutritionIntelligence({
   return (
     <div>
       <section className="card relative overflow-hidden px-4 py-4">
-        <div className="pointer-events-none absolute -right-20 -top-24 h-52 w-52 rounded-full bg-accent/15 blur-3xl" />
         <div className="relative flex items-start justify-between gap-3">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-primary">Últimos 14 días</p>
@@ -289,7 +266,7 @@ function NutritionIntelligence({
                 contentStyle={{ background: 'var(--color-surface-2)', border: '1px solid var(--color-border)', borderRadius: 12, fontSize: 11 }}
                 formatter={(value) => [`${Number(value)} kcal`, 'Ingesta']}
               />
-              <Bar dataKey="kcal" fill="var(--color-primary)" radius={[5, 5, 2, 2]} maxBarSize={18} />
+              <Bar dataKey="kcal" fill="var(--color-primary)" radius={[5, 5, 2, 2]} maxBarSize={18} isAnimationActive={false} />
             </BarChart>
           </ResponsiveContainer>
         )}
@@ -336,61 +313,42 @@ function DaySummary({
   goals,
 }: {
   totals: { kcal: number; p: number; c: number; f: number }
-  goals: { kcal: number; proteinG: number; carbsG: number; fatG: number }
+  goals: { configured: boolean; kcal: number; proteinG: number; carbsG: number; fatG: number }
 }) {
-  const pct = Math.min(1, totals.kcal / Math.max(1, goals.kcal))
-  const remaining = goals.kcal - totals.kcal
-  const r = 42
-  const circumference = 2 * Math.PI * r
+  const pct = goals.configured ? Math.min(1, totals.kcal / Math.max(1, goals.kcal)) : 0
+  const remaining = goals.configured ? goals.kcal - totals.kcal : null
 
   return (
-    <div className="card px-4 py-4">
-      <div className="flex items-center gap-4">
-        <svg width="100" height="100" viewBox="0 0 100 100" className="-rotate-90 shrink-0">
-          <circle cx="50" cy="50" r={r} fill="none" stroke="var(--color-surface-2)" strokeWidth="9" />
-          <circle
-            cx="50"
-            cy="50"
-            r={r}
-            fill="none"
-            stroke={remaining < 0 ? 'var(--color-danger)' : 'var(--color-primary)'}
-            strokeWidth="9"
-            strokeLinecap="round"
-            strokeDasharray={circumference}
-            strokeDashoffset={circumference * (1 - pct)}
-            style={{ transition: 'stroke-dashoffset 0.3s' }}
-          />
-        </svg>
-        <div className="flex-1">
-          <div className="text-2xl font-extrabold tabular-nums">
-            {Math.round(totals.kcal)} <span className="text-sm font-normal text-muted">/ {goals.kcal} kcal</span>
-          </div>
-          <div className={`text-xs font-semibold ${remaining < 0 ? 'text-danger' : 'text-muted'}`}>
-            {remaining >= 0 ? `${Math.round(remaining)} kcal restantes` : `${Math.round(-remaining)} kcal de más`}
+    <div className="glass-panel px-5 py-5">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <div className="text-[32px] font-bold leading-[38px] tracking-[-0.025em] tabular-nums">{Math.round(totals.kcal)} <span className="text-sm font-normal text-muted">kcal</span></div>
+          <div className={`text-sm ${remaining !== null && remaining < 0 ? 'text-danger' : 'text-muted'}`}>
+            {remaining === null ? 'Objetivo no configurado' : remaining >= 0 ? `${Math.round(remaining)} kcal restantes` : `${Math.round(-remaining)} kcal de más`}
           </div>
         </div>
+        {remaining !== null && <span className="text-sm text-muted">meta {goals.kcal} kcal</span>}
       </div>
-      <div className="grid grid-cols-3 gap-2 pt-4">
-        <MacroBar label="Proteína" value={totals.p} goal={goals.proteinG} color="#3d8bfd" />
-        <MacroBar label="Carbos" value={totals.c} goal={goals.carbsG} color="#33c076" />
-        <MacroBar label="Grasas" value={totals.f} goal={goals.fatG} color="#f2a33c" />
+      {goals.configured && <div className="mt-3 h-1 overflow-hidden rounded-full bg-surface-2"><div className={`h-full rounded-full ${remaining !== null && remaining < 0 ? 'bg-danger' : 'bg-primary'}`} style={{ width: `${pct * 100}%` }} /></div>}
+      <div className="grid gap-4 pt-5">
+        <MacroBar label="Proteína" value={totals.p} goal={goals.configured ? goals.proteinG : undefined} color="primary" />
+        <MacroBar label="Carbos" value={totals.c} goal={goals.configured ? goals.carbsG : undefined} color="success" />
+        <MacroBar label="Grasas" value={totals.f} goal={goals.configured ? goals.fatG : undefined} color="warning" />
       </div>
     </div>
   )
 }
 
-function MacroBar({ label, value, goal, color }: { label: string; value: number; goal: number; color: string }) {
-  const pct = Math.min(100, (value / Math.max(1, goal)) * 100)
+function MacroBar({ label, value, goal, color }: { label: string; value: number; goal?: number; color: 'primary' | 'success' | 'warning' }) {
+  const pct = goal === undefined ? 0 : Math.min(100, (value / Math.max(1, goal)) * 100)
   return (
     <div>
-      <div className="flex justify-between pb-1 text-[10px] font-bold uppercase text-muted">
-        <span>{label}</span>
+      <div className="flex items-baseline justify-between gap-2 pb-2 text-sm">
+        <span className="text-muted">{label}</span>
+        <span className="font-semibold tabular-nums">{Math.round(value)} g {goal !== undefined && <span className="font-normal text-muted">/ {goal} g</span>}</span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
-        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
-      </div>
-      <div className="pt-1 text-xs font-semibold tabular-nums">
-        {Math.round(value)}g <span className="text-muted">/ {goal}g</span>
+      <div className="h-1 overflow-hidden rounded-full bg-surface-2">
+        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: `var(--color-${color})` }} />
       </div>
     </div>
   )
@@ -423,7 +381,7 @@ function MealSection({
         <span className="font-bold">{meal.label}</span>
         <div className="flex items-center gap-3">
           {kcal > 0 && <span className="text-xs text-muted tabular-nums">{Math.round(kcal)} kcal</span>}
-          <button className="pressable text-primary" onClick={onAdd} aria-label={`Añadir a ${meal.label}`}>
+          <button className="pressable grid h-11 w-11 place-items-center rounded-full bg-primary/10 text-primary" onClick={onAdd} aria-label={`Añadir a ${meal.label}`}>
             <IconPlus size={17} />
           </button>
         </div>
@@ -561,15 +519,15 @@ function WeightTrendCard({ goal }: { goal: 'bulk' | 'maintain' | 'cut' }) {
         <>
           <ResponsiveContainer width="100%" height={140}>
             <LineChart data={points} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
-              <CartesianGrid stroke="#2a2a33" strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="date" tickFormatter={(d) => format(d, 'd MMM', { locale: es })} stroke="#8f8f9b" fontSize={10} tickLine={false} />
-              <YAxis stroke="#8f8f9b" fontSize={10} tickLine={false} domain={['auto', 'auto']} />
+              <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="date" tickFormatter={(d) => format(d, 'd MMM', { locale: es })} stroke="var(--color-muted)" fontSize={10} tickLine={false} />
+              <YAxis stroke="var(--color-muted)" fontSize={10} tickLine={false} domain={['auto', 'auto']} />
               <Tooltip
-                contentStyle={{ background: '#1f1f27', border: '1px solid #2a2a33', borderRadius: 12, fontSize: 12 }}
+                contentStyle={{ background: 'var(--color-surface-2)', border: '1px solid var(--color-border)', borderRadius: 12, fontSize: 12 }}
                 labelFormatter={(d) => format(Number(d), "d 'de' MMMM", { locale: es })}
               />
-              <Line type="monotone" dataKey="real" stroke="#8f8f9b" strokeWidth={1.5} dot={false} />
-              <Line type="monotone" dataKey="trend" stroke="#3d8bfd" strokeWidth={2.5} dot={false} />
+              <Line type="monotone" dataKey="real" stroke="var(--color-muted)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+              <Line type="monotone" dataKey="trend" stroke="var(--color-primary)" strokeWidth={2.5} dot={false} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
           {pct !== null && (

@@ -177,6 +177,13 @@ export const IconFood = (p: IconProps) => (
   </svg>
 )
 
+export const IconMessage = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M5 5.5A3.5 3.5 0 0 1 8.5 2h7A3.5 3.5 0 0 1 19 5.5v5A3.5 3.5 0 0 1 15.5 14H11l-4.5 4v-4.6A3.5 3.5 0 0 1 5 10.5v-5Z" />
+    <path d="M9 7.5h6M9 10.5h3" />
+  </svg>
+)
+
 export const IconCalendar = (p: IconProps) => (
   <svg {...base(p)}>
     <rect x="3" y="5" width="18" height="16" rx="2" />

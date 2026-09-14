@@ -1,5 +1,4 @@
 import { useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   CartesianGrid,
@@ -21,39 +20,23 @@ import { toastUndo, useToasts } from '../stores/toasts'
 import { Select } from '../components/Select'
 import { Confirm, Sheet } from '../components/Sheet'
 import { SkeletonChart } from '../components/Skeleton'
-import { IconCamera, IconChevronLeft, IconPlus, IconRuler, IconTrash } from '../components/icons'
+import { IconCamera, IconPlus, IconTrash } from '../components/icons'
+import { PageHeader } from '../components/PageHeader'
+import { ProgressNav } from '../components/ProgressNav'
+import { SegmentedControl } from '../components/SegmentedControl'
 
 type Tab = 'measurements' | 'photos'
 
 export default function Measurements() {
-  const navigate = useNavigate()
   const [tab, setTab] = useState<Tab>('measurements')
 
   return (
-    <div className="px-4 pt-4">
-      <header className="flex items-center gap-2 pb-2">
-        <button
-          className="pressable -ml-2 rounded-lg p-1.5 text-muted"
-          onClick={() => navigate(-1)}
-          aria-label="Volver"
-        >
-          <IconChevronLeft size={22} />
-        </button>
-        <h1 className="text-xl font-extrabold">Medidas</h1>
-      </header>
-
-      <div className="flex gap-2 pb-4">
-        <button
-          className={`chip ${tab === 'measurements' ? 'chip-active' : ''}`}
-          onClick={() => setTab('measurements')}
-        >
-          <IconRuler size={13} />
-          Medidas
-        </button>
-        <button className={`chip ${tab === 'photos' ? 'chip-active' : ''}`} onClick={() => setTab('photos')}>
-          <IconCamera size={13} />
-          Fotos
-        </button>
+    <div className="page-content pt-3">
+      <PageHeader title="Progreso" />
+      <ProgressNav />
+      <div className="flex items-center justify-between gap-3 pb-4">
+        <h2 className="text-xl font-semibold">Medidas</h2>
+        <div className="w-36"><SegmentedControl value={tab} options={[{ value: 'measurements', label: 'Medidas' }, { value: 'photos', label: 'Fotos' }]} onChange={setTab} ariaLabel="Vista de medidas" /></div>
       </div>
 
       {tab === 'measurements' ? <MeasurementsTab /> : <PhotosTab />}
@@ -190,21 +173,21 @@ function MeasurementDetailSheet({
             <div className="card px-1 py-3">
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={points} margin={{ top: 8, right: 14, bottom: 0, left: 0 }}>
-                  <CartesianGrid stroke="#2a2a33" strokeDasharray="3 3" vertical={false} />
+                  <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
                   <XAxis
                     dataKey="date"
                     tickFormatter={(d: number) => format(d, 'd MMM', { locale: es })}
-                    stroke="#8f8f9b"
+                    stroke="var(--color-muted)"
                     fontSize={11}
                     tickLine={false}
                   />
-                  <YAxis stroke="#8f8f9b" fontSize={11} width={38} tickLine={false} domain={['auto', 'auto']} />
+                  <YAxis stroke="var(--color-muted)" fontSize={11} width={38} tickLine={false} domain={['auto', 'auto']} />
                   <Tooltip
-                    contentStyle={{ background: '#1f1f27', border: '1px solid #2a2a33', borderRadius: 12, fontSize: 12 }}
+                    contentStyle={{ background: 'var(--color-surface-2)', border: '1px solid var(--color-border)', borderRadius: 12, fontSize: 12 }}
                     labelFormatter={(d) => format(Number(d), "d 'de' MMMM yyyy", { locale: es })}
                     formatter={(v) => [`${v} ${MEASUREMENT_UNIT[kind]}`, MEASUREMENT_LABELS[kind]]}
                   />
-                  <Line type="monotone" dataKey="value" stroke="#3d8bfd" strokeWidth={2.5} dot={{ r: 3, fill: '#3d8bfd' }} />
+                  <Line type="monotone" dataKey="value" stroke="var(--color-primary)" strokeWidth={2.5} dot={{ r: 3, fill: 'var(--color-primary)' }} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useAuth } from '@clerk/react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import type { SetType } from '../db/types'
 import type { PostWorkoutFeedback } from '../db/types'
@@ -18,8 +17,6 @@ import { clock, displayToKg, formatDuration, formatVolume, kgToDisplay } from '.
 import { REST_OPTIONS, restLabel } from '../lib/constants'
 import { suggestProgression, warmupSets } from '../lib/progression'
 import { toastUndo } from '../stores/toasts'
-import { startCoachRun } from '../lib/coachClient'
-import { getCoachConsent } from '../lib/coachConsent'
 import { ExercisePicker } from '../components/ExercisePicker'
 import { ExerciseThumb } from '../components/ExerciseThumb'
 import { PlateCalculatorSheet } from '../components/PlateCalculator'
@@ -41,10 +38,10 @@ const SET_TYPE_META: Record<SetType, { label: string; badge: string; className: 
   warmup: { label: 'Calentamiento', badge: 'W', className: 'text-warning' },
   normal: { label: 'Normal', badge: '', className: 'text-muted' },
   failure: { label: 'Al fallo', badge: 'F', className: 'text-danger' },
-  drop: { label: 'Drop set', badge: 'D', className: 'text-purple-400' },
+  drop: { label: 'Drop set', badge: 'D', className: 'text-accent' },
 }
 
-const SUPERSET_COLORS = ['#3d8bfd', '#a78bfa', '#f2a33c', '#33c076']
+const SUPERSET_COLORS = ['var(--color-primary)', 'var(--color-accent)', 'var(--color-warning)', 'var(--color-success)']
 const supersetColor = (g: number) => SUPERSET_COLORS[g % SUPERSET_COLORS.length]
 const supersetLetter = (g: number) => String.fromCharCode(65 + (g % 26))
 
@@ -54,12 +51,13 @@ const RIR_VALUES = [0, 1, 2, 3, 4, 5]
 export default function ActiveWorkoutPage() {
   const session = useActive((s) => s.session)
   const keepAwake = useSettings((s) => s.keepAwake)
-  const { getToken, userId } = useAuth()
   useWakeLock(!!session && keepAwake)
   const navigate = useNavigate()
   const [pickerOpen, setPickerOpen] = useState(false)
   const [finishOpen, setFinishOpen] = useState(false)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [showNotes, setShowNotes] = useState(false)
 
   if (!session) return <Navigate to="/" replace />
@@ -70,16 +68,19 @@ export default function ActiveWorkoutPage() {
   )
 
   const doFinish = async () => {
+    if (saving) return
+    setSaving(true)
     const editing = session.editingWorkoutId
-    const wid = await useActive.getState().finish()
-    if (wid && !editing && userId && getCoachConsent(userId)) {
-      void startCoachRun(getToken, 'Analiza mi sesión terminada y dime qué debería ajustar antes del próximo entreno.').catch(() => undefined)
+    try {
+      const wid = await useActive.getState().finish()
+      if (wid) navigate(`/historial/${wid}${editing ? '' : '?nuevo=1'}`, { replace: true })
+    } finally {
+      setSaving(false)
     }
-    if (wid) navigate(`/historial/${wid}${editing ? '' : '?nuevo=1'}`, { replace: true })
   }
 
   return (
-    <div className="px-4">
+    <div className="page-content">
       <header className="sticky top-[env(safe-area-inset-top)] z-30 -mx-4 flex items-center justify-between gap-2 border-b border-border bg-bg/95 px-4 py-2 backdrop-blur">
         <button
           onClick={() => navigate('/')}
@@ -89,13 +90,12 @@ export default function ActiveWorkoutPage() {
           <IconChevronDown size={22} />
         </button>
         <Elapsed isEdit={isEdit} startedAt={session.startedAt} />
-        <button
-          className="rounded-xl bg-primary px-4 py-1.5 text-sm font-bold text-white disabled:opacity-40"
-          onClick={() => setFinishOpen(true)}
-          disabled={completed === 0}
-        >
-          {isEdit ? 'Guardar' : 'Finalizar'}
-        </button>
+        <div className="flex items-center gap-1">
+          <button className="pressable grid h-11 w-11 place-items-center rounded-[14px] text-muted" onClick={() => setSessionMenuOpen(true)} aria-label="Opciones de sesión"><IconDots size={20} /></button>
+          <button className="btn btn-primary min-h-11 px-4 text-sm disabled:opacity-40" onClick={() => setFinishOpen(true)} disabled={completed === 0 || saving}>
+            {saving ? 'Guardando…' : isEdit ? 'Guardar' : 'Finalizar'}
+          </button>
+        </div>
       </header>
 
       <input
@@ -103,6 +103,7 @@ export default function ActiveWorkoutPage() {
         value={session.name}
         onChange={(e) => useActive.getState().setName(e.target.value)}
         placeholder="Nombre del entreno"
+        aria-label="Nombre del entrenamiento"
       />
       {showNotes || session.notes ? (
         <textarea
@@ -137,10 +138,6 @@ export default function ActiveWorkoutPage() {
         <IconPlus size={17} />
         Añadir ejercicios
       </button>
-      <button className="btn btn-danger mt-3 w-full" onClick={() => setConfirmDiscard(true)}>
-        {isEdit ? 'Cancelar edición' : 'Descartar entreno'}
-      </button>
-
       <ExercisePicker
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
@@ -149,7 +146,9 @@ export default function ActiveWorkoutPage() {
         }
       />
 
-      <FinishSheet open={finishOpen} onClose={() => setFinishOpen(false)} onFinish={doFinish} />
+      <FinishSheet open={finishOpen} onClose={() => setFinishOpen(false)} onFinish={doFinish} saving={saving} />
+
+      <ActionSheet open={sessionMenuOpen} onClose={() => setSessionMenuOpen(false)} title={session.name} actions={[{ label: isEdit ? 'Cancelar edición' : 'Descartar entreno', danger: true, onClick: () => setConfirmDiscard(true) }]} />
 
       <Confirm
         open={confirmDiscard}
@@ -176,7 +175,7 @@ function Elapsed({ isEdit, startedAt }: { isEdit: boolean; startedAt: number }) 
   const now = useNow(1000, !isEdit)
   if (isEdit) return <span className="text-sm font-bold text-warning">Editando entreno</span>
   return (
-    <span className="font-mono text-base font-bold tabular-nums">
+    <span className="text-base font-bold tabular-nums">
       {clock((now - startedAt) / 1000)}
     </span>
   )
@@ -193,8 +192,6 @@ function ExerciseBlock({
 }) {
   const { byId } = useCatalog()
   const units = useSettings((s) => s.units)
-  const trackRpe = useSettings((s) => s.trackRpe)
-  const trackRir = useSettings((s) => s.trackRir)
   const barWeightKg = useSettings((s) => s.barWeightKg)
   const info = byId.get(ex.exerciseId)
   const isCardio = info?.bodyPart === 'cardio'
@@ -281,19 +278,14 @@ function ExerciseBlock({
     },
   ]
 
-  const gridCols =
-    !isCardio && trackRpe && trackRir
-      ? 'grid-cols-[2.1rem_1fr_3.6rem_3.6rem_2.1rem_2.1rem_2.6rem]'
-      : !isCardio && (trackRpe || trackRir)
-        ? 'grid-cols-[2.1rem_1fr_4rem_4rem_2.3rem_2.6rem]'
-        : 'grid-cols-[2.2rem_1fr_4.4rem_4.4rem_2.6rem]'
+  const gridCols = 'grid-cols-[44px_minmax(0,1fr)_64px_56px_44px]'
 
   return (
     <div
       className="card relative mt-3 px-3 py-3"
       style={
         ex.supersetGroup !== undefined
-          ? { borderLeft: `3px solid ${supersetColor(ex.supersetGroup)}` }
+          ? { boxShadow: `inset 3px 0 0 ${supersetColor(ex.supersetGroup)}` }
           : undefined
       }
     >
@@ -346,9 +338,9 @@ function ExerciseBlock({
       )}
 
       <div
-        className={`grid ${gridCols} items-center gap-x-2 pb-1 pt-3 text-center text-[10px] font-bold uppercase tracking-wide text-muted`}
+        className={`grid ${gridCols} items-center gap-x-1.5 pb-1 pt-3 text-center text-xs font-semibold text-muted`}
       >
-        <span>Set</span>
+        <span>Serie</span>
         <span className="text-left">Anterior</span>
         {isCardio ? (
           <>
@@ -361,8 +353,6 @@ function ExerciseBlock({
             <span>Reps</span>
           </>
         )}
-        {trackRpe && !isCardio && <span>RPE</span>}
-        {trackRir && !isCardio && <span>RIR</span>}
         <span>
           <IconCheck size={12} className="mx-auto" />
         </span>
@@ -464,16 +454,16 @@ function SetRow({
 
   return (
     <div
-      className={`grid ${gridCols} items-center gap-x-2 rounded-lg py-1 ${
+      className={`grid ${gridCols} items-center gap-x-1.5 rounded-lg py-1 ${
         st.completed ? 'bg-success/10' : ''
       }`}
     >
       <button
-        className={`min-h-9 py-1 text-center text-sm font-bold ${meta.className}`}
+        className={`flex min-h-[52px] flex-col items-center justify-center py-1 text-center text-sm font-bold ${meta.className}`}
         onClick={() => setTypeOpen(true)}
         aria-label="Tipo de serie"
       >
-        {st.type === 'normal' ? setNumber : meta.badge}
+        <span>{st.type === 'normal' ? setNumber : meta.badge}</span>
       </button>
       <span className="truncate text-xs text-muted">{prevLabel}</span>
 
@@ -481,6 +471,7 @@ function SetRow({
         <>
           <NumInput
             decimal
+            label={`Minutos de la serie ${setNumber}`}
             value={st.durationSec == null ? null : Math.round((st.durationSec / 60) * 10) / 10}
             placeholder={String(Math.round((ph.durationSec ?? 0) / 60) || '')}
             onValue={(v) =>
@@ -491,6 +482,7 @@ function SetRow({
           />
           <NumInput
             decimal
+            label={`Kilómetros de la serie ${setNumber}`}
             value={st.distanceM == null ? null : Math.round((st.distanceM / 1000) * 100) / 100}
             placeholder={String((ph.distanceM ?? 0) / 1000 || '')}
             onValue={(v) =>
@@ -505,6 +497,7 @@ function SetRow({
           <NumInput
             decimal
             keypad="weight"
+            label={`Peso de la serie ${setNumber} (${units})`}
             value={st.weightKg === null ? null : kgToDisplay(st.weightKg, units)}
             placeholder={String(kgToDisplay(ph.weightKg, units))}
             onValue={(v) =>
@@ -515,6 +508,7 @@ function SetRow({
           />
           <NumInput
             keypad="reps"
+            label={`Repeticiones de la serie ${setNumber}`}
             value={st.reps}
             placeholder={String(ph.reps)}
             onValue={(v) =>
@@ -526,41 +520,25 @@ function SetRow({
         </>
       )}
 
-      {trackRpe && !isCardio && (
-        <button
-          className={`min-h-9 rounded-lg py-1 text-center text-xs font-bold ${
-            st.rpe ? 'text-warning' : 'text-muted'
-          }`}
-          onClick={() => setRpeOpen(true)}
-          aria-label="RPE"
-        >
-          {st.rpe ?? '–'}
-        </button>
-      )}
-
-      {trackRir && !isCardio && (
-        <button
-          className={`min-h-9 rounded-lg py-1 text-center text-xs font-bold ${
-            st.rir !== undefined ? 'text-primary' : 'text-muted'
-          }`}
-          onClick={() => setRirOpen(true)}
-          aria-label="RIR"
-        >
-          {st.rir ?? '–'}
-        </button>
-      )}
-
       <button
-        className={`mx-auto flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${
-          st.completed ? 'bg-success text-white' : 'bg-surface-2 text-muted'
+        className={`mx-auto flex h-11 w-11 items-center justify-center rounded-[14px] transition-colors ${
+          st.completed ? 'bg-success/15 text-success' : 'bg-surface-2 text-muted'
         }`}
         onClick={() => useActive.getState().toggleSet(ex.uid, i)}
         aria-label="Completar serie"
+        aria-pressed={st.completed}
       >
-        <span key={String(st.completed)} className={st.completed ? 'check-pop' : ''}>
+        <span>
           <IconCheck size={15} />
         </span>
       </button>
+
+      {!isCardio && (trackRpe || trackRir) && (
+        <div className="col-span-full flex gap-2 pb-2 pt-1">
+          {trackRpe && <button className="min-h-11 flex-1 rounded-xl bg-surface-2 px-3 text-left text-sm text-muted" onClick={() => setRpeOpen(true)} aria-label={`RPE de la serie ${setNumber}`}>RPE <span className="float-right font-semibold text-text">{st.rpe ?? '—'}</span></button>}
+          {trackRir && <button className="min-h-11 flex-1 rounded-xl bg-surface-2 px-3 text-left text-sm text-muted" onClick={() => setRirOpen(true)} aria-label={`RIR de la serie ${setNumber}`}>RIR <span className="float-right font-semibold text-text">{st.rir ?? '—'}</span></button>}
+        </div>
+      )}
 
       <ActionSheet
         open={typeOpen}
@@ -643,12 +621,14 @@ function SetRow({
 /** Input numérico que no pelea con el tecleo de decimales y se integra con el
  *  teclado de gimnasio (barra de ±). */
 function NumInput({
+  label,
   value,
   onValue,
   placeholder,
   decimal = false,
   keypad,
 }: {
+  label: string
   value: number | null
   onValue: (v: number | null) => void
   placeholder: string
@@ -657,10 +637,18 @@ function NumInput({
 }) {
   const [text, setText] = useState(value === null ? '' : String(value))
   const [focused, setFocused] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
   const textRef = useRef(text)
   textRef.current = text
   const phRef = useRef(placeholder)
   phRef.current = placeholder
+
+  useEffect(() => {
+    const input = inputRef.current
+    return () => {
+      if (useKeypad.getState().target?.input === input) useKeypad.getState().unregister()
+    }
+  }, [])
 
   useEffect(() => {
     if (!focused) setText(value === null ? '' : String(value))
@@ -668,6 +656,8 @@ function NumInput({
 
   return (
     <input
+      ref={inputRef}
+      aria-label={label}
       className="input px-1 py-1.5 text-center text-sm font-semibold tabular-nums"
       type="text"
       inputMode={decimal ? 'decimal' : 'numeric'}
@@ -679,6 +669,7 @@ function NumInput({
         if (keypad) {
           useKeypad.getState().register({
             kind: keypad,
+            input: e.currentTarget,
             apply: (delta) => {
               const curText = textRef.current.trim()
               const cur =
@@ -692,9 +683,9 @@ function NumInput({
           })
         }
       }}
-      onBlur={() => {
+      onBlur={(event) => {
         setFocused(false)
-        if (keypad) useKeypad.getState().unregister()
+        if (keypad && !(event.relatedTarget instanceof HTMLElement && event.relatedTarget.closest('.gym-keypad'))) useKeypad.getState().unregister()
       }}
       onChange={(e) => {
         const t = e.target.value
@@ -714,10 +705,12 @@ function FinishSheet({
   open,
   onClose,
   onFinish,
+  saving,
 }: {
   open: boolean
   onClose: () => void
-  onFinish: () => void
+  onFinish: () => void | Promise<void>
+  saving: boolean
 }) {
   const session = useActive((s) => s.session)
   const units = useSettings((s) => s.units)
@@ -787,6 +780,7 @@ function FinishSheet({
       )}
       <button
         className="btn btn-primary mb-2 w-full"
+        disabled={saving}
         onClick={() => {
           if (!isEdit) useActive.getState().setPostWorkoutFeedback({ ...feedback, completed: incomplete === 0 })
           onClose()

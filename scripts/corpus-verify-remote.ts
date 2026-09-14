@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { corpusNamespace, corpusSourceKey, vectorPhysicalId } from '../packages/corpus-identity/src/index.mjs'
-import { EMBEDDING_MODEL, readJson } from '../packages/corpus-pipeline/src/runtime.ts'
+import { EMBEDDING_MODEL, loadLocalEnv, readJson } from '../packages/corpus-pipeline/src/runtime.ts'
 import { scientificReviewReady } from '../packages/corpus-evaluation/src/scientific-review.mjs'
 import { corpusMetadataKey } from '../packages/corpus-identity/src/index.mjs'
 import { buildVectorizeFilter, eligibleCorpusEvidence } from '../packages/corpus-retrieval/src/index.ts'
@@ -19,6 +19,7 @@ type ApiResult = { dimensions?: number; vectorCount?: number; count?: number; ve
 type ApiBody = { success?: boolean; errors?: unknown; result?: ApiResult }
 
 const args = process.argv.slice(2)
+loadLocalEnv()
 const option = (name: string, fallback?: string) => { const index = args.indexOf(name); const value = index < 0 ? undefined : args[index + 1]; return value && !value.startsWith('--') ? value : fallback }
 const has = (name: string) => args.includes(name)
 const fail = (message: string): never => { throw new Error(`corpus:verify-remote: ${message}`) }

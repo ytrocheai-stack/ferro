@@ -60,4 +60,9 @@ describe('validación de respaldos', () => {
   it('acepta el formato v7 que conserva la identidad del contexto', () => {
     expect(validateBackup({ ...base, version: 7 })).toBeNull()
   })
+
+  it('acepta la preferencia de tema sin exigirla en backups antiguos', () => {
+    expect(validateBackup({ ...base, settings: { theme: 'dark' } })).toBeNull()
+    expect(validateBackup({ ...base, settings: { theme: 'invalid' } })).toMatch(/theme|tema/i)
+  })
 })

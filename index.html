@@ -2,8 +2,8 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-content" />
-    <meta name="theme-color" content="#0b0b0f" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#F3F0EA" />
     <meta name="description" content="Registro de entrenamientos de gimnasio, 100% offline" />
     <!-- iOS < 16.4 ignora el manifest.webmanifest para el modo standalone: sin esto, "Añadir a
          pantalla de inicio" abre con la barra de Safari en vez de a pantalla completa. -->
@@ -12,6 +12,19 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="NextRep" />
     <title>NextRep — Registro de entrenos</title>
+    <script>
+      (() => {
+        try {
+          const saved = JSON.parse(localStorage.getItem('ferro-settings') || '{}')
+          const preference = saved?.state?.theme
+          const dark = preference === 'dark' || (preference !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+          document.documentElement.dataset.themePreference = preference === 'light' || preference === 'dark' ? preference : 'system'
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+          document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#171715' : '#F3F0EA')
+        } catch { /* la apariencia clara es el fallback seguro */ }
+      })()
+    </script>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   </head>

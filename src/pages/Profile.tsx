@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { format, startOfWeek, subWeeks } from 'date-fns'
-import { es } from 'date-fns/locale'
-import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis } from 'recharts'
 import { db } from '../db/db'
 import type { Workout } from '../db/types'
 import { useSettings } from '../stores/settings'
@@ -12,113 +9,35 @@ import { exportBackup, exportPhotosBackup, importBackup, importPhotosBackup } fr
 import { exportWorkoutsCsv } from '../lib/csv'
 import { downloadAllGifs, getGifCacheStatus, type GifCacheStatus } from '../lib/gifs'
 import { ensureNotifyPermission } from '../lib/notify'
-import { formatDuration, formatVolume } from '../lib/format'
 import { isIOS, isStandalone } from '../lib/platform'
 import { Select } from '../components/Select'
 import { Confirm } from '../components/Sheet'
+import { PageHeader } from '../components/PageHeader'
+import { SectionHeader } from '../components/SectionHeader'
 import { HevyImportSheet } from '../components/HevyImportSheet'
-import { IconCheck, IconDownload, IconFlame, IconRuler, IconShare, IconUpload } from '../components/icons'
+import { IconCheck, IconChevronDown, IconDownload, IconShare, IconUpload } from '../components/icons'
 import { APP_VERSION, DATASET_URL, REST_OPTIONS, restLabel } from '../lib/constants'
-import { useLocalDateKey } from '../lib/useLocalDateKey'
 import { undoImport, type ImportSummary } from '../lib/hevyImport'
 import { useAuth } from '@clerk/react'
 import { COACH_CONSENT_VERSION, getCoachConsent, grantCoachConsent, revokeCoachConsent, saveCoachProfile, type CoachConsent } from '../lib/coachConsent'
-
-const weekKey = (d: Date | number) => format(startOfWeek(d, { weekStartsOn: 1 }), 'yyyy-MM-dd')
-
-function weeklyStreak(workouts: Workout[]): number {
-  if (!workouts.length) return 0
-  const weeks = new Set(workouts.map((w) => weekKey(w.startedAt)))
-  let cursor = startOfWeek(new Date(), { weekStartsOn: 1 })
-  let streak = 0
-  if (!weeks.has(weekKey(cursor))) cursor = subWeeks(cursor, 1) // la semana actual puede no haber empezado
-  while (weeks.has(weekKey(cursor))) {
-    streak++
-    cursor = subWeeks(cursor, 1)
-  }
-  return streak
-}
+import { AuthControls } from '../components/AuthControls'
 
 export default function Profile() {
   const workouts = useLiveQuery(() => db.workouts.toArray(), [], [] as Workout[])
-  useLocalDateKey()
-  const settings = useSettings()
-  const units = settings.units
-
-  const stats = useMemo(() => {
-    const now = new Date()
-    const thisWeek = weekKey(now)
-    const thisMonth = format(now, 'yyyy-MM')
-    return {
-      total: workouts.length,
-      week: workouts.filter((w) => weekKey(w.startedAt) === thisWeek).length,
-      month: workouts.filter((w) => format(w.startedAt, 'yyyy-MM') === thisMonth).length,
-      volume: workouts.reduce((a, w) => a + w.volumeKg, 0),
-      time: workouts.reduce((a, w) => a + (w.endedAt - w.startedAt) / 1000, 0),
-      streak: weeklyStreak(workouts),
-    }
-  }, [workouts])
-
-  const weeklyData = useMemo(() => {
-    const buckets: { label: string; count: number }[] = []
-    for (let i = 7; i >= 0; i--) {
-      const start = startOfWeek(subWeeks(new Date(), i), { weekStartsOn: 1 })
-      const key = weekKey(start)
-      buckets.push({
-        label: format(start, 'd MMM', { locale: es }),
-        count: workouts.filter((w) => weekKey(w.startedAt) === key).length,
-      })
-    }
-    return buckets
-  }, [workouts])
 
   return (
-    <div className="px-4 pt-6">
-      <h1 className="pb-4 text-2xl font-extrabold">Perfil</h1>
+    <div className="page-content pt-3">
+      <PageHeader title="Perfil" back showProfile={false} />
+      <section className="card mt-4 px-4 py-3" aria-labelledby="account-title">
+        <SectionHeader title="Cuenta" />
+        <div id="account-title" className="pt-3"><AuthControls /></div>
+      </section>
+      <AppearanceCard />
 
-      <div className="grid grid-cols-3 gap-2">
-        <StatCard label="Entrenos" value={String(stats.total)} />
-        <StatCard label="Esta semana" value={String(stats.week)} />
-        <StatCard label="Racha" value={`${stats.streak} sem`} />
-        <StatCard label="Este mes" value={String(stats.month)} />
-        <StatCard label="Volumen total" value={formatVolume(stats.volume, units)} />
-        <StatCard label="Tiempo total" value={stats.time ? formatDuration(stats.time) : '0 min'} />
-      </div>
-
-      <div className="card mt-4 px-2 py-3">
-        <h2 className="px-2 pb-2 text-sm font-bold">Entrenos por semana</h2>
-        <ResponsiveContainer width="100%" height={140}>
-          <BarChart data={weeklyData} margin={{ top: 4, right: 8, bottom: 0, left: -22 }}>
-            <XAxis dataKey="label" stroke="#8f8f9b" fontSize={10} tickLine={false} axisLine={false} />
-            <YAxis stroke="#8f8f9b" fontSize={10} tickLine={false} axisLine={false} allowDecimals={false} />
-            <Bar dataKey="count" fill="#3d8bfd" radius={[5, 5, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      <div className="mt-4 grid grid-cols-2 gap-2">
-        <Link to="/medidas" className="card pressable flex items-center gap-3 px-4 py-3.5">
-          <IconRuler size={20} className="text-primary" />
-          <div>
-            <div className="text-sm font-bold">Medidas</div>
-            <div className="text-[11px] text-muted">Peso, fotos, cm</div>
-          </div>
-        </Link>
-        <Link to="/analisis" className="card pressable flex items-center gap-3 px-4 py-3.5">
-          <IconFlame size={20} className="text-primary" />
-          <div>
-            <div className="text-sm font-bold">Análisis</div>
-            <div className="text-[11px] text-muted">Volumen muscular</div>
-          </div>
-        </Link>
-      </div>
-
-      <InstallCard />
       <SettingsCard />
-      <CoachBetaCard />
-      <CoachProfileCard />
-      <CoachPrivacyCard />
-      <DataCard workoutsCount={workouts.length} />
+      <CoachDisclosure />
+      <DataDisclosure workoutsCount={workouts.length} />
+      <InstallCard />
 
       <div className="card mt-4 px-4 py-3 text-xs leading-relaxed text-muted">
         <div className="pb-1 text-sm font-bold text-text">Acerca de</div>
@@ -131,6 +50,35 @@ export default function Profile() {
         (hasaneyldrm) · Media © Gym visual.
       </div>
     </div>
+  )
+}
+
+function CoachDisclosure() {
+  if (!import.meta.env.VITE_ADAPTATION_WORKER_URL) return null
+  return (
+    <details className="profile-disclosure mt-4">
+      <summary className="profile-disclosure__summary">
+        <span><strong>Contexto y privacidad del coach</strong><small>Consentimiento, contexto editable y uso de datos</small></span>
+        <IconChevronDown size={18} className="profile-disclosure__icon" />
+      </summary>
+      <div>
+        <CoachBetaCard />
+        <CoachProfileCard />
+        <CoachPrivacyCard />
+      </div>
+    </details>
+  )
+}
+
+function DataDisclosure({ workoutsCount }: { workoutsCount: number }) {
+  return (
+    <details className="profile-disclosure mt-4">
+      <summary className="profile-disclosure__summary">
+        <span><strong>Datos</strong><small>Importar, exportar y restaurar copias</small></span>
+        <IconChevronDown size={18} className="profile-disclosure__icon" />
+      </summary>
+      <div><DataCard workoutsCount={workoutsCount} /></div>
+    </details>
   )
 }
 
@@ -215,12 +163,21 @@ function InstallCard() {
   )
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
+function AppearanceCard() {
+  const theme = useSettings((state) => state.theme)
+  const update = useSettings((state) => state.update)
   return (
-    <div className="card px-2 py-3 text-center">
-      <div className="text-[10px] font-bold uppercase tracking-wide text-muted">{label}</div>
-      <div className="pt-1 text-base font-extrabold">{value}</div>
-    </div>
+    <section className="card mt-3 px-4 py-3" aria-labelledby="appearance-title">
+      <SectionHeader title="Apariencia" />
+      <div id="appearance-title" className="pt-3">
+        <Select
+          value={theme}
+          onChange={(value) => update({ theme: value })}
+          options={[{ value: 'system' as const, label: 'Sistema' }, { value: 'light' as const, label: 'Claro' }, { value: 'dark' as const, label: 'Oscuro' }]}
+          sheetTitle="Apariencia"
+        />
+      </div>
+    </section>
   )
 }
 
@@ -238,14 +195,14 @@ function SettingsCard() {
 
   return (
     <div className="card mt-4 px-4 py-3">
-      <h2 className="pb-2 text-sm font-bold">Ajustes</h2>
+      <h2 className="pb-2 text-xl font-semibold">Preferencias de entrenamiento</h2>
       <Row label="Unidades">
         <div className="flex overflow-hidden rounded-lg border border-border">
           {(['kg', 'lb'] as const).map((u) => (
             <button
               key={u}
               className={`px-3.5 py-1.5 text-sm font-bold ${
-                s.units === u ? 'bg-primary text-white' : 'bg-surface-2 text-muted'
+                s.units === u ? 'bg-primary-strong text-on-primary' : 'bg-surface-2 text-muted'
               }`}
               onClick={() => s.update({ units: u })}
             >

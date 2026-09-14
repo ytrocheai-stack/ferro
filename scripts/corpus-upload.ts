@@ -4,11 +4,12 @@ import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { corpusMetadataKey, corpusNamespace, corpusSourceKey, utf8ByteLength, vectorPhysicalId } from '../packages/corpus-identity/src/index.mjs'
-import { EMBEDDING_MODEL, readJson, writeJson } from '../packages/corpus-pipeline/src/runtime.ts'
+import { EMBEDDING_MODEL, loadLocalEnv, readJson, writeJson } from '../packages/corpus-pipeline/src/runtime.ts'
 import { scientificReviewReady } from '../packages/corpus-evaluation/src/scientific-review.mjs'
 
 const execFileAsync = promisify(execFile)
 const args = process.argv.slice(2)
+loadLocalEnv()
 function option(name: string): string | undefined { const i = args.indexOf(name); if (i < 0) return undefined; const v = args[i + 1]; if (!v || v.startsWith('--')) throw new Error(`Falta valor de ${name}`); return v }
 function has(name: string): boolean { return args.includes(name) }
 function fail(message: string): never { throw new Error(`corpus:upload: ${message}`) }
@@ -18,12 +19,12 @@ const runWrangler = (wranglerArgs: string[]) => {
   const command = ['npx.cmd', 'wrangler', ...wranglerArgs].map(quote).join(' ')
   return execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', command], { cwd: path.resolve('.') })
 }
-type Source = { id: string; author: string; title: string; url: string; license: string; evidenceLevel: number; language: string; approvedAt: number; publishedAt?: string; location?: string; approved: boolean; collection?: string; population?: string[]; sourceHash?: string; reviewStatus?: string; scientificReview?: string; populationReviewed?: boolean }
-type Chunk = { id: string; sourceId: string; text: string; textHash?: string; location?: string; section?: string; retrievalClass?: 'evidence' | 'administrative' | 'ambiguous-table'; collection?: string; population?: string[]; populationReviewed?: boolean }
+type Source = { id: string; author: string; title: string; url: string; license: string; evidenceLevel: number; language: string; approvedAt: number; publishedAt?: string; location?: string; approved: boolean; collection?: string; population?: string[]; sourceHash?: string; reviewStatus?: string; scientificReview?: string; populationReviewed?: boolean; populationScope?: string }
+type Chunk = { id: string; sourceId: string; text: string; textHash?: string; location?: string; section?: string; retrievalClass?: 'evidence' | 'administrative' | 'ambiguous-table'; collection?: string; population?: string[]; populationReviewed?: boolean; populationScope?: string }
 type Manifest = { corpusVersion: string; status: string; sources: Source[]; chunks: Chunk[] }
 type Matrix = { corpusVersion: string; model: string; dimensions: number; documents: Array<{ id: string; inputType?: string; textHash?: string; vector2048: number[] }> }
 type Capacity = { accessVerified: true; budgetVerified: true; maxAdditionalCost: 0; verifiedAt: string; reviewer: string; evidence: string; accountId: string; estimatedDimensionsStored: number; existingDimensionsStored: number; estimatedDimensionsQueried: number; legacyIndexVectorCount: number }
-type UploadCheckpoint = { schema: 'hevy-upload-checkpoint-v2'; corpusVersion: string; primaryIndex: string; evaluationIndex: string; completedIds: string[]; mutationIds: Record<string, { primary?: string; evaluation?: string }>; backupPath?: string; updatedAt: string }
+type UploadCheckpoint = { schema: 'hevy-upload-checkpoint-v2'; corpusVersion: string; metadataFingerprint?: string; primaryIndex: string; evaluationIndex: string; completedIds: string[]; mutationIds: Record<string, { primary?: string; evaluation?: string }>; backupPath?: string; updatedAt: string }
 type ApiBody = { success?: boolean; errors?: unknown; result?: { dimensions?: number; vectorCount?: number; count?: number; vectors?: number; config?: { dimensions?: number }; mutationId?: string; matches?: Array<{ id?: string }>; metadataIndexes?: Array<{ propertyName?: string; indexType?: string }> } }
 type D1Body = { success?: boolean; errors?: unknown; result?: Array<{ results?: Array<Record<string, unknown>> }> }
 
@@ -38,6 +39,7 @@ const evaluationIndex = option('--evaluation-index') ?? 'nextrep-adaptation-eval
 const legacyIndex = option('--legacy-index') ?? 'nextrep-adaptation-768'
 const dbId = option('--database-id') ?? 'b7e25a26-9264-49d2-9ac8-f6cb5b7024e8'
 const manifest = readJson<Manifest>(manifestPath)
+const metadataFingerprint = createHash('sha256').update(JSON.stringify(manifest)).digest('hex')
 if (manifest.status !== 'approved' || !manifest.corpusVersion || manifest.chunks.length !== 2708) fail('el manifiesto debe ser el corpus científico aprobado de 2.708 fragmentos')
 const chunks = new Map(manifest.chunks.map(chunk => [chunk.id, chunk]))
 const sources = new Map(manifest.sources.map(source => [source.id, source]))
@@ -185,15 +187,16 @@ async function verifyD1Batch(batch: Chunk[]): Promise<void> {
   }
 }
 function metadata(chunk: Chunk, source: Source): Record<string, string> {
-  const value = { chunkId: chunk.id, sourceId: chunk.sourceId, textHash: chunk.textHash ?? createHash('sha256').update(chunk.text).digest('hex'), author: source.author, source: source.title, title: source.title, url: source.url, license: source.license, evidenceLevel: String(source.evidenceLevel ?? 0), language: source.language, text: chunk.text, location: chunk.location ?? chunk.section ?? 'unknown', section: chunk.section ?? chunk.location ?? 'unknown', retrievalClass: chunk.retrievalClass ?? 'evidence', collection: chunk.collection ?? source.collection ?? 'scientific', population: (chunk.population ?? source.population ?? ['unknown']).join(','), populationReviewed: String(chunk.populationReviewed ?? source.populationReviewed ?? false), corpusVersion: manifest.corpusVersion, corpusKey: corpusMetadataKey(manifest.corpusVersion) }
+  const value = { chunkId: chunk.id, sourceId: chunk.sourceId, textHash: chunk.textHash ?? createHash('sha256').update(chunk.text).digest('hex'), author: source.author, source: source.title, title: source.title, url: source.url, license: source.license, evidenceLevel: String(source.evidenceLevel ?? 0), language: source.language, text: chunk.text, location: chunk.location ?? chunk.section ?? 'unknown', section: chunk.section ?? chunk.location ?? 'unknown', retrievalClass: chunk.retrievalClass ?? 'evidence', collection: chunk.collection ?? source.collection ?? 'scientific', population: (chunk.population ?? source.population ?? ['unknown']).join(','), populationReviewed: String(chunk.populationReviewed ?? source.populationReviewed ?? false), populationScope: source.populationScope ?? '', corpusVersion: manifest.corpusVersion, corpusKey: corpusMetadataKey(manifest.corpusVersion) }
   if (utf8ByteLength(JSON.stringify(value)) > 10 * 1024) fail(`metadata del chunk ${chunk.id} supera 10 KiB`)
   for (const property of ['corpusKey', 'retrievalClass', 'populationReviewed', 'collection', 'language', 'sourceId', 'population']) if (utf8ByteLength(value[property as keyof typeof value]) > 64) fail(`metadata indexada ${property} del chunk ${chunk.id} supera 64 bytes`)
   return value
 }
-let checkpoint: UploadCheckpoint = { schema: 'hevy-upload-checkpoint-v2', corpusVersion: manifest.corpusVersion, primaryIndex, evaluationIndex, completedIds: [], mutationIds: {}, updatedAt: new Date().toISOString() }
+let checkpoint: UploadCheckpoint = { schema: 'hevy-upload-checkpoint-v2', corpusVersion: manifest.corpusVersion, metadataFingerprint, primaryIndex, evaluationIndex, completedIds: [], mutationIds: {}, updatedAt: new Date().toISOString() }
 try {
   checkpoint = readJson<UploadCheckpoint>(checkpointPath)
   if (checkpoint.schema !== 'hevy-upload-checkpoint-v2' || checkpoint.corpusVersion !== manifest.corpusVersion || checkpoint.primaryIndex !== primaryIndex || checkpoint.evaluationIndex !== evaluationIndex) fail('checkpoint incompatible; no se reanuda otro índice o corpus')
+  if (checkpoint.completedIds.length && checkpoint.metadataFingerprint !== metadataFingerprint) fail('La revisión de metadatos cambió; usa un checkpoint nuevo para verificar y publicar todos los cambios')
 } catch (error) {
   if (!(error instanceof Error) || !/ENOENT/.test((error as NodeJS.ErrnoException).code ?? '')) throw error
 }
@@ -222,8 +225,9 @@ for (let offset = 0; offset < manifest.chunks.length; offset += 1000) {
   await d1Batch(batch.flatMap(chunk => { const source = sources.get(chunk.sourceId)!; return [{ sql: 'INSERT OR REPLACE INTO adaptation_sources (id, author, title, url, license, evidence_level, language, approved_at, published_at, location, approved, corpus_version, source_hash, review_status, scientific_review, population_json, population_reviewed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', params: [corpusSourceKey(source.id, manifest.corpusVersion), source.author, source.title, source.url, source.license, source.evidenceLevel ?? 0, source.language, source.approvedAt, source.publishedAt ?? null, source.location ?? null, source.approved ? 1 : 0, manifest.corpusVersion, source.sourceHash ?? null, source.reviewStatus ?? 'unknown', source.scientificReview ?? 'not_appraised', JSON.stringify(source.population ?? ['unknown']), source.populationReviewed ? 1 : 0] }, { sql: 'INSERT OR REPLACE INTO adaptation_chunks (id, vector_id, source_id, text_hash, text, metadata_json, corpus_version, section, retrieval_class, collection, population_json, population_reviewed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', params: [`${manifest.corpusVersion}:${chunk.id}`, vectorPhysicalId(manifest.corpusVersion, chunk.id), corpusSourceKey(chunk.sourceId, manifest.corpusVersion), chunk.textHash ?? String(chunk.id), chunk.text, JSON.stringify(metadata(chunk, source)), manifest.corpusVersion, chunk.section ?? chunk.location ?? null, chunk.retrievalClass ?? 'evidence', chunk.collection ?? source.collection ?? 'scientific', JSON.stringify(chunk.population ?? source.population ?? ['unknown']), (chunk.populationReviewed ?? source.populationReviewed) ? 1 : 0] }] }))
   await verifyD1Batch(batch)
   batch.forEach(chunk => completed.add(chunk.id))
-  checkpoint = { schema: 'hevy-upload-checkpoint-v2', corpusVersion: manifest.corpusVersion, primaryIndex, evaluationIndex, completedIds: [...completed].sort(), mutationIds: { ...checkpoint.mutationIds, [batch[0].id]: { primary: primaryMutation, evaluation: evaluationMutation } }, backupPath, updatedAt: new Date().toISOString() }
+  checkpoint = { schema: 'hevy-upload-checkpoint-v2', corpusVersion: manifest.corpusVersion, metadataFingerprint, primaryIndex, evaluationIndex, completedIds: [...completed].sort(), mutationIds: { ...checkpoint.mutationIds, [batch[0].id]: { primary: primaryMutation, evaluation: evaluationMutation } }, backupPath, updatedAt: new Date().toISOString() }
   writeJson(checkpointPath, checkpoint)
+  console.log(JSON.stringify({ stage: 'verified-batch', completed: completed.size, total: manifest.chunks.length }))
 }
 if (completed.size === manifest.chunks.length) {
   const countRows = (await d1Select('SELECT COUNT(*) AS count FROM adaptation_chunks WHERE corpus_version = ?', [manifest.corpusVersion])).result?.[0]?.results ?? []

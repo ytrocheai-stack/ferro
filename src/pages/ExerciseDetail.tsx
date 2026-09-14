@@ -22,7 +22,9 @@ import { formatShortDate, formatVolume, formatWeight, kgToDisplay } from '../lib
 import { ExerciseThumb } from '../components/ExerciseThumb'
 import { ActionSheet, Confirm } from '../components/Sheet'
 import { CustomExerciseSheet } from '../components/CustomExerciseSheet'
-import { IconChevronLeft, IconDots, IconPencil, IconTrash } from '../components/icons'
+import { PageHeader } from '../components/PageHeader'
+import { SegmentedControl } from '../components/SegmentedControl'
+import { IconDots, IconPencil, IconTrash } from '../components/icons'
 
 type Tab = 'about' | 'history' | 'charts' | 'records'
 type Metric = 'maxWeight' | 'e1rm' | 'volume'
@@ -53,10 +55,10 @@ export default function ExerciseDetail() {
     [id],
   )
 
-  if (!ready && !ex) return <p className="px-4 pt-10 text-center text-muted">Cargando…</p>
+  if (!ready && !ex) return <p className="page-content pt-10 text-center text-muted">Cargando…</p>
   if (!ex)
     return (
-      <div className="px-4 pt-10 text-center text-muted">
+      <div className="page-content pt-10 text-center text-muted">
         Ejercicio no encontrado.
         <button className="btn btn-surface mx-auto mt-4" onClick={() => navigate(-1)}>
           Volver
@@ -72,29 +74,11 @@ export default function ExerciseDetail() {
   ]
 
   return (
-    <div className="px-4 pt-4">
-      <header className="flex items-center justify-between pb-2">
-        <button
-          className="-ml-2 rounded-lg p-1.5 text-muted active:bg-surface-2"
-          onClick={() => navigate(-1)}
-          aria-label="Volver"
-        >
-          <IconChevronLeft size={22} />
-        </button>
-        {ex.custom && (
-          <button
-            className="rounded-lg p-1.5 text-muted active:bg-surface-2"
-            onClick={() => setMenuOpen(true)}
-            aria-label="Opciones"
-          >
-            <IconDots size={20} />
-          </button>
-        )}
-      </header>
+    <div className="page-content pt-3">
+      <PageHeader title={ex.name} back action={ex.custom ? <button className="page-header__profile pressable" onClick={() => setMenuOpen(true)} aria-label="Opciones"><IconDots size={19} /></button> : undefined} />
 
       <div className="flex flex-col items-center gap-3">
         <ExerciseThumb exercise={ex} size={190} gif className="rounded-2xl" />
-        <h1 className="text-center text-xl font-extrabold leading-tight">{ex.name}</h1>
         <div className="flex flex-wrap justify-center gap-1.5">
           <span className="chip chip-active">{t(ex.target)}</span>
           <span className="chip">{t(ex.bodyPart)}</span>
@@ -102,16 +86,8 @@ export default function ExerciseDetail() {
         </div>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-1 pt-4">
-        {tabs.map(({ key, label }) => (
-          <button
-            key={key}
-            className={`chip ${tab === key ? 'chip-active' : ''}`}
-            onClick={() => setTab(key)}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="pt-4">
+        <SegmentedControl value={tab} options={tabs.map(({ key, label }) => ({ value: key, label }))} onChange={setTab} ariaLabel="Secciones del ejercicio" />
       </div>
 
       {tab === 'about' && (
@@ -260,16 +236,16 @@ function Charts({ workouts, exerciseId }: { workouts: Workout[]; exerciseId: str
         <div className="card px-1 py-3">
           <ResponsiveContainer width="100%" height={230}>
             <LineChart data={points} margin={{ top: 8, right: 14, bottom: 0, left: 0 }}>
-              <CartesianGrid stroke="#2a2a33" strokeDasharray="3 3" vertical={false} />
+              <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
               <XAxis
                 dataKey="date"
                 tickFormatter={(d: number) => format(d, 'd MMM', { locale: es })}
-                stroke="#8f8f9b"
+                stroke="var(--color-muted)"
                 fontSize={11}
                 tickLine={false}
               />
               <YAxis
-                stroke="#8f8f9b"
+                stroke="var(--color-muted)"
                 fontSize={11}
                 width={42}
                 tickLine={false}
@@ -277,8 +253,8 @@ function Charts({ workouts, exerciseId }: { workouts: Workout[]; exerciseId: str
               />
               <Tooltip
                 contentStyle={{
-                  background: '#1f1f27',
-                  border: '1px solid #2a2a33',
+                  background: 'var(--color-surface-2)',
+                  border: '1px solid var(--color-border)',
                   borderRadius: 12,
                   fontSize: 12,
                 }}
@@ -288,10 +264,11 @@ function Charts({ workouts, exerciseId }: { workouts: Workout[]; exerciseId: str
               <Line
                 type="monotone"
                 dataKey={metric}
-                stroke="#3d8bfd"
+                stroke="var(--color-primary)"
                 strokeWidth={2.5}
-                dot={{ r: 3, fill: '#3d8bfd' }}
+                dot={{ r: 3, fill: 'var(--color-primary)' }}
                 activeDot={{ r: 5 }}
+                isAnimationActive={false}
               />
             </LineChart>
           </ResponsiveContainer>

@@ -30,7 +30,7 @@ if (!has('--execute')) {
   if (!token) fail('el archivo JWT está vacío')
   const request = await readJson(contextFile)
   if (request?.event?.type !== 'message-sent' || request.event.deviceId !== deviceId || request.event.contextVersion !== request.context?.version || request.context?.isCurrent !== true) fail('el archivo no contiene un contexto consentido y vigente')
-  const headers = { Authorization: `Bearer ${token}`, Origin: origin, 'Content-Type': 'application/json', 'X-NextRep-Consent-Version': 'coach-beta-v1', 'X-NextRep-Device-Id': deviceId }
+  const headers = { Authorization: `Bearer ${token}`, Origin: origin, 'Content-Type': 'application/json', 'X-NextRep-Consent-Version': 'coach-context-v2', 'X-NextRep-Device-Id': deviceId }
   let requests = 0
   async function call(method, pathname, body, extra = {}) {
     if (++requests > maxRequests) fail(`se alcanzó el límite de ${maxRequests} requests`)

@@ -9,7 +9,10 @@ import { ExerciseFilterBar } from '../components/ExercisePicker'
 import { ExerciseThumb } from '../components/ExerciseThumb'
 import { CustomExerciseSheet } from '../components/CustomExerciseSheet'
 import { SkeletonList } from '../components/Skeleton'
-import { IconChevronRight, IconPlus } from '../components/icons'
+import { TemplateBrowserSheet } from '../components/TemplateBrowser'
+import { PageHeader } from '../components/PageHeader'
+import { useUi } from '../stores/ui'
+import { IconChevronRight, IconPlus, IconTarget } from '../components/icons'
 
 const GROUP_SECTION_LABELS: Record<ExerciseGroup, string> = {
   ...MUSCLE_GROUP_LABELS,
@@ -43,11 +46,13 @@ function groupByMuscle(items: Exercise[]): ExerciseSection[] {
 
 export default function Exercises() {
   const { all, ready, error } = useCatalog()
-  const [query, setQuery] = useState('')
-  const [group, setGroup] = useState<ExerciseGroup | null>(null)
-  const [equipment, setEquipment] = useState<string | null>(null)
-  const [onlyCustom, setOnlyCustom] = useState(false)
+  const query = useUi((state) => state.libraryQuery)
+  const group = useUi((state) => state.libraryGroup as ExerciseGroup | null)
+  const equipment = useUi((state) => state.libraryEquipment)
+  const onlyCustom = useUi((state) => state.libraryOnlyCustom)
+  const setUi = useUi((state) => state.set)
   const [createOpen, setCreateOpen] = useState(false)
+  const [templatesOpen, setTemplatesOpen] = useState(false)
 
   const results = useMemo(
     () => searchExercises(all, { query, group, equipment, onlyCustom }),
@@ -65,19 +70,14 @@ export default function Exercises() {
   }, [results, sections, showSections])
 
   return (
-    <div className="px-4 pt-6">
-      <div className="flex items-center justify-between pb-4">
-        <h1 className="text-2xl font-extrabold">Ejercicios</h1>
-        <button
-          className="flex items-center gap-1 text-sm font-semibold text-primary"
-          onClick={() => setCreateOpen(true)}
-        >
-          <IconPlus size={15} />
-          Nuevo
-        </button>
+    <div className="page-content pt-3">
+      <PageHeader title="Biblioteca" />
+      <div className="flex items-center justify-between gap-3 py-3">
+        <button className="pressable flex items-center gap-2 text-sm font-semibold text-muted" onClick={() => setTemplatesOpen(true)}><IconTarget size={17} />Programas</button>
+        <button className="pressable flex items-center gap-1 text-sm font-semibold text-primary" onClick={() => setCreateOpen(true)}><IconPlus size={17} />Crear ejercicio</button>
       </div>
 
-      <ExerciseFilterBar {...{ query, setQuery, group, setGroup, equipment, setEquipment, all }} />
+      <ExerciseFilterBar query={query} setQuery={(value) => setUi({ libraryQuery: value })} group={group} setGroup={(value) => setUi({ libraryGroup: value })} equipment={equipment} setEquipment={(value) => setUi({ libraryEquipment: value })} all={all} />
 
       <div className="flex items-center justify-between pb-1 pt-3">
         <span className="text-xs text-muted">
@@ -85,7 +85,7 @@ export default function Exercises() {
         </span>
         <button
           className={`chip ${onlyCustom ? 'chip-active' : ''}`}
-          onClick={() => setOnlyCustom(!onlyCustom)}
+          onClick={() => setUi({ libraryOnlyCustom: !onlyCustom })}
         >
           Míos
         </button>
@@ -106,7 +106,7 @@ export default function Exercises() {
             data={virtualItems}
             computeItemKey={(_, item) => item.type === 'header' ? `section-${item.key}` : item.exercise.id}
             itemContent={(_, item) => item.type === 'header' ? (
-              <div className="sticky top-[env(safe-area-inset-top)] z-10 bg-bg/95 px-4 py-1.5 text-xs font-bold uppercase tracking-wide text-muted backdrop-blur">
+              <div className="sticky top-[env(safe-area-inset-top)] z-10 bg-bg px-4 py-1.5 text-xs font-bold uppercase tracking-wide text-muted">
                 {item.label} <span className="text-muted/70">· {item.count}</span>
               </div>
             ) : <ExerciseRow exercise={item.exercise} />}
@@ -122,6 +122,7 @@ export default function Exercises() {
       </div>
 
       <CustomExerciseSheet open={createOpen} onClose={() => setCreateOpen(false)} />
+      <TemplateBrowserSheet open={templatesOpen} onClose={() => setTemplatesOpen(false)} />
     </div>
   )
 }
@@ -130,12 +131,12 @@ function ExerciseRow({ exercise: e }: { exercise: Exercise }) {
   return (
     <Link
       to={`/ejercicios/${e.id}`}
-      className="flex items-center gap-3 border-b border-border/60 py-2.5"
-      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 64px' }}
+      className="flex min-h-[72px] items-center gap-3 border-b border-border/60 py-2.5"
+      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 72px' }}
     >
-      <ExerciseThumb exercise={e} size={46} lazy />
+      <ExerciseThumb exercise={e} size={52} lazy />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold">
+        <div className="line-clamp-2 text-sm font-semibold">
           {e.name}
           {e.custom && (
             <span className="ml-1.5 rounded bg-primary/20 px-1.5 py-0.5 text-[10px] font-bold text-primary">

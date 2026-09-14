@@ -6,12 +6,12 @@ export function AuthControls() {
     <div className="flex items-center gap-2">
       <Show when="signed-out">
         <SignInButton mode="modal">
-          <button className="rounded-lg px-2.5 py-1.5 text-xs font-bold text-muted" type="button">
+          <button className="btn btn-surface flex-1 px-3 text-sm" type="button">
             Iniciar sesión
           </button>
         </SignInButton>
         <SignUpButton mode="modal">
-          <button className="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-bold text-white shadow-sm" type="button">
+          <button className="btn btn-primary flex-1 px-3 text-sm" type="button">
             Crear cuenta
           </button>
         </SignUpButton>

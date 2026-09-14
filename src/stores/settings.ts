@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 export interface SettingsValues {
+  theme: 'system' | 'light' | 'dark'
   units: 'kg' | 'lb'
   defaultRestSec: number
   sound: boolean
@@ -26,6 +27,7 @@ interface SettingsState extends SettingsValues {
 export const useSettings = create<SettingsState>()(
   persist(
     (set) => ({
+      theme: 'system',
       units: 'kg',
       defaultRestSec: 90,
       sound: true,

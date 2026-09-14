@@ -48,37 +48,34 @@ export function FoodPickerSheet({
     close()
   }
 
-  if (picked) {
-    return (
-      <Sheet open={open} onClose={close} title={picked.name}>
-        <GramsForm food={picked} onCancel={() => setPicked(null)} onConfirm={(g) => void addEntry(picked, g)} />
-      </Sheet>
-    )
-  }
-
   return (
-    <Sheet open={open} onClose={close} title="Añadir alimento" full>
-      <div className="flex gap-2 overflow-x-auto pb-3">
-        <button className={`chip ${tab === 'local' ? 'chip-active' : ''}`} onClick={() => setTab('local')}>
-          Local
-        </button>
-        <button className={`chip ${tab === 'dishes' ? 'chip-active' : ''}`} onClick={() => setTab('dishes')}>
+    <Sheet
+      open={open}
+      onClose={close}
+      title={picked?.name ?? 'Añadir alimento'}
+      full={!picked}
+      action={!picked ? <button className="pressable flex min-h-11 items-center gap-1 rounded-xl px-2 text-sm font-semibold text-primary" onClick={() => setTab('scan')}><IconBarcode size={15} />Escanear</button> : undefined}
+    >
+      <div className={picked ? 'hidden' : ''}>
+        <div className="flex gap-2 overflow-x-auto pb-3">
+          <button className={`chip ${tab === 'local' ? 'chip-active' : ''}`} onClick={() => setTab('local')}>
+            Alimentos
+          </button>
+          <button className={`chip ${tab === 'dishes' ? 'chip-active' : ''}`} onClick={() => setTab('dishes')}>
           <IconFood size={13} />
           Platos
-        </button>
-        <button className={`chip ${tab === 'online' ? 'chip-active' : ''}`} onClick={() => setTab('online')}>
-          Buscar online
-        </button>
-        <button className={`chip ${tab === 'scan' ? 'chip-active' : ''}`} onClick={() => setTab('scan')}>
-          <IconBarcode size={13} />
-          Escanear
-        </button>
-      </div>
+          </button>
+          <button className={`chip ${tab === 'online' ? 'chip-active' : ''}`} onClick={() => setTab('online')}>
+            En línea
+          </button>
+        </div>
 
-      {tab === 'local' && <LocalTab onPick={setPicked} />}
-      {tab === 'dishes' && <DishesTab date={date} meal={meal} onLogged={close} />}
-      {tab === 'online' && <OnlineTab online={online} onPick={setPicked} />}
-      {tab === 'scan' && <ScanTab online={online} onPick={setPicked} />}
+        {tab === 'local' && <LocalTab onPick={setPicked} />}
+        {tab === 'dishes' && <DishesTab date={date} meal={meal} onLogged={close} />}
+        {tab === 'online' && <OnlineTab online={online} onPick={setPicked} />}
+        {tab === 'scan' && <ScanTab online={online} onPick={setPicked} />}
+      </div>
+      {picked && <GramsForm food={picked} onCancel={() => setPicked(null)} onConfirm={(g) => void addEntry(picked, g)} />}
     </Sheet>
   )
 }

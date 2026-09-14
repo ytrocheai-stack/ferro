@@ -24,14 +24,18 @@ import {
   RECOMMENDED_WEEKLY_SETS,
   type MuscleGroup,
 } from '../data/muscleGroups'
-import { weeklySetsByGroup } from '../lib/stats'
+import { muscleActivity } from '../lib/muscleActivity'
+import { useNow } from '../lib/useNow'
 import { compareTrainingPeriods, topExerciseProgress } from '../lib/analytics'
 import { formatVolume } from '../lib/format'
 import { MuscleHeatmap } from '../components/MuscleHeatmap'
 import { SkeletonChart } from '../components/Skeleton'
+import { PageHeader } from '../components/PageHeader'
+import { ProgressNav } from '../components/ProgressNav'
+import { SegmentedControl } from '../components/SegmentedControl'
+import { useUi } from '../stores/ui'
 import {
   IconChart,
-  IconChevronLeft,
   IconTrophy,
 } from '../components/icons'
 
@@ -44,14 +48,14 @@ export default function Analysis() {
   const { all, byId } = useCatalog()
   const units = useSettings((state) => state.units)
   const weeklyGoal = useSettings((state) => state.weeklyGoal)
-  const [periodWeeks, setPeriodWeeks] = useState<(typeof PERIODS)[number]>(8)
+  const periodWeeks = useUi((state) => state.progressPeriodWeeks)
+  const setUi = useUi((state) => state.set)
   const [now] = useState(Date.now)
 
   const targetById = useMemo(() => new Map(all.map((exercise) => [exercise.id, exercise.target])), [all])
-  const weekly = useMemo<Partial<Record<MuscleGroup, number>>>(
-    () => (workouts ? weeklySetsByGroup(workouts, targetById, 7) : {}),
-    [workouts, targetById],
-  )
+  const activityNow = useNow(60_000)
+  const activity = useMemo(() => muscleActivity(workouts ?? [], targetById, activityNow), [workouts, targetById, activityNow])
+  const weekly = activity.sets
 
   const weeksData = useMemo(() => {
     if (!workouts) return []
@@ -99,50 +103,18 @@ export default function Analysis() {
 
   if (workouts === undefined) {
     return (
-      <div className="px-4 pt-4">
+      <div className="page-content pt-4">
         <SkeletonChart />
       </div>
     )
   }
 
   return (
-    <div className="px-4 pt-4">
-      <header className="flex items-start gap-3 pb-4">
-        <button
-          className="pressable -ml-1 mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-border bg-surface/80 text-muted shadow-sm"
-          onClick={() => navigate(-1)}
-          aria-label="Volver"
-        >
-          <IconChevronLeft size={21} />
-        </button>
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Rendimiento</p>
-          <h1 className="text-2xl font-extrabold tracking-[-0.03em]">Análisis</h1>
-          <p className="pt-0.5 text-xs text-muted">Carga, constancia y fuerza con contexto.</p>
-        </div>
-      </header>
+    <div className="page-content pt-3">
+      <PageHeader title="Progreso" subtitle="Carga, constancia y fuerza con contexto." />
+      <ProgressNav />
 
-      <div
-        className="mb-4 grid grid-cols-3 gap-1 rounded-2xl border border-border bg-surface/75 p-1"
-        role="group"
-        aria-label="Periodo de análisis"
-      >
-        {PERIODS.map((weeks) => (
-          <button
-            key={weeks}
-            className={`min-h-11 rounded-xl text-xs font-bold transition-[background-color,color,box-shadow] duration-150 ${
-              periodWeeks === weeks
-                ? 'bg-surface-2 text-text shadow-sm shadow-black/30'
-                : 'text-muted'
-            }`}
-            type="button"
-            aria-pressed={periodWeeks === weeks}
-            onClick={() => setPeriodWeeks(weeks)}
-          >
-            {weeks} semanas
-          </button>
-        ))}
-      </div>
+      <SegmentedControl value={String(periodWeeks)} options={PERIODS.map((weeks) => ({ value: String(weeks), label: `${weeks} semanas` }))} onChange={(value) => setUi({ progressPeriodWeeks: Number(value) as (typeof PERIODS)[number] })} ariaLabel="Periodo de análisis" />
 
       {workouts.length === 0 ? (
         <div className="card overflow-hidden px-5 py-8 text-center">
@@ -159,15 +131,12 @@ export default function Analysis() {
         </div>
       ) : (
         <>
-          <section className="card relative overflow-hidden px-4 py-4">
-            <div className="pointer-events-none absolute -right-16 -top-20 h-44 w-44 rounded-full bg-primary/15 blur-3xl" />
-            <div className="relative flex items-start justify-between gap-3">
+          <section className="glass-panel mt-4 px-5 py-5">
+            <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted">
-                  Pulso de entrenamiento
-                </p>
+                <h2 className="text-xl font-semibold">Carga acumulada</h2>
                 <div className="flex items-end gap-2 pt-1">
-                  <span className="text-3xl font-extrabold tracking-[-0.05em] tabular-nums">
+                  <span className="text-3xl font-bold tracking-[-0.04em] tabular-nums">
                     {formatVolume(comparison.volumeKg, units)}
                   </span>
                 </div>
@@ -176,19 +145,19 @@ export default function Analysis() {
               <TrendBadge value={comparison.volumeChangePct} />
             </div>
 
-            <div className="relative mt-4 grid grid-cols-3 gap-2 border-t border-border/70 pt-3">
+            <div className="mt-4 grid grid-cols-3 gap-2 border-t border-border/70 pt-3">
               <Metric label="Sesiones" value={String(comparison.sessions)} detail={`${sessionsPerWeek.toFixed(1)}/sem`} />
               <Metric label="Series" value={String(comparison.workingSets)} detail="efectivas" />
               <Metric label="Récords" value={String(comparison.prCount)} detail="en periodo" />
             </div>
-            <div className="relative mt-3 rounded-xl bg-surface-2/70 px-3 py-2.5">
+            <div className="mt-3 rounded-xl bg-surface-2 px-3 py-2.5">
               <div className="flex items-center justify-between text-[11px]">
                 <span className="font-semibold">Constancia frente a tu meta</span>
                 <span className="font-bold tabular-nums text-primary">{goalPct}%</span>
               </div>
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-border/70">
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-primary to-accent"
+                  className="h-full rounded-full bg-primary"
                   style={{ width: `${goalPct}%` }}
                 />
               </div>
@@ -210,12 +179,6 @@ export default function Analysis() {
             </div>
             <ResponsiveContainer width="100%" height={190}>
               <AreaChart data={weeksData} margin={{ top: 8, right: 6, bottom: 0, left: -17 }}>
-                <defs>
-                  <linearGradient id="trainingLoadFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.42} />
-                    <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0.015} />
-                  </linearGradient>
-                </defs>
                 <CartesianGrid stroke="var(--color-border)" strokeDasharray="2 6" vertical={false} />
                 <XAxis dataKey="label" stroke="var(--color-muted)" fontSize={9} tickLine={false} axisLine={false} minTickGap={18} />
                 <YAxis stroke="var(--color-muted)" fontSize={9} tickLine={false} axisLine={false} width={42} />
@@ -228,8 +191,10 @@ export default function Analysis() {
                   dataKey="volume"
                   stroke="var(--color-primary)"
                   strokeWidth={2.5}
-                  fill="url(#trainingLoadFill)"
+                  fill="var(--color-primary)"
                   activeDot={{ r: 5, fill: 'var(--color-primary)', stroke: 'var(--color-text)', strokeWidth: 2 }}
+                  isAnimationActive={false}
+                  fillOpacity={0.12}
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -241,7 +206,7 @@ export default function Analysis() {
                 <IconTrophy size={17} />
               </span>
               <div>
-                <h2 className="text-sm font-bold">Momentum de fuerza</h2>
+                <h2 className="text-sm font-bold">Progreso de fuerza</h2>
                 <p className="text-[11px] text-muted">Cambio de e1RM entre la primera y última sesión.</p>
               </div>
             </div>
@@ -268,31 +233,42 @@ export default function Analysis() {
             )}
           </section>
 
-          <section className="card mt-3 overflow-hidden px-3 py-4">
-            <div className="flex items-start justify-between gap-3 px-1">
-              <div>
-                <h2 className="text-sm font-bold">Dosis muscular · 7 días</h2>
-                <p className="pt-0.5 text-[11px] text-muted">Series efectivas contra rangos de hipertrofia.</p>
-              </div>
-              <div className="flex gap-1 text-[9px] font-bold">
-                <span className="rounded-full bg-success/10 px-2 py-1 text-success">{muscleSummary.inRange} en rango</span>
-                {muscleSummary.above > 0 && <span className="rounded-full bg-warning/10 px-2 py-1 text-warning">{muscleSummary.above} altas</span>}
-              </div>
-            </div>
-            <div className="mt-2 rounded-2xl bg-surface-2/30 py-2">
-              <MuscleHeatmap counts={weekly} />
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {MUSCLE_GROUP_ORDER.map((group) => (
-                <MuscleDose key={group} group={group} value={weekly[group] ?? 0} />
-              ))}
-            </div>
-            <p className="px-1 pt-3 text-[10px] leading-relaxed text-muted">
-              Los rangos son una referencia general. Ajusta volumen según recuperación, experiencia y objetivo.
-            </p>
-          </section>
         </>
       )}
+
+      <section className="card mt-3 overflow-hidden px-3 py-4">
+        <div className="flex items-start justify-between gap-3 px-1">
+          <div>
+            <h2 className="text-sm font-bold">Actividad muscular · 7 días</h2>
+            <p className="pt-0.5 text-[11px] text-muted">Azul según los días entrenados. Toca una zona.</p>
+          </div>
+          <div className="flex gap-1 text-[9px] font-bold">
+            <span className="rounded-full bg-success/10 px-2 py-1 text-success">{muscleSummary.inRange} en rango</span>
+            {muscleSummary.above > 0 && <span className="rounded-full bg-warning/10 px-2 py-1 text-warning">{muscleSummary.above} altas</span>}
+          </div>
+        </div>
+        <div className="mt-2 rounded-2xl bg-surface-2/30 py-2">
+          <MuscleHeatmap counts={weekly} frequency={activity.frequency} />
+        </div>
+        <h3 className="px-1 pt-4 text-xs font-bold">Volumen semanal · series efectivas</h3>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          {MUSCLE_GROUP_ORDER.map((group) => (
+            <MuscleDose key={group} group={group} value={weekly[group] ?? 0} />
+          ))}
+        </div>
+        <p className="px-1 pt-3 text-[10px] leading-relaxed text-muted">
+          Los rangos son una referencia general. Ajusta volumen según recuperación, experiencia y objetivo.
+        </p>
+      </section>
+
+      <section className="card mt-3 px-4 py-4" aria-labelledby="totals-title">
+        <h2 id="totals-title" className="text-xl font-semibold">Totales</h2>
+        <div className="mt-3 grid grid-cols-3 gap-3">
+          <Metric label="Entrenos" value={String(workouts.length)} detail="registrados" />
+          <Metric label="Series" value={String(workouts.reduce((sum, workout) => sum + workout.totalSets, 0))} detail="efectivas" />
+          <Metric label="Récords" value={String(workouts.reduce((sum, workout) => sum + workout.prs.length, 0))} detail="personales" />
+        </div>
+      </section>
     </div>
   )
 }

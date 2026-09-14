@@ -11,7 +11,6 @@ import { Select } from '../components/Select'
 import { Confirm, Sheet } from '../components/Sheet'
 import {
   IconChevronDown,
-  IconChevronLeft,
   IconChevronUp,
   IconFolder,
   IconPlus,
@@ -21,6 +20,9 @@ import { parseDec, uid } from '../lib/format'
 import { REST_OPTIONS, restLabel } from '../lib/constants'
 import { invalidateStaleAdaptationJobsInTransaction } from '../lib/adaptationContext'
 import { getCoachAccountId } from '../lib/coachAccount'
+import { PageHeader } from '../components/PageHeader'
+import { useToasts } from '../stores/toasts'
+import { withPlannedSetCount } from '../lib/routineEditing'
 
 export default function RoutineEditor() {
   const { id } = useParams()
@@ -43,6 +45,10 @@ export default function RoutineEditor() {
   const [repRangeFor, setRepRangeFor] = useState<number | null>(null)
   const [targetRpeFor, setTargetRpeFor] = useState<number | null>(null)
   const [confirmCoach, setConfirmCoach] = useState(isNew ? false : false)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string>()
+  const [saveSuccess, setSaveSuccess] = useState<string>()
+  const [exerciseErrors, setExerciseErrors] = useState<Record<number, string>>({})
 
   useEffect(() => {
     if (isNew) return
@@ -69,33 +75,54 @@ export default function RoutineEditor() {
   const canSave = name.trim().length > 0 && exercises.length > 0 && confirmCoach
 
   const save = async () => {
-    if (!canSave) return
-    const existing = isNew ? undefined : await db.routines.get(id!)
-    await db.transaction('rw', [db.routines, db.workouts, db.adaptationJobs, db.adaptationProposals], async () => {
-      await db.routines.put({
-        id: existing?.id ?? uid(),
-        name: name.trim(),
-        sortOrder: existing?.sortOrder ?? Date.now(),
-        createdAt: existing?.createdAt ?? Date.now(),
-        exercises: exercises.map((exercise, index) => ({
-          ...exercise,
-          occurrenceId: exercise.occurrenceId ?? `${existing?.id ?? 'new'}:${index}:${exercise.exerciseId}`,
-          trainingRole: exercise.trainingRole ?? exercise.role ?? existing?.trainingRole ?? 'hypertrophy',
-          role: undefined,
-        })),
-        folderId,
-        revision: existing ? (dirty ? (existing.revision ?? 1) + 1 : existing.revision ?? 1) : 1,
-        trainingRole: exercises[0]?.trainingRole ?? exercises[0]?.role ?? existing?.trainingRole ?? 'hypertrophy',
-        loadIncrementKg: exercises[0]?.loadIncrementKg ?? existing?.loadIncrementKg ?? 2.5,
-        coachReviewed: confirmCoach,
+    if (!canSave || saving) return
+    setSaving(true)
+    setSaveError(undefined)
+    setSaveSuccess(undefined)
+    try {
+      const existing = isNew ? undefined : await db.routines.get(id!)
+      const routineId = existing?.id ?? uid()
+      const now = Date.now()
+      await db.transaction('rw', [db.routines, db.workouts, db.adaptationJobs, db.adaptationProposals], async () => {
+        await db.routines.put({
+          ...(existing ?? {}),
+          id: routineId,
+          name: name.trim(),
+          sortOrder: existing?.sortOrder ?? now,
+          createdAt: existing?.createdAt ?? now,
+          exercises: exercises.map((exercise, index) => ({
+            ...exercise,
+            occurrenceId: exercise.occurrenceId ?? `${routineId}:${index}:${exercise.exerciseId}`,
+            trainingRole: exercise.trainingRole ?? exercise.role ?? existing?.trainingRole ?? 'hypertrophy',
+          })),
+          folderId,
+          revision: existing ? (dirty ? (existing.revision ?? 1) + 1 : existing.revision ?? 1) : 1,
+          trainingRole: exercises[0]?.trainingRole ?? exercises[0]?.role ?? existing?.trainingRole ?? 'hypertrophy',
+          loadIncrementKg: exercises[0]?.loadIncrementKg ?? existing?.loadIncrementKg ?? 2.5,
+          coachReviewed: confirmCoach,
+        })
+        await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
       })
-      await invalidateStaleAdaptationJobsInTransaction(getCoachAccountId())
-    })
-    navigate('/', { replace: true })
+      setSaveSuccess('Rutina guardada correctamente.')
+      useToasts.getState().show('Rutina guardada')
+      navigate('/', { replace: true })
+    } catch (cause) {
+      setSaveError(cause instanceof Error ? cause.message : 'No se pudo guardar la rutina. Revisa los datos e inténtalo de nuevo.')
+    } finally { setSaving(false) }
   }
 
   const update = (i: number, patch: Partial<RoutineExercise>) =>
     setExercises((arr) => arr.map((e, j) => (j === i ? { ...e, ...patch } : e)))
+
+  const updatePlannedSets = (index: number, plannedSets: number) => {
+    try {
+      const next = withPlannedSetCount(exercises[index], plannedSets)
+      setExercises((arr) => arr.map((exercise, current) => current === index ? next : exercise))
+      setExerciseErrors((current) => { const nextErrors = { ...current }; delete nextErrors[index]; return nextErrors })
+    } catch (cause) {
+      setExerciseErrors((current) => ({ ...current, [index]: cause instanceof Error ? cause.message : 'No se pudo ajustar los objetivos por serie.' }))
+    }
+  }
 
   const move = (i: number, delta: number) =>
     setExercises((arr) => {
@@ -110,24 +137,24 @@ export default function RoutineEditor() {
   const currentFolder = folders?.find((f) => f.id === folderId)
 
   return (
-    <div className="px-4 pt-4">
-      <header className="flex items-center justify-between pb-4">
-        <button
-          className="pressable -ml-2 rounded-lg p-1.5 text-muted"
-          onClick={() => (dirty ? setConfirmExit(true) : navigate(-1))}
-          aria-label="Volver"
-        >
-          <IconChevronLeft size={22} />
-        </button>
-        <h1 className="text-lg font-bold">{isNew ? 'Nueva rutina' : 'Editar rutina'}</h1>
-        <button
-          className="rounded-xl bg-primary px-4 py-1.5 text-sm font-bold text-white disabled:opacity-40"
-          disabled={!canSave}
-          onClick={() => void save()}
-        >
-          Guardar
-        </button>
-      </header>
+    <div className="page-content pt-3">
+      <PageHeader
+        title={isNew ? 'Nueva rutina' : 'Editar rutina'}
+        back
+        showProfile={false}
+        onBack={() => {
+          if (dirty) setConfirmExit(true)
+          else navigate(-1)
+        }}
+        action={(
+          <button className="btn btn-primary min-h-11 px-4 text-sm disabled:opacity-40" disabled={!canSave || saving} onClick={() => void save()}>
+            {saving ? 'Guardando…' : 'Guardar'}
+          </button>
+        )}
+      />
+
+      {saveError && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm text-danger">{saveError}</p>}
+      {saveSuccess && <p role="status" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm text-primary">{saveSuccess}</p>}
 
       <input
         className="input mb-2 text-base font-semibold"
@@ -190,9 +217,7 @@ export default function RoutineEditor() {
                     min={1}
                     max={20}
                     value={re.plannedSets}
-                    onChange={(e) =>
-                      update(i, { plannedSets: Math.max(1, Math.floor(e.target.valueAsNumber || 1)) })
-                    }
+                    onChange={(e) => updatePlannedSets(i, Math.max(1, Math.floor(e.target.valueAsNumber || 1)))}
                   />
                 </label>
                 <label className="flex flex-1 flex-col gap-1">
@@ -214,7 +239,10 @@ export default function RoutineEditor() {
                   </span>
                 </button>
               </div>
-              <div className="grid grid-cols-2 gap-3 pt-3">
+              {exerciseErrors[i] && <p role="alert" className="pt-2 text-xs text-danger">{exerciseErrors[i]}</p>}
+              <details className="mt-3 border-t border-border/70 pt-3">
+                <summary className="min-h-11 cursor-pointer list-none text-sm font-semibold text-muted">Opciones avanzadas</summary>
+                <div className="grid grid-cols-2 gap-3 pt-2">
                 <label className="flex flex-col gap-1">
                   <span className="text-[11px] font-semibold uppercase text-muted">Rol</span>
                   <Select
@@ -232,10 +260,11 @@ export default function RoutineEditor() {
                   <span className="text-[11px] font-semibold uppercase text-muted">Incremento (kg)</span>
                   <input className="input" inputMode="decimal" value={re.loadIncrementKg ?? 2.5} onChange={(event) => update(i, { loadIncrementKg: Math.max(0.25, parseDec(event.target.value)) })} />
                 </label>
-              </div>
-              <button className="pressable pt-3 text-left text-xs font-semibold text-muted" onClick={() => setTargetRpeFor(i)}>
-                RPE objetivo: {re.targetRpeMin !== undefined && re.targetRpeMax !== undefined ? `${re.targetRpeMin}–${re.targetRpeMax}` : 'sin objetivo (RIR libre)'}
-              </button>
+                </div>
+                <button className="pressable mt-3 min-h-11 text-left text-sm font-semibold text-muted" onClick={() => setTargetRpeFor(i)}>
+                  RPE objetivo: {re.targetRpeMin !== undefined && re.targetRpeMax !== undefined ? `${re.targetRpeMin}–${re.targetRpeMax}` : 'sin objetivo (RIR libre)'}
+                </button>
+              </details>
             </div>
           )
         })}

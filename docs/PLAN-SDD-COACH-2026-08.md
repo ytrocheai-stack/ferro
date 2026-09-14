@@ -30,6 +30,22 @@ completar los gates operativos y de consentimiento descritos en
 - Regresiones añadidas para aislamiento conversacional e invalidación por revisiones. El E2E del coach pasa
   en Chromium y WebKit; no se ejecutaron proveedor remoto, canario ni despliegue.
 
+## Bitácora de cierre · 2026-09-14
+
+- El transporte del coach proyecta solo los campos públicos del mensaje; la historia enviada queda en
+  una ventana de hasta 100 mensajes, 4.000 caracteres por mensaje y 36.000 en total. El `ownerId`
+  permanece únicamente en IndexedDB y los pendientes heredados se normalizan sin cambiar su identidad.
+- La generación de producción conserva DeepSeek Flash: 240 segundos por llamada, 600 segundos globales,
+  Workflow con paso de 250 segundos y el máximo de llamadas existente. Los fallos distinguen cancelación,
+  timeout de llamada, deadline global, error conocido y desenlace incierto; un desenlace incierto no se
+  reenvía automáticamente.
+- Se unificó el evento de cierre de sesión, se protegieron los errores de cola/coach y editor, se
+  conservaron metadatos y calentamientos de rutinas, se excluyeron rutinas retiradas y se fijó el modo
+  histórico de Nutrición frente al modo “Hoy”. La privacidad documenta la retención temporal de
+  `request_json` y decisión del coach.
+- Verificaciones de esta ejecución: `npm run check`, `npm run test:worker`, `npm run test:e2e` y
+  `npm run test:e2e:coach`. No se ejecutan benchmarks ni evaluación con modelo real.
+
 La tabla es una matriz de hallazgos técnicos, no una declaración global de que A1–A11 estén
 aprobadas ni una aprobación del despliegue. El agente conversacional privado, su orquestación,
 chat local, contexto versionado y aplicación transaccional están integrados localmente; la

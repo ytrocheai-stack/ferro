@@ -7,7 +7,7 @@
   "evidence": "Registrar cuota/coste cero, allowlist y consentimiento; no incluir secretos.",
   "canaryAccountId": "",
   "expectedCorpusVersion": "",
-  "expectedConsentVersion": "coach-beta-v1",
+  "expectedConsentVersion": "coach-context-v2",
   "maxRequests": 4,
   "maxInputTokens": 0,
   "maxOutputTokens": 0,
