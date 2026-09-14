@@ -77,7 +77,13 @@ function sseContent(data: string): string | null {
 
 export interface ValidatedStreamResult {
   response: AgentWireResponse
-  explanation: string
+  explanation?: string
+  usage?: StreamUsage
+}
+
+export interface StreamUsage {
+  inputTokens?: number
+  outputTokens?: number
 }
 
 /**
@@ -88,6 +94,8 @@ export class SafeDecisionExplanationParser {
   private sseBuffer = ''
   private jsonBuffer = ''
   private result?: ValidatedStreamResult
+  private tool?: AgentWireResponse
+  private usage?: StreamUsage
   private done = false
   private truncated = false
   constructor(private readonly onExplanation?: (text: string) => void) {}
@@ -102,17 +110,31 @@ export class SafeDecisionExplanationParser {
 
   finish(): ValidatedStreamResult {
     if (this.sseBuffer) this.consumeLine(this.sseBuffer)
-    if (this.truncated || !this.result) throw new Error(this.truncated ? 'stream-final-decision-truncated' : 'stream-final-decision-missing-or-invalid')
+    if (this.truncated) throw new Error('stream-final-decision-truncated')
+    const response = this.result?.response ?? this.tool
+    if (!response) throw new Error('stream-final-decision-missing-or-invalid')
+    const result: ValidatedStreamResult = {
+      response,
+      ...(response.type === 'decision' ? { explanation: response.decision.explanation } : {}),
+      ...(this.usage ? { usage: this.usage } : {}),
+    }
+    if (response.type === 'decision') this.onExplanation?.(response.decision.explanation)
     this.done = true
-    return this.result
+    return result
   }
 
   private consumeLine(line: string): void {
     if (!line.startsWith('data:')) return
     const data = line.slice(5).startsWith(' ') ? line.slice(6) : line.slice(5)
     try {
-      const envelope = JSON.parse(data) as { choices?: Array<{ finish_reason?: unknown }> }
+      const envelope = JSON.parse(data) as { choices?: Array<{ finish_reason?: unknown }>; usage?: Record<string, unknown> }
       if (envelope.choices?.[0]?.finish_reason === 'length') this.truncated = true
+      const usage = envelope.usage
+      const inputTokens = usage?.prompt_tokens ?? usage?.input_tokens
+      const outputTokens = usage?.completion_tokens ?? usage?.output_tokens
+      const validInput = typeof inputTokens === 'number' && Number.isInteger(inputTokens) && inputTokens >= 0 ? inputTokens : undefined
+      const validOutput = typeof outputTokens === 'number' && Number.isInteger(outputTokens) && outputTokens >= 0 ? outputTokens : undefined
+      if (validInput !== undefined || validOutput !== undefined) this.usage = { ...(validInput !== undefined ? { inputTokens: validInput } : {}), ...(validOutput !== undefined ? { outputTokens: validOutput } : {}) }
     } catch { /* content parsing below handles malformed envelopes */ }
     const content = sseContent(data)
     if (content === null) return
@@ -123,9 +145,8 @@ export class SafeDecisionExplanationParser {
     for (const raw of parsed.values) {
       let wire: AgentWireResponse
       try { wire = agentWireResponseSchema.parse(JSON.parse(raw)) } catch { continue }
-      if (wire.type === 'tool') continue
+      if (wire.type === 'tool') { this.tool = wire; continue }
       this.result = { response: wire, explanation: wire.decision.explanation }
-      this.onExplanation?.(wire.decision.explanation)
       return
     }
   }

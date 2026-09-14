@@ -91,6 +91,29 @@ describe('coach durable execution on SQLite', () => {
     await executeCoachRun(f.env, 'run', { now: () => 100, generation: { generate: async (_prompt, model) => { expect(model).toBe(f.env.FLASH_MODEL); return content } } }, f.steps)
     expect(f.sql.prepare('SELECT status FROM coach_runs').get()?.status).toBe('completed')
   })
+  it('uses the opt-in stream for a tool turn, continues, and publishes explanation only after completion', async () => {
+    const f = fixture()
+    f.env.ENABLE_COACH_STREAMING = 'true'
+    let calls = 0
+    let generateCalls = 0
+    const observed: Array<{ explanation: string; status: unknown }> = []
+    await executeCoachRun(f.env, 'run', {
+      now: () => 100,
+      generation: {
+        generate: async () => { generateCalls++; return content },
+        generateStream: async (_prompt, _model, _signal, onExplanation) => {
+          calls++
+          if (calls === 1) return JSON.stringify({ type: 'tool', name: 'goals', arguments: {} })
+          onExplanation?.('Mantén el plan.')
+          return content
+        },
+      },
+      onCoachExplanation: async (runId, explanation) => { observed.push({ explanation, status: f.sql.prepare('SELECT status FROM coach_runs WHERE id = ?').get(runId)?.status }) },
+    }, f.steps)
+    expect(generateCalls).toBe(0)
+    expect(calls).toBe(2)
+    expect(observed).toEqual([{ explanation: 'Mantén el plan.', status: 'completed' }])
+  })
   it('retries persistence after restart without a new provider call, even after the deadline', async () => {
     const f = fixture()
     let calls = 0

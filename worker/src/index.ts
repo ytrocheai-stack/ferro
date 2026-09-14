@@ -62,6 +62,7 @@ export interface WorkerDependencies {
   generation?: GenerationProvider
   metadata?: Map<string, { source: string; evidenceLevel: number; text: string; sourceId?: string; chunkId?: string; location?: string; citation?: AnalysisSource }>
   workflow?: WorkflowBinding
+  onCoachExplanation?: (runId: string, explanation: string) => void | Promise<void>
 }
 
 export function shouldStreamGeneration(env: Pick<Env, 'ENABLE_COACH_STREAMING'>, model: string, provider: Pick<GenerationProvider, 'generateStream'>): boolean {
@@ -336,20 +337,26 @@ export class NvidiaGenerationProvider implements GenerationProvider {
     try {
       const result = await withDeadline(async inner => {
         await this.requestGate?.(inner)
-        const response = await this.fetcher('https://integrate.api.nvidia.com/v1/chat/completions', { method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'system', content: this.systemPrompt }, { role: 'user', content: prompt }], ...generationParameters(model), max_tokens: OUTPUT_TOKENS_PER_ATTEMPT, stream: true }), signal: inner })
+        const response = await this.fetcher('https://integrate.api.nvidia.com/v1/chat/completions', { method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'system', content: this.systemPrompt }, { role: 'user', content: prompt }], ...generationParameters(model), max_tokens: OUTPUT_TOKENS_PER_ATTEMPT, stream: true, stream_options: { include_usage: true } }), signal: inner })
         if (!response.ok) throw new ProviderError(`Proveedor respondió ${response.status}`, response.status, response.status === 429 ? 'rate-limit' : response.status >= 500 ? 'server-error' : undefined)
         if (!response.body) throw new ProviderError('El proveedor no devolvió un cuerpo SSE')
         const parser = new SafeDecisionExplanationParser(onExplanation)
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
-        while (true) {
-          const part = await reader.read()
-          if (part.done) break
-          parser.push(decoder.decode(part.value, { stream: true }))
+        const cancelReader = () => { void reader.cancel() }
+        inner.addEventListener('abort', cancelReader, { once: true })
+        try {
+          while (true) {
+            const part = await reader.read()
+            if (part.done) break
+            parser.push(decoder.decode(part.value, { stream: true }))
+          }
+        } finally {
+          inner.removeEventListener('abort', cancelReader)
         }
         parser.push(decoder.decode())
         const validated = parser.finish()
-        return { content: JSON.stringify(validated.response), usage: {} }
+        return { content: JSON.stringify(validated.response), ...(validated.usage ? { usage: validated.usage } : { usage: {} }) }
       }, model === DEEPSEEK_FLASH_MODEL ? COACH_CALL_TIMEOUT_MS : 120_000, signal)
       breaker.success()
       return result
@@ -814,6 +821,7 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
   let callCount = 0
   let budgetReady = false
   let decision: AgentDecision | undefined
+  let streamedExplanation: string | undefined
   let failure: string | undefined
   const assertActive = async () => {
     const current = await db.prepare('SELECT status, deadline_at FROM coach_runs WHERE id = ?').bind(runId).first<{ status: string; deadline_at: number }>()
@@ -874,7 +882,10 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
             let response: GenerationResult
             try {
               const stream = shouldStreamGeneration(env, model, generation)
-              response = generationResult(await withDeadline(inner => stream ? generation.generateStream!(prompt, model, inner) : generation.generate(prompt, model, inner), Math.min(COACH_CALL_TIMEOUT_MS, row.deadline_at - clock()), signal))
+              streamedExplanation = undefined
+              response = generationResult(await withDeadline(inner => stream
+                ? generation.generateStream!(prompt, model, inner, text => { streamedExplanation = text })
+                : generation.generate(prompt, model, inner), Math.min(COACH_CALL_TIMEOUT_MS, row.deadline_at - clock()), signal))
               await assertActive()
             } catch (cause) {
               const classified = classifyCoachGenerationFailure(cause, clock(), row.deadline_at)
@@ -922,6 +933,9 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
     else await db.prepare("UPDATE coach_runs SET status = 'completed', decision_json = ?, usage_json = ?, ended_at = ?, updated_at = ?, workflow_status = 'complete' WHERE id = ? AND status = 'running'").bind(JSON.stringify(decision), JSON.stringify(usage), ended, ended, runId).run()
     return true
   })
+  if (!failure && decision && streamedExplanation === decision.explanation) {
+    try { await deps.onCoachExplanation?.(runId, decision.explanation) } catch { /* la observabilidad no cambia el estado durable ya completado */ }
+  }
 }
 
 /** Repara ejecuciones interrumpidas sin reenviar solicitudes al proveedor. */
