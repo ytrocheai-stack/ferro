@@ -40,4 +40,16 @@ describe('Kimi generation transport', () => {
     const provider = new NvidiaGenerationProvider('test', async () => Response.json({ choices: [{ finish_reason, message: { content } }] }))
     await expect(provider.generate('consulta', 'moonshotai/kimi-k3')).rejects.toThrow()
   })
+  it('validates fragmented SSE JSON before publishing only the final explanation', async () => {
+    const wire = JSON.stringify({ type: 'decision', decision: { kind: 'maintain', explanation: 'Mantén el plan.', observations: [], evidence: [] } })
+    const payload = (content: string) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`
+    const bytes = [payload(wire.slice(0, 11)), payload(wire.slice(11)) + 'data: [DONE]\n\n'].map(value => new TextEncoder().encode(value))
+    let callback = ''
+    const provider = new NvidiaGenerationProvider('test', async () => new Response(new ReadableStream({
+      start(controller) { for (const chunk of bytes) controller.enqueue(chunk); controller.close() },
+    }), { headers: { 'Content-Type': 'text/event-stream' } }))
+    const result = await provider.generateStream('consulta', 'moonshotai/kimi-k3', undefined, value => { callback += value })
+    expect(JSON.parse(result.content)).toEqual(JSON.parse(wire))
+    expect(callback).toBe('Mantén el plan.')
+  })
 })

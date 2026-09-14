@@ -1,4 +1,4 @@
-import { COACH_MODELS, DEEPSEEK_FLASH_MODEL, generationParameters, KIMI_MODEL } from '../../packages/corpus-pipeline/src/generation'
+import { COACH_MODELS, DEEPSEEK_FLASH_MODEL, generationCapabilities, generationParameters, KIMI_MODEL } from '../../packages/corpus-pipeline/src/generation'
 import { GLOBAL_REQUEST_RESERVATION_SQL, requestReservationValues } from '../../packages/corpus-pipeline/src/request-gate'
 import { enrichWithSourceSummaries } from '../../packages/corpus-retrieval/src/summary-context.mjs'
 import { verifyToken } from '@clerk/backend'
@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { analyzeAdaptation, canonicalJson, type ExerciseAnalysisInput, type ExerciseDecision } from '../../packages/adaptation-core/src/index'
 import { agentDecisionSchema, agentRunSchema, analysisResponseSchema, analyzeRequestSchema, coachRunRequestSchema, coachRunResponseSchema, type AgentDecision, type AnalysisSource, type ChangeOperation, type CoachRunRequest, type FutureSession } from '../../packages/adaptation-core/src/contract'
 import { AGENT_INSTRUCTION_VERSION, agentWireResponseSchema, buildAgentInstructions, buildAgentPrompt, runAgentProtocol } from '../../packages/adaptation-core/src/agent'
+import { SafeDecisionExplanationParser } from '../../packages/adaptation-core/src/streaming'
 import { buildVectorizeFilter } from '../../packages/corpus-retrieval/src/index'
 import { corpusMetadataKey, corpusNamespace, vectorPhysicalId } from './rag'
 
@@ -34,6 +35,7 @@ export interface Env {
   EMBEDDING_MODEL?: string
   ENABLE_EMBEDDINGS?: string
   ENABLE_FLASH?: string
+  ENABLE_COACH_STREAMING?: string
   ENABLE_PRO?: string
   ENABLE_RERANKING?: string
   ENABLE_PROVIDER_PROBE?: string
@@ -60,6 +62,10 @@ export interface WorkerDependencies {
   generation?: GenerationProvider
   metadata?: Map<string, { source: string; evidenceLevel: number; text: string; sourceId?: string; chunkId?: string; location?: string; citation?: AnalysisSource }>
   workflow?: WorkflowBinding
+}
+
+export function shouldStreamGeneration(env: Pick<Env, 'ENABLE_COACH_STREAMING'>, model: string, provider: Pick<GenerationProvider, 'generateStream'>): boolean {
+  return enabled(env.ENABLE_COACH_STREAMING) && generationCapabilities(model).streaming && typeof provider.generateStream === 'function'
 }
 
 export interface WorkflowInstance { terminate(options?: { rollback?: boolean }): Promise<void> }
@@ -212,7 +218,10 @@ export interface Retriever { retrieve(vector: number[], topK: number, options?: 
 export interface Reranker { rerank(query: string, matches: VectorMatch[]): Promise<VectorMatch[]> }
 export interface GenerationUsage { inputTokens?: number; outputTokens?: number }
 export interface GenerationResult { content: string; usage?: GenerationUsage }
-export interface GenerationProvider { generate(prompt: string, model: string, signal?: AbortSignal): Promise<GenerationResult | string> }
+export interface GenerationProvider {
+  generate(prompt: string, model: string, signal?: AbortSignal): Promise<GenerationResult | string>
+  generateStream?(prompt: string, model: string, signal?: AbortSignal, onExplanation?: (text: string) => void): Promise<GenerationResult | string>
+}
 export interface GenerationAttempt {
   model: 'flash' | 'pro'
   sent: boolean
@@ -318,6 +327,36 @@ export class NvidiaGenerationProvider implements GenerationProvider {
     if (payload.choices?.[0]?.finish_reason === 'length') throw new ProviderError('Respuesta del generador truncada')
     if (typeof content !== 'string' || !content.trim()) throw new ProviderError('Respuesta del generador vacía')
     return { content, usage: { inputTokens: payload.usage?.prompt_tokens, outputTokens: payload.usage?.completion_tokens } }
+  }
+
+  async generateStream(prompt: string, model: string, signal?: AbortSignal, onExplanation?: (text: string) => void): Promise<GenerationResult> {
+    if (!generationCapabilities(model).streaming) throw new ProviderError('Streaming no habilitado para este modelo')
+    if (signal?.aborted) throw new ProviderError('Solicitud cancelada', undefined, 'cancelled')
+    const breaker = this.breakers.get(model) ?? this.breakers.set(model, new IsolateCircuitBreaker()).get(model)!
+    try {
+      const result = await withDeadline(async inner => {
+        await this.requestGate?.(inner)
+        const response = await this.fetcher('https://integrate.api.nvidia.com/v1/chat/completions', { method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'system', content: this.systemPrompt }, { role: 'user', content: prompt }], ...generationParameters(model), max_tokens: OUTPUT_TOKENS_PER_ATTEMPT, stream: true }), signal: inner })
+        if (!response.ok) throw new ProviderError(`Proveedor respondió ${response.status}`, response.status, response.status === 429 ? 'rate-limit' : response.status >= 500 ? 'server-error' : undefined)
+        if (!response.body) throw new ProviderError('El proveedor no devolvió un cuerpo SSE')
+        const parser = new SafeDecisionExplanationParser(onExplanation)
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        while (true) {
+          const part = await reader.read()
+          if (part.done) break
+          parser.push(decoder.decode(part.value, { stream: true }))
+        }
+        parser.push(decoder.decode())
+        const validated = parser.finish()
+        return { content: JSON.stringify(validated.response), usage: {} }
+      }, model === DEEPSEEK_FLASH_MODEL ? COACH_CALL_TIMEOUT_MS : 120_000, signal)
+      breaker.success()
+      return result
+    } catch (cause) {
+      if (!(cause instanceof ProviderError) || cause.code === 'timeout' || (cause.status !== undefined && cause.status >= 500)) breaker.failure()
+      throw cause
+    }
   }
 }
 
@@ -834,7 +873,8 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
             if (!lease || lease.settled) throw new Error('coach-budget-exhausted')
             let response: GenerationResult
             try {
-              response = generationResult(await withDeadline(inner => generation.generate(prompt, model, inner), Math.min(COACH_CALL_TIMEOUT_MS, row.deadline_at - clock()), signal))
+              const stream = shouldStreamGeneration(env, model, generation)
+              response = generationResult(await withDeadline(inner => stream ? generation.generateStream!(prompt, model, inner) : generation.generate(prompt, model, inner), Math.min(COACH_CALL_TIMEOUT_MS, row.deadline_at - clock()), signal))
               await assertActive()
             } catch (cause) {
               const classified = classifyCoachGenerationFailure(cause, clock(), row.deadline_at)

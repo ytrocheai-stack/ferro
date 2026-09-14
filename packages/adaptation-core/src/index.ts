@@ -1,6 +1,7 @@
 export const ADAPTATION_POLICY_VERSION = 'v1' as const
 
 export * from './agent.ts'
+export * from './streaming.ts'
 
 /** Epley es una señal informativa; la política v1 nunca decide únicamente por e1RM. */
 export function epley1RM(weightKg: number, reps: number): number {

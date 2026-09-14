@@ -9,7 +9,7 @@ import { reserveRemoteRequest } from './remote-request-gate.ts'
 export const EMBEDDING_MODEL = 'nvidia/nemotron-3-embed-1b'
 export const FLASH_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
 import { KIMI_MODEL, generationParameters } from './generation.ts'
-export { KIMI_MODEL, DEFAULT_GENERATION_MODEL, generationParameters } from './generation.ts'
+export { KIMI_MODEL, DEFAULT_GENERATION_MODEL, generationCapabilities, generationParameters } from './generation.ts'
 export const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export function readJson<T = unknown>(file: string): T { return JSON.parse(readFileSync(file, 'utf8')) as T }
 export function writeJson(file: string, value: unknown): void {

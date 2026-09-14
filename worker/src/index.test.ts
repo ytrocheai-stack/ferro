@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { corpusMetadataKey, vectorPhysicalId } from '../../packages/corpus-identity/src/index.mjs'
-import { accountGenerationAttempts, budgetUsageWithinLimit, handleRequest, mergeModelDecisions, normalizeEmbedding, normalizeGenerationUsage, reserveIdempotency, validateModelDecision, validateModelDecisionList, IsolateCircuitBreaker, routeGeneration, ProviderError, withDeadline, VectorizeRetriever, type Env } from './index'
+import { accountGenerationAttempts, budgetUsageWithinLimit, handleRequest, mergeModelDecisions, normalizeEmbedding, normalizeGenerationUsage, reserveIdempotency, validateModelDecision, validateModelDecisionList, IsolateCircuitBreaker, routeGeneration, ProviderError, shouldStreamGeneration, withDeadline, VectorizeRetriever, type Env } from './index'
 import { evaluateCitationPrecision, evaluateRecallAt5, passesDimensionGate, SYNTHETIC_FIXTURES } from './evaluation'
 
 const env: Env = { CLERK_JWT_KEY: 'test-key', ALLOWED_CLERK_IDS: 'user_1' }
@@ -8,6 +8,12 @@ const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000
 const headers = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json' }
 
 describe('adaptation worker', () => {
+  it('mantiene apagado el streaming del coach si la bandera no está explícita', () => {
+    const provider = { generateStream: async () => ({ content: '{}' }) }
+    expect(shouldStreamGeneration({}, 'moonshotai/kimi-k3', provider)).toBe(false)
+    expect(shouldStreamGeneration({ ENABLE_COACH_STREAMING: 'false' }, 'moonshotai/kimi-k3', provider)).toBe(false)
+    expect(shouldStreamGeneration({ ENABLE_COACH_STREAMING: 'true' }, 'moonshotai/kimi-k3', provider)).toBe(true)
+  })
   it('aplica al índice remoto los mismos filtros de evidencia y población', async () => {
     let receivedFilter: unknown
     const retriever = new VectorizeRetriever({ query: async (_vector, options) => { receivedFilter = options?.filter; return { matches: [
