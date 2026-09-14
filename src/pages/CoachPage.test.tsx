@@ -41,6 +41,7 @@ describe('CoachPage T6', () => {
   it('muestra conversación identificada y permite cambiar el borrador por conversación', async () => {
     const user = userEvent.setup(); render(<MemoryRouter><CoachPage /></MemoryRouter>)
     expect(await screen.findByRole('log', { name: 'Conversación con Coach' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: /^Coach$/ })).toBeInTheDocument()
     expect(screen.getByRole('log', { name: 'Conversación con Coach' })).not.toHaveAttribute('aria-live')
     const editor = screen.getByRole('textbox', { name: 'Mensaje para el coach' }); await user.type(editor, 'consulta local')
     expect(editor).toHaveValue('consulta local')

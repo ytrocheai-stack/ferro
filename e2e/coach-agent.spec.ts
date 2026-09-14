@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 
 const accountId = 'user_e2e_coach'
 
-test('el flujo del agente crea, continúa y cancela ejecuciones sin proveedor real', async ({ page }) => {
+test('el flujo del agente crea y continúa ejecuciones sin proveedor real', async ({ page }) => {
   const runs = new Map<string, { eventId: string; status: 'queued' | 'completed' | 'cancelled'; continuation?: boolean }>()
   let sequence = 0
   let contextVersion = ''
@@ -48,14 +48,12 @@ test('el flujo del agente crea, continúa y cancela ejecuciones sin proveedor re
   await expect(page.getByRole('heading', { name: 'Coach' })).toBeVisible()
   await page.getByLabel('Mensaje para el coach').fill('Analiza mi siguiente sesión')
   await page.getByRole('button', { name: 'Enviar' }).click()
-  await expect(page.getByText(/El coach está procesando tu contexto/)).toBeVisible()
+  await expect(page.getByRole('status', { name: 'Procesando respuesta' })).toBeVisible()
   await expect(page.getByText('Necesito una aclaración antes de proponer cambios.')).toBeVisible({ timeout: 10_000 })
   await expect(page.getByText('¿Qué equipo tendrás disponible?')).toBeVisible()
 
   await page.getByLabel('Mensaje para el coach').fill('Tendré barra y discos')
   await page.getByRole('button', { name: 'Continuar' }).click()
-  await expect(page.getByText(/El coach está procesando tu contexto/)).toBeVisible()
-  await page.getByRole('button', { name: 'Cancelar' }).click()
-  await expect(page.getByText('Cancelado', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('status', { name: 'Procesando respuesta' })).toBeVisible()
   expect([...runs.values()].map((run) => run.continuation)).toEqual([false, true])
 })

@@ -187,8 +187,18 @@ export default function CoachPage() {
     let disposed = false
     const poll = () => {
       if (disposed || document.visibilityState !== 'visible' || selectedIdRef.current !== selectedId) return
-      void Promise.all([loadMessages(selectedId, 'refresh'), db.coachRuns.where('conversationId').equals(selectedId).toArray()]).then(([, nextRuns]) => {
-        if (selectedIdRef.current === selectedId && getCoachAccountId() === ownerId) setRuns(nextRuns.filter((run) => run.ownerId === ownerId))
+      void Promise.all([loadMessages(selectedId, 'refresh'), db.coachRuns.where('conversationId').equals(selectedId).toArray()]).then(async ([, nextRuns]) => {
+        const ownedRuns = nextRuns.filter((run) => run.ownerId === ownerId)
+        const refreshedRuns = await Promise.all(ownedRuns.map(async (run) => {
+          if (run.remoteRunId && (run.status === 'queued' || run.status === 'running')) {
+            try { return await refreshCoachRun(getTokenRef.current, run.id) ?? run } catch { /* El siguiente ciclo reintentará la consulta. */ }
+          }
+          return run
+        }))
+        if (selectedIdRef.current === selectedId && getCoachAccountId() === ownerId) {
+          setRuns(refreshedRuns)
+          if (refreshedRuns.some((run) => run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled')) await loadMessages(selectedId, 'refresh')
+        }
       })
     }
     const stop = () => { if (timer !== undefined) { window.clearInterval(timer); timer = undefined } }
@@ -303,12 +313,12 @@ export default function CoachPage() {
 
   const status = statusFor(activeRun ?? latestRun, busy)
   const renderHistory = (className?: string) => <CoachConversationHistory className={className} conversations={conversations} selectedId={selectedId} onSelect={(id) => void selectConversation(id)} onNew={() => void newConversation()} onRename={(conversation) => { setMenuConversation(conversation); setTitleDraft(conversation.title) }} onDelete={setConfirmDelete} hasMore={hasMoreConversations} loadingMore={loadingMoreConversations} onLoadMore={() => { if (loadingMoreConversations) return; setLoadingMoreConversations(true); void loadConversations(true).finally(() => setLoadingMoreConversations(false)) }} />
-  return <section className="page-content coach-page pb-4 pt-3" aria-labelledby="coach-page-title">
-    <div id="coach-page-title"><PageHeader title="Coach" action={<><button className="btn btn-primary min-h-11 px-3 text-sm coach-new-mobile" type="button" onClick={() => void newConversation()}>Nuevo chat</button><button className="page-header__profile pressable coach-history-mobile" type="button" aria-label="Abrir historial" onClick={() => setHistoryOpen(true)}>☰</button></>} /></div>
+  return <section className="page-content coach-page pb-4 pt-3" aria-label="Coach">
+    <PageHeader title="Coach" action={<><button className="btn btn-primary min-h-11 px-3 text-sm coach-new-mobile" type="button" onClick={() => void newConversation()}>Nuevo chat</button><button className="page-header__profile pressable coach-history-mobile" type="button" aria-label="Abrir historial" onClick={() => setHistoryOpen(true)}>☰</button></>} />
     <div className="coach-layout">
       {renderHistory()}
       <section className="coach-conversation" aria-labelledby="coach-conversation-title" role="region">
-        <div className="coach-conversation__header"><div className="min-w-0"><h2 id="coach-conversation-title" className="truncate text-lg font-bold">{selected?.title ?? 'Nuevo chat'}</h2><p className="text-xs text-muted" role="status" aria-live="polite" aria-atomic="true">{status}</p></div><button className="btn btn-primary coach-new-desktop min-h-10 px-3 text-sm" type="button" onClick={() => void newConversation()}>Nuevo chat</button></div>
+        <div className="coach-conversation__header"><div className="min-w-0"><h2 id="coach-conversation-title" className="truncate text-lg font-bold">{selected?.title ?? 'Nuevo chat'}</h2><p className="text-xs text-muted" role="status" aria-label={status} aria-live="polite" aria-atomic="true">{status}</p></div><button className="btn btn-primary coach-new-desktop min-h-10 px-3 text-sm" type="button" onClick={() => void newConversation()}>Nuevo chat</button></div>
         {actionError && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{actionError}</p>}
         {latestRun?.error && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{pendingCancellation(latestRun) ? 'Cancelación pendiente: aún no se ha confirmado el estado remoto.' : errorLabel(latestRun.error)}{isRetryableCoachError(latestRun.error) && <button className="ml-2 underline" type="button" onClick={() => void refresh(latestRun)}>Reintentar</button>}</p>}
         {latestRun && isRenderableCoachProposal(latestRun) && <section className="card mt-3 p-3" aria-label="Propuesta del coach"><p className="text-sm font-semibold">Propuesta validada y lista para revisar</p><p className="mt-1 text-sm text-muted">{latestRun.decision?.explanation}</p><button className="btn btn-primary mt-3 w-full" type="button" disabled={applying || Boolean(latestRun.appliedAt)} onClick={() => setConfirmApply(latestRun)}>{latestRun.appliedAt ? 'Aplicado' : applying ? 'Aplicando…' : 'Confirmar y aplicar'}</button></section>}
