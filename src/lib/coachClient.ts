@@ -231,12 +231,16 @@ async function reconcileRun(localId: string, value: unknown): Promise<CoachRunRe
     const ignoreStatus = local.status === 'cancelled' || local.status === 'completed' ||
       (local.status === 'failed' && (!isRetryableCoachError(local.error) || parsed.run.status === 'queued' || parsed.run.status === 'running')) ||
       (local.status === 'running' && parsed.run.status === 'queued')
+    const remoteTerminal = parsed.run.status === 'completed' || parsed.run.status === 'failed' || parsed.run.status === 'cancelled'
+    const keepCancellationPending = cancellationPending(local) && !remoteTerminal
     const next: CoachRunRecord = {
       ...local, remoteRunId: parsed.run.id, updatedAt: Date.now(),
       dispatchToken: undefined, dispatchLeaseExpiresAt: undefined,
+      cancelRequestedAt: remoteTerminal ? undefined : local.cancelRequestedAt,
+      lastError: remoteTerminal ? undefined : local.lastError,
       ...(!ignoreStatus ? {
         status: parsed.run.status, decision: parsed.decision ?? local.decision,
-        error: parsed.error, usage: parsed.run.usage ?? local.usage,
+        error: keepCancellationPending ? 'cancellation-pending' : parsed.error, usage: parsed.run.usage ?? local.usage,
         startedAt: parsed.run.startedAt ?? local.startedAt, endedAt: parsed.run.endedAt ?? local.endedAt,
         appliedAt: local.appliedAt ?? parsed.appliedAt,
       } : {}),
@@ -262,6 +266,38 @@ export function isRetryableCoachError(error: string | undefined): boolean {
     'agent-deadline-exceeded', 'coach-global-deadline-exceeded', 'provider-rate-limited',
     'provider-server-error', 'server-error', 'workflow-create-failed', 'workflow-not-configured',
   ]).has(error))
+}
+
+export function isRecoverableCoachError(error: string | undefined): boolean {
+  return Boolean(error && new Set([
+    'coach-auth-required', 'coach-forbidden', 'coach-conflict', 'coach-call-timeout',
+    'provider-rate-limited', 'provider-server-error', 'server-error', 'unknown-outcome', 'uncertain-outcome',
+  ]).has(error))
+}
+
+function cancellationPending(run: CoachRunRecord): boolean {
+  return run.cancelRequestedAt !== undefined || run.error === 'cancellation-pending' || (run.status as string) === 'cancellation-pending'
+}
+
+async function persistTransportError(runId: string, error: string): Promise<CoachRunRecord | undefined> {
+  return db.transaction('rw', db.coachRuns, async () => {
+    const current = await db.coachRuns.get(runId)
+    if (!current) return undefined
+    const next: CoachRunRecord = cancellationPending(current)
+      ? { ...current, error: 'cancellation-pending', lastError: error, updatedAt: Date.now() }
+      : { ...current, error, lastError: undefined, updatedAt: Date.now() }
+    await db.coachRuns.put(next)
+    return next
+  })
+}
+
+function coachStatusError(response: Response, text: string): string {
+  if (response.status === 401) return 'coach-auth-required'
+  if (response.status === 403) return 'coach-forbidden'
+  if (response.status === 409) return 'coach-conflict'
+  if (response.status === 429) return 'provider-rate-limited'
+  if (response.status >= 500) return 'server-error'
+  return coachHttpError(response, text).message
 }
 
 async function dispatchRun(getToken: () => Promise<string | null>, localId: string): Promise<CoachRunRecord> {
@@ -338,8 +374,15 @@ export async function refreshCoachRun(getToken: () => Promise<string | null>, ru
   if (!local || !remoteId(local) || !workerUrl() || !navigator.onLine) return local
   const token = await getToken()
   if (!token) return local
-  const response = await fetchCoach(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(remoteId(local)!)}`, { headers: { Authorization: `Bearer ${token}` } })
-  if (!response.ok) throw coachHttpError(response, await response.text())
+  let response: Response
+  try {
+    response = await fetchCoach(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(remoteId(local)!)}`, { headers: { Authorization: `Bearer ${token}` } })
+  } catch (cause) {
+    const error = cause instanceof Error ? cause.message : 'unknown-outcome'
+    if (isRecoverableCoachError(error)) return persistTransportError(runId, error)
+    throw cause
+  }
+  if (!response.ok) return persistTransportError(runId, coachStatusError(response, await response.text()))
   return reconcileRun(local.id, await response.json())
 }
 
@@ -378,20 +421,26 @@ export async function cancelCoachRun(getToken: () => Promise<string | null>, run
   const local = await db.coachRuns.get(runId)
   if (!local) return
   const requestedAt = local.cancelRequestedAt ?? Date.now()
-  await db.coachRuns.update(runId, { cancelRequestedAt: requestedAt, error: 'cancellation-pending', updatedAt: Date.now() })
-  if (workerUrl() && navigator.onLine) {
-    const token = await getToken()
-    if (!token) throw new Error('Falta sesión para confirmar la cancelación remota')
-    if (remoteId(local)) {
-      const response = await fetchCoach(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(remoteId(local)!)}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': local.request.event.deviceId }, body: '{}' })
-      if (response.status === 404) {
-        await db.coachRuns.update(runId, { status: 'cancelled', error: 'cancelled', endedAt: Date.now(), updatedAt: Date.now(), cancelRequestedAt: requestedAt })
+  await db.coachRuns.update(runId, { cancelRequestedAt: requestedAt, error: 'cancellation-pending', lastError: undefined, updatedAt: Date.now() })
+  try {
+    if (workerUrl() && navigator.onLine) {
+      const token = await getToken()
+      if (!token) throw new Error('Falta sesión para confirmar la cancelación remota')
+      if (remoteId(local)) {
+        const response = await fetchCoach(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(remoteId(local)!)}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': local.request.event.deviceId }, body: '{}' })
+        if (response.status === 404) {
+          await db.coachRuns.update(runId, { status: 'cancelled', error: 'cancelled', endedAt: Date.now(), updatedAt: Date.now(), cancelRequestedAt: undefined, lastError: undefined })
+          return
+        }
+        if (!response.ok) throw coachHttpError(response, await response.text())
+        await reconcileRun(runId, await response.json())
         return
       }
-      if (!response.ok) throw coachHttpError(response, await response.text())
-      await reconcileRun(runId, await response.json())
-      return
     }
+  } catch (cause) {
+    const error = cause instanceof Error ? cause.message : 'unknown-outcome'
+    await db.coachRuns.update(runId, { error: 'cancellation-pending', lastError: error, cancelRequestedAt: requestedAt, updatedAt: Date.now() })
+    throw cause
   }
   if (!navigator.onLine || !remoteId(local)) return
   await db.transaction('rw', db.coachRuns, async () => {

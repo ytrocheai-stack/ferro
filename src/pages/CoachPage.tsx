@@ -6,7 +6,7 @@ import { db } from '../db/db'
 import type { CoachRunRecord } from '../db/types'
 import { getCoachAccountId } from '../lib/coachAccount'
 import { getCoachConsent } from '../lib/coachConsent'
-import { applyCoachChangeSet, cancelCoachRun, isRetryableCoachError, refreshCoachRun, retryCoachRun, startCoachRun } from '../lib/coachClient'
+import { applyCoachChangeSet, cancelCoachRun, isRecoverableCoachError, isRetryableCoachError, refreshCoachRun, retryCoachRun, startCoachRun } from '../lib/coachClient'
 import type { FutureSession } from '../../packages/adaptation-core/src/contract'
 import { useCatalog } from '../data/exercises'
 import { useLiveQuery } from 'dexie-react-hooks'
@@ -16,12 +16,16 @@ import { CoachComposer } from '../components/CoachComposer'
 
 const runLabels: Record<CoachRunRecord['status'], string> = { queued: 'En espera', running: 'Analizando', completed: 'Listo', failed: 'No se pudo completar', cancelled: 'Cancelado' }
 function runLabel(run: CoachRunRecord): string { return run.status === 'queued' && run.id.startsWith('coach-local-') ? 'En espera local' : runLabels[run.status] }
+function cancellationPending(run: CoachRunRecord): boolean { return run.cancelRequestedAt !== undefined || run.error === 'cancellation-pending' || (run.status as string) === 'cancellation-pending' }
 function runError(error: string): string {
   if (error === 'unknown-outcome' || error === 'uncertain-outcome') return 'Se perdió la respuesta del proveedor. No se ha aplicado ningún cambio.'
   if (error.includes('deadline') || error.includes('timeout')) return 'El proveedor tardó demasiado en responder. No se ha aplicado ningún cambio; puedes solicitar un nuevo intento.'
   if (error.includes('budget') || error.includes('Presupuesto')) return 'Se alcanzó el límite de consultas del coach. No se ha aplicado ningún cambio.'
   if (error === 'provider-rate-limited') return 'El proveedor limitó temporalmente la consulta. No se ha aplicado ningún cambio; puedes solicitar un nuevo intento.'
   if (error === 'provider-server-error' || error === 'server-error') return 'El proveedor tuvo un error temporal. No se ha aplicado ningún cambio; puedes solicitar un nuevo intento.'
+  if (error === 'coach-auth-required') return 'Tu sesión ya no está disponible. Inicia sesión de nuevo para consultar el estado del coach.'
+  if (error === 'coach-forbidden') return 'El consentimiento o dispositivo del coach ya no está vigente. Revísalo en Perfil.'
+  if (error === 'coach-conflict') return 'El contexto remoto ya no coincide; consulta de nuevo antes de crear otra solicitud.'
   if (error === 'workflow-create-failed' || error === 'workflow-not-configured') return 'El servicio del coach no pudo iniciar la ejecución. No se ha aplicado ningún cambio.'
   if (error.startsWith('[') || error.includes('invalid')) return 'El coach devolvió una respuesta que no pudimos validar. No se ha aplicado ningún cambio.'
   return error
@@ -65,7 +69,8 @@ export default function CoachPage() {
   const { byId } = useCatalog()
   const routines = useLiveQuery(() => db.routines.toArray(), [], [])
   const selected = selection?.ownerId === ownerId ? selection : undefined
-  const activeRunId = runs.find((run) => run.status === 'queued' || run.status === 'running')?.id
+  const selectedCancellationPending = Boolean(selected && cancellationPending(selected))
+  const activeRunId = runs.find((run) => run.status === 'queued' || run.status === 'running' || cancellationPending(run))?.id
   const loadInFlight = useRef(false)
   const refreshInFlight = useRef<string | null>(null)
   const messageRevision = useRef(0)
@@ -98,7 +103,13 @@ export default function CoachPage() {
     const poll = async () => {
       if (refreshInFlight.current) return
       refreshInFlight.current = activeRunId
-      try { await refreshCoachRun(getToken, activeRunId) } catch (cause) {
+      try {
+        const next = await refreshCoachRun(getToken, activeRunId)
+        if (next) {
+          setRuns((current) => current.map((run) => run.id === next.id ? next : run))
+          setSelected((current) => current?.id === next.id ? next : current)
+        }
+      } catch (cause) {
         if (mounted) setActionError(cause instanceof Error ? cause.message : 'No se pudo consultar el estado del coach.')
       } finally {
         if (refreshInFlight.current === activeRunId) refreshInFlight.current = null
@@ -147,7 +158,15 @@ export default function CoachPage() {
         setRuns((current) => current.map((run) => run.id === next.id ? next : run))
         setSelected(next)
       }
-    } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'No se pudo cancelar la ejecución del coach.') } finally { setCancelling(false) }
+    } catch (cause) {
+      const next = await db.coachRuns.get(selected.id)
+      if (next) {
+        setRuns((current) => current.map((run) => run.id === next.id ? next : run))
+        setSelected(next)
+      }
+      const error = cause instanceof Error ? cause.message : 'No se pudo cancelar la ejecución del coach.'
+      setActionError(runError(error))
+    } finally { setCancelling(false) }
   }
 
   const retry = async () => {
@@ -155,7 +174,10 @@ export default function CoachPage() {
     setBusy(true)
     setActionError(undefined)
     try {
-      const next = await retryCoachRun(getToken, selected.id)
+      const next = selected.remoteRunId && selected.error && isRecoverableCoachError(selected.error)
+        ? await refreshCoachRun(getToken, selected.id)
+        : await retryCoachRun(getToken, selected.id)
+      if (!next) return
       setRuns((current) => [next, ...current.filter((run) => run.id !== next.id)])
       setSelected(next)
     } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'No se pudo solicitar un nuevo intento.') } finally { setBusy(false) }
@@ -174,10 +196,11 @@ export default function CoachPage() {
 
       {selected && (
         <section className="card mt-4 p-4" aria-live="polite">
-          <div className="flex items-center justify-between"><h2 className="text-xl font-semibold">Respuesta del coach</h2><span className="text-sm text-muted">{runLabels[selected.status]}</span></div>
+          <div className="flex items-center justify-between"><h2 className="text-xl font-semibold">Respuesta del coach</h2><span className="text-sm text-muted">{selectedCancellationPending ? 'Cancelación pendiente' : runLabels[selected.status]}</span></div>
           <div className="mt-3 rounded-xl bg-surface-2 px-3 py-2.5 text-sm"><span className="font-semibold">Tu pregunta</span><p className="pt-1 text-muted">{String(selected.request.event.payload?.message ?? '—')}</p></div>
-          {selected.status === 'queued' || selected.status === 'running' ? <p className="mt-3 text-sm text-muted">{selected.status === 'queued' && selected.id.startsWith('coach-local-') ? 'Guardado localmente; se enviará cuando haya conexión y sesión disponible.' : 'El coach está procesando tu contexto. Puede tardar unos minutos…'}</p> : selected.error && <p className="mt-3 text-sm text-danger">{runError(selected.error)}</p>}
+          {selectedCancellationPending ? <><p className="mt-3 text-sm text-muted">La solicitud de cancelación está pendiente de confirmación remota.</p>{selected.lastError && <p className="mt-2 text-sm text-danger">{runError(selected.lastError)}</p>}</> : selected.error ? <p className="mt-3 text-sm text-danger">{runError(selected.error)}</p> : selected.status === 'queued' || selected.status === 'running' ? <p className="mt-3 text-sm text-muted">{selected.status === 'queued' && selected.id.startsWith('coach-local-') ? 'Guardado localmente; se enviará cuando haya conexión y sesión disponible.' : 'El coach está procesando tu contexto. Puede tardar unos minutos…'}</p> : null}
           {selected.status === 'failed' && isRetryableCoachError(selected.error) && <button className="btn btn-surface mt-3 w-full" type="button" disabled={busy} onClick={() => void retry()}>Solicitar un nuevo intento</button>}
+          {selected.remoteRunId && selected.status !== 'completed' && selected.status !== 'cancelled' && !selectedCancellationPending && selected.error && isRecoverableCoachError(selected.error) && <button className="btn btn-surface mt-3 w-full" type="button" disabled={busy} onClick={() => void retry()}>Consultar de nuevo</button>}
           {decision && <>
             <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">{decision.explanation}</p>
             {decision.kind === 'ask' && <div className="mt-3 rounded-xl bg-surface-2 p-3 text-sm"><p className="font-semibold">Necesito saber:</p><ul className="mt-2 list-disc pl-5">{decision.questions.map((question) => <li key={question}>{question}</li>)}</ul></div>}
@@ -189,7 +212,7 @@ export default function CoachPage() {
             </>}
             {(decision.kind === 'abstain' || decision.kind === 'unavailable') && <p className="mt-3 rounded-xl bg-surface-2 p-3 text-xs text-muted">{decision.reason}</p>}
           </>}
-          <div className="mt-3 flex gap-2"><button className="btn btn-surface flex-1" type="button" onClick={() => void cancel()} disabled={cancelling || selected.status === 'completed' || selected.status === 'failed' || selected.status === 'cancelled'}>{cancelling ? 'Cancelando…' : 'Cancelar'}</button></div>
+          <div className="mt-3 flex gap-2"><button className="btn btn-surface flex-1" type="button" onClick={() => void cancel()} disabled={cancelling || selected.status === 'completed' || selected.status === 'failed' || selected.status === 'cancelled'}>{cancelling ? (selectedCancellationPending ? 'Reintentando cancelación…' : 'Cancelando…') : selectedCancellationPending ? 'Reintentar cancelación' : 'Cancelar'}</button></div>
         </section>
       )}
       {recentOpen && runs && runs.length > 0 && <div className="mt-5"><h2 className="text-xl font-semibold">Conversaciones recientes</h2><div className="mt-2 flex flex-col gap-2">{runs.filter((run) => run.ownerId === ownerId).slice(0, 8).map((run) => <button className="card flex items-center justify-between px-3 py-3 text-left text-sm" key={run.id} type="button" onClick={() => { setSelected(run); setRecentOpen(false) }}><span className="line-clamp-2">{String(run.request.event.payload?.message ?? 'Ejecución del coach')}</span><span className="ml-2 shrink-0 text-xs text-muted">{runLabel(run)}</span></button>)}</div></div>}

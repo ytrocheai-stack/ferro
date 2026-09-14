@@ -3,8 +3,9 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CoachRunRecord } from '../db/types'
+import { db } from '../db/db'
 import { useBottomDock } from '../components/BottomDock'
-import { startCoachRun } from '../lib/coachClient'
+import { cancelCoachRun, startCoachRun } from '../lib/coachClient'
 import CoachPage from './CoachPage'
 
 vi.mock('@clerk/react', () => ({ useAuth: () => ({ getToken: vi.fn(), isSignedIn: true }) }))
@@ -25,6 +26,7 @@ vi.mock('../lib/coachConsent', () => ({ getCoachConsent: () => ({ enabled: true 
 vi.mock('../lib/coachClient', () => ({
   applyCoachChangeSet: vi.fn(),
   cancelCoachRun: vi.fn(),
+  isRecoverableCoachError: vi.fn(() => false),
   isRetryableCoachError: vi.fn(() => false),
   refreshCoachRun: vi.fn(),
   retryCoachRun: vi.fn(),
@@ -64,6 +66,31 @@ describe('CoachPage', () => {
     } as unknown as CoachRunRecord))
 
     expect(editor).toHaveValue('segundo borrador')
+  })
+
+  it('muestra exactamente Cancelación pendiente mientras la cancelación no está reconciliada', async () => {
+    const pending = {
+      id: 'run-pending', ownerId: 'owner-1', eventId: 'event-pending', contextVersion: 'ctx', status: 'queued', error: 'cancellation-pending',
+      request: { event: { payload: { message: 'Cancelar esta consulta' } } }, createdAt: 1, updatedAt: 2,
+    } as unknown as CoachRunRecord
+    vi.mocked(db.coachRuns.where).mockReturnValue({ equals: () => ({ reverse: () => ({ sortBy: vi.fn().mockResolvedValue([pending]) }) }) } as never)
+    render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    expect(await screen.findByText('Cancelación pendiente')).toBeInTheDocument()
+  })
+
+  it('ofrece reintentar la cancelación y muestra su diagnóstico si falla', async () => {
+    const user = userEvent.setup()
+    const pending = {
+      id: 'run-cancel-error', ownerId: 'owner-1', eventId: 'event-cancel-error', contextVersion: 'ctx', status: 'running', error: 'cancellation-pending',
+      cancelRequestedAt: 3, lastError: 'provider-rate-limited', remoteRunId: 'remote-cancel-error',
+      request: { event: { payload: { message: 'Cancelar esta consulta' } } }, createdAt: 1, updatedAt: 2,
+    } as unknown as CoachRunRecord
+    vi.mocked(db.coachRuns.where).mockReturnValue({ equals: () => ({ reverse: () => ({ sortBy: vi.fn().mockResolvedValue([pending]) }) }) } as never)
+    vi.mocked(db.coachRuns.get).mockResolvedValue(pending)
+    vi.mocked(cancelCoachRun).mockRejectedValueOnce(new Error('provider-rate-limited'))
+    render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    await user.click(await screen.findByRole('button', { name: 'Reintentar cancelación' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('El proveedor limitó temporalmente la consulta')
   })
 
   it('conserva el borrador si fue editado y volvió al mismo texto durante el envío', async () => {

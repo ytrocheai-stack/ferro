@@ -259,6 +259,8 @@ export interface CoachRunRecord {
   error?: string
   /** Solicitud de cancelación durable; se conserva hasta conocer el estado remoto. */
   cancelRequestedAt?: number
+  /** Diagnóstico de transporte conservado junto a una cancelación pendiente. */
+  lastError?: string
   usage?: { inputTokens?: number; outputTokens?: number }
   createdAt: number
   updatedAt: number

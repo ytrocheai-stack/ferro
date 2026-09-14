@@ -71,6 +71,44 @@ describe('coach submission failures', () => {
     expect(reconciled).toMatchObject({ status: 'completed', remoteRunId: 'remote-late' })
   })
 
+  it.each([[401, 'coach-auth-required'], [403, 'coach-forbidden'], [409, 'coach-conflict'], [429, 'provider-rate-limited'], [500, 'server-error']] as const)('persists refresh HTTP %s as %s without deleting the previous response', async (status, error) => {
+    const local = await startCoachRun(async () => null, 'Hola')
+    const previous = responseFor(local.request).decision
+    await db.coachRuns.update(local.id, { remoteRunId: `remote-${local.eventId}`, status: 'running', decision: previous })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status })))
+    const recovered = await refreshCoachRun(async () => 'test-token', local.id)
+    expect(recovered).toMatchObject({ status: 'running', error, decision: previous })
+    expect(await db.coachRuns.get(local.id)).toMatchObject({ status: 'running', error, decision: previous })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('persists a refresh timeout without deleting the previous response', async () => {
+    const local = await startCoachRun(async () => null, 'Hola')
+    const previous = responseFor(local.request).decision
+    await db.coachRuns.update(local.id, { remoteRunId: `remote-${local.eventId}`, status: 'running', decision: previous })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let signal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal
+      return new Promise<Response>((_, reject) => signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted', 'AbortError'))))
+    }))
+    const refreshing = refreshCoachRun(async () => 'test-token', local.id)
+    const result = expect(refreshing).resolves.toMatchObject({ status: 'running', error: 'coach-call-timeout', decision: previous })
+    await vi.advanceTimersByTimeAsync(30_000)
+    await result
+    expect(signal?.aborted).toBe(true)
+    expect(await db.coachRuns.get(local.id)).toMatchObject({ status: 'running', error: 'coach-call-timeout', decision: previous })
+    vi.useRealTimers()
+  })
+
+  it('keeps a persisted cancellation failure visible and retryable', async () => {
+    const local = await startCoachRun(async () => null, 'Hola')
+    await db.coachRuns.update(local.id, { remoteRunId: `remote-${local.eventId}`, status: 'running' })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 429 })))
+    await expect(cancelCoachRun(async () => 'test-token', local.id)).rejects.toThrow('provider-rate-limited')
+    expect(await db.coachRuns.get(local.id)).toMatchObject({ status: 'running', error: 'cancellation-pending', lastError: 'provider-rate-limited', cancelRequestedAt: expect.any(Number) })
+  })
+
   it('uses a 30 second abort signal and keeps timeout recoverable', async () => {
     vi.useFakeTimers()
     let signal: AbortSignal | undefined
