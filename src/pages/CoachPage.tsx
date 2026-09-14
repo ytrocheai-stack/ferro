@@ -110,14 +110,15 @@ export default function CoachPage() {
 
   const send = useCallback(async () => {
     if (!message.trim() || busy) return
+    const sentMessage = message
     setBusy(true)
     setActionError(undefined)
     try {
       const causedByEventId = selected?.decision?.kind === 'ask' ? selected.eventId : undefined
-      const next = await startCoachRun(getToken, message, { causedByEventId })
+      const next = await startCoachRun(getToken, sentMessage, { causedByEventId })
       setRuns((current) => [next, ...current.filter((run) => run.id !== next.id)])
       setSelected(next)
-      if (next.status !== 'failed') setMessage('')
+      if (next.status !== 'failed') setMessage((current) => current === sentMessage ? '' : current)
     } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'No se pudo enviar el mensaje. Inténtalo de nuevo.') } finally { setBusy(false) }
   }, [busy, getToken, message, selected])
 

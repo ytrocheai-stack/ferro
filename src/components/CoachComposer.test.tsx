@@ -47,19 +47,41 @@ describe('CoachComposer', () => {
     expect(editor).toHaveFocus()
   })
 
-  it('nunca envía Enter durante composición ni con keyCode 229', () => {
+  it('no envía Enter mientras el estado local de composición está activo', () => {
     const onSend = vi.fn()
     render(<CoachComposer message="texto" sendDisabled={false} followUp={false} onChange={vi.fn()} onSend={onSend} />)
     const editor = screen.getByRole('textbox', { name: 'Mensaje para el coach' })
 
     fireEvent.compositionStart(editor)
-    fireEvent.keyDown(editor, { key: 'Enter', isComposing: true })
-    fireEvent.keyDown(editor, { key: 'Enter', keyCode: 229 })
     fireEvent.keyDown(editor, { key: 'Enter', isComposing: false })
     expect(onSend).not.toHaveBeenCalled()
 
     fireEvent.compositionEnd(editor)
     fireEvent.keyDown(editor, { key: 'Enter' })
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('no envía Enter cuando nativeEvent.isComposing está activo sin estado local', () => {
+    const onSend = vi.fn()
+    render(<CoachComposer message="texto" sendDisabled={false} followUp={false} onChange={vi.fn()} onSend={onSend} />)
+    const editor = screen.getByRole('textbox', { name: 'Mensaje para el coach' })
+
+    fireEvent.keyDown(editor, { key: 'Enter', isComposing: true })
+    expect(onSend).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(editor, { key: 'Enter', isComposing: false })
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('no envía Enter con keyCode 229 sin composición local ni nativa', () => {
+    const onSend = vi.fn()
+    render(<CoachComposer message="texto" sendDisabled={false} followUp={false} onChange={vi.fn()} onSend={onSend} />)
+    const editor = screen.getByRole('textbox', { name: 'Mensaje para el coach' })
+
+    fireEvent.keyDown(editor, { key: 'Enter', keyCode: 229, isComposing: false })
+    expect(onSend).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(editor, { key: 'Enter', keyCode: 13, isComposing: false })
     expect(onSend).toHaveBeenCalledTimes(1)
   })
 
