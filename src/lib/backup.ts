@@ -26,9 +26,11 @@ import type {
 import { useSettings, type SettingsValues } from '../stores/settings'
 import { useNutrition, type NutritionGoals } from '../stores/nutrition'
 import { shareOrDownloadFile, uid } from './format'
-import { backupSchema, photosBackupSchema } from './validation'
+import { backupSchema, normalizeBackup, photosBackupSchema, type ValidBackup } from './validation'
 import { normalizeRoutine } from './adaptation'
 import { CONTEXT_INVALIDATED_MESSAGE } from './adaptationErrors'
+import { getCoachAccountId } from './coachAccount'
+import { getCoachDeviceId } from './coachConsent'
 
 interface BackupFile {
   app: 'ferro'
@@ -60,7 +62,7 @@ interface BackupFile {
 
 export async function exportBackup(): Promise<void> {
   const [workouts, routines, customExercises, folders, measurements, foods, dishes, foodLog, importBatches, externalRefs, adaptationProposals, adaptationJobs, routineRevisionSnapshots, adaptationEventJobs, coachRuns, coachMessages, coachProfiles, coachConsents, coachConversations, coachDrafts] =
-    await Promise.all([
+    await db.transaction('r', [db.workouts, db.routines, db.customExercises, db.folders, db.measurements, db.foods, db.dishes, db.foodLog, db.importBatches, db.externalRefs, db.adaptationProposals, db.adaptationJobs, db.routineRevisionSnapshots, db.adaptationEventJobs, db.coachRuns, db.coachMessages, db.coachProfiles, db.coachConsents, db.coachConversations, db.coachDrafts], () => Promise.all([
       db.workouts.toArray(),
       db.routines.toArray(),
       db.customExercises.toArray(),
@@ -81,7 +83,7 @@ export async function exportBackup(): Promise<void> {
       db.coachConsents.toArray(),
       db.coachConversations.toArray(),
       db.coachDrafts.toArray(),
-    ])
+    ]))
   const payload: BackupFile = {
     app: 'ferro',
     version: 10,
@@ -188,7 +190,18 @@ export async function importBackup(file: File): Promise<ImportResult> {
   }
   const problem = validateBackup(parsed)
   if (problem) throw new Error(`El backup está dañado (${problem}); no se ha modificado nada`)
-  const data = parsed as unknown as BackupFile
+  const data = normalizeBackup(parsed as ValidBackup) as BackupFile
+  const activeOwner = getCoachAccountId()
+  const coachOwners = new Set([
+    ...(data.coachRuns ?? []).map((record) => record.ownerId),
+    ...(data.coachMessages ?? []).map((record) => record.ownerId),
+    ...(data.coachProfiles ?? []).map((record) => record.ownerId),
+    ...(data.coachConsents ?? []).map((record) => record.ownerId),
+    ...(data.coachConversations ?? []).map((record) => record.ownerId),
+    ...(data.coachDrafts ?? []).map((record) => record.ownerId),
+  ])
+  if (activeOwner && [...coachOwners].some((ownerId) => ownerId !== activeOwner)) throw new Error('El backup pertenece a otra cuenta; no se ha modificado nada')
+  if ((data.coachConsents ?? []).some((consent) => consent.enabled && consent.deviceId !== getCoachDeviceId())) throw new Error('El consentimiento del backup no es válido en este dispositivo; no se ha modificado nada')
 
   await db.transaction(
     'rw',

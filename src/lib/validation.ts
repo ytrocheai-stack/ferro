@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { exerciseAnalysisInputSchema, sourceSchema } from '../../packages/adaptation-core/src/contract'
+import { agentDecisionSchema, coachRunRequestSchema, exerciseAnalysisInputSchema, sourceSchema } from '../../packages/adaptation-core/src/contract'
 
 const finite = z.number().finite()
 const nonEmpty = z.string().trim().min(1)
@@ -225,6 +225,88 @@ const nutritionGoalsSchema = z.object({
   fatG: finite.optional(),
 })
 
+const coachRunSchema = z.object({
+  id: nonEmpty,
+  remoteRunId: nonEmpty.optional(),
+  dispatchToken: nonEmpty.optional(),
+  dispatchLeaseExpiresAt: finite.optional(),
+  ownerId: nonEmpty,
+  eventId: nonEmpty,
+  conversationId: nonEmpty.optional(),
+  messageId: nonEmpty.optional(),
+  reconciliationState: z.enum(['pending', 'reconciled', 'uncertain']).optional(),
+  contextVersion: nonEmpty,
+  status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']),
+  request: coachRunRequestSchema,
+  decision: agentDecisionSchema.optional(),
+  error: z.string().optional(),
+  cancelRequestedAt: finite.optional(),
+  lastError: z.string().optional(),
+  usage: z.object({ inputTokens: z.number().int().nonnegative().optional(), outputTokens: z.number().int().nonnegative().optional() }).strict().optional(),
+  createdAt: finite,
+  updatedAt: finite,
+  startedAt: finite.optional(),
+  endedAt: finite.optional(),
+  appliedAt: finite.optional(),
+}).strict()
+
+const coachMessageSchema = z.object({
+  id: nonEmpty,
+  ownerId: nonEmpty,
+  runId: nonEmpty,
+  conversationId: nonEmpty.optional(),
+  sequence: z.number().int().positive().optional(),
+  role: z.enum(['user', 'assistant']),
+  content: nonEmpty.max(4000),
+  createdAt: finite,
+  contextVersion: nonEmpty,
+  deliveryState: z.enum(['pending', 'sent', 'delivered', 'failed']).optional(),
+}).strict()
+
+const coachConversationSchema = z.object({
+  id: nonEmpty,
+  ownerId: nonEmpty,
+  title: z.string().max(200),
+  createdAt: finite,
+  updatedAt: finite,
+  nextSequence: z.number().int().positive(),
+  pendingDeletion: z.boolean().optional(),
+}).strict()
+
+const coachDraftSchema = z.object({
+  id: nonEmpty,
+  ownerId: nonEmpty,
+  conversationId: nonEmpty,
+  content: z.string().max(4000),
+  updatedAt: finite,
+}).strict()
+
+const coachProfileSchema = z.object({
+  id: nonEmpty,
+  ownerId: nonEmpty,
+  population: z.array(nonEmpty.max(120)).max(20),
+  populationConfirmed: z.boolean(),
+  experience: z.enum(['novice', 'intermediate', 'advanced']).optional(),
+  goals: z.array(nonEmpty.max(400)).max(20),
+  injuriesOrPain: z.array(nonEmpty.max(400)).max(40),
+  unavailableEquipment: z.array(nonEmpty.max(200)).max(80),
+  excludedExercises: z.array(nonEmpty.max(160)).max(80),
+  nutritionConstraints: z.array(nonEmpty.max(400)).max(40),
+  revision: z.number().int().positive(),
+  updatedAt: finite,
+}).strict()
+
+const coachConsentSchema = z.object({
+  id: nonEmpty,
+  ownerId: nonEmpty,
+  deviceId: nonEmpty,
+  version: nonEmpty,
+  enabled: z.boolean(),
+  revision: z.number().int().positive(),
+  acceptedAt: finite,
+  updatedAt: finite,
+}).strict()
+
 const candidateRecordSchema = z.object({
   candidateId: nonEmpty,
   kind: z.enum(['maintain', 'increase-reps', 'increase-load', 'add-set', 'reduce-load', 'reduce-set']),
@@ -304,12 +386,61 @@ export const backupSchema = z.object({
   })).optional(),
   routineRevisionSnapshots: z.array(z.object({ id: nonEmpty, routineId: nonEmpty, revision: finite, createdAt: finite, analysisId: nonEmpty.optional(), routine: routineSchema })).optional(),
   adaptationEventJobs: z.array(z.object({ id: nonEmpty, ownerId: nonEmpty.optional(), analysisId: nonEmpty, exerciseId: nonEmpty, candidateId: nonEmpty.optional(), event: z.enum(['accepted', 'rejected', 'edited', 'reverted']), status: z.enum(['pending', 'sent', 'failed']), createdAt: finite, attempts: finite, nextRetryAt: finite.optional() })).optional(),
-  coachRuns: z.array(z.unknown()).optional(),
-  coachMessages: z.array(z.unknown()).optional(),
-  coachProfiles: z.array(z.unknown()).optional(),
-  coachConsents: z.array(z.unknown()).optional(),
-  coachConversations: z.array(z.unknown()).optional(),
-  coachDrafts: z.array(z.unknown()).optional(),
+  coachRuns: z.array(coachRunSchema).optional(),
+  coachMessages: z.array(coachMessageSchema).optional(),
+  coachProfiles: z.array(coachProfileSchema).optional(),
+  coachConsents: z.array(coachConsentSchema).optional(),
+  coachConversations: z.array(coachConversationSchema).optional(),
+  coachDrafts: z.array(coachDraftSchema).optional(),
+}).superRefine((backup, ctx) => {
+  const duplicateIds = (items: Array<{ id: string }> | undefined, path: string) => {
+    const seen = new Set<string>()
+    for (const [index, item] of (items ?? []).entries()) {
+      if (seen.has(item.id)) ctx.addIssue({ code: 'custom', path: [path, index, 'id'], message: 'ID duplicado' })
+      seen.add(item.id)
+    }
+  }
+  duplicateIds(backup.workouts, 'workouts')
+  duplicateIds(backup.routines, 'routines')
+  duplicateIds(backup.customExercises, 'customExercises')
+  duplicateIds(backup.coachRuns, 'coachRuns')
+  duplicateIds(backup.coachMessages, 'coachMessages')
+  duplicateIds(backup.coachProfiles, 'coachProfiles')
+  duplicateIds(backup.coachConsents, 'coachConsents')
+  duplicateIds(backup.coachConversations, 'coachConversations')
+  duplicateIds(backup.coachDrafts, 'coachDrafts')
+
+  const runs = new Map((backup.coachRuns ?? []).map((run) => [run.id, run]))
+  const conversations = new Map((backup.coachConversations ?? []).map((conversation) => [conversation.id, conversation]))
+  const messages = new Map((backup.coachMessages ?? []).map((message) => [message.id, message]))
+  const owners = new Set<string>()
+  for (const record of [...(backup.coachRuns ?? []), ...(backup.coachMessages ?? []), ...(backup.coachProfiles ?? []), ...(backup.coachConsents ?? []), ...(backup.coachConversations ?? []), ...(backup.coachDrafts ?? [])]) owners.add(record.ownerId)
+  if (owners.size > 1) ctx.addIssue({ code: 'custom', path: ['coach'], message: 'Todos los registros Coach deben pertenecer al mismo propietario' })
+  for (const [index, message] of (backup.coachMessages ?? []).entries()) {
+    const run = runs.get(message.runId)
+    if (!run || run.ownerId !== message.ownerId) ctx.addIssue({ code: 'custom', path: ['coachMessages', index, 'runId'], message: 'Referencia a run inválida' })
+    if (message.conversationId) {
+      const conversation = conversations.get(message.conversationId)
+      if (!conversation || conversation.ownerId !== message.ownerId) ctx.addIssue({ code: 'custom', path: ['coachMessages', index, 'conversationId'], message: 'Referencia a conversación inválida' })
+    }
+  }
+  for (const [index, run] of (backup.coachRuns ?? []).entries()) {
+    if (run.request.event.accountId !== run.ownerId || run.request.event.id !== run.eventId) ctx.addIssue({ code: 'custom', path: ['coachRuns', index], message: 'Owner o evento inconsistente' })
+    if (run.conversationId) {
+      const conversation = conversations.get(run.conversationId)
+      if (!conversation || conversation.ownerId !== run.ownerId) ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'conversationId'], message: 'Referencia a conversación inválida' })
+    }
+    if (run.messageId && (!messages.get(run.messageId) || messages.get(run.messageId)?.ownerId !== run.ownerId)) ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'messageId'], message: 'Referencia a mensaje inválida' })
+  }
+  for (const [index, draft] of (backup.coachDrafts ?? []).entries()) {
+    const conversation = conversations.get(draft.conversationId)
+    if (!conversation || conversation.ownerId !== draft.ownerId) ctx.addIssue({ code: 'custom', path: ['coachDrafts', index, 'conversationId'], message: 'Referencia a conversación inválida' })
+  }
+  for (const conversation of backup.coachConversations ?? []) {
+    const sequences = (backup.coachMessages ?? []).filter((message) => message.conversationId === conversation.id && message.ownerId === conversation.ownerId).map((message) => message.sequence).filter((sequence): sequence is number => sequence !== undefined)
+    if (sequences.some((sequence) => sequence >= conversation.nextSequence) || new Set(sequences).size !== sequences.length) ctx.addIssue({ code: 'custom', path: ['coachConversations'], message: 'Secuencia de conversación imposible' })
+    if (sequences.length > 0 && Math.max(...sequences) + 1 !== conversation.nextSequence) ctx.addIssue({ code: 'custom', path: ['coachConversations'], message: 'nextSequence no corresponde a los mensajes' })
+  }
 })
 
 export const photosBackupSchema = z.object({
@@ -327,3 +458,27 @@ export const photosBackupSchema = z.object({
 })
 
 export type ValidBackup = z.infer<typeof backupSchema>
+
+/** Normaliza formatos antiguos sin inventar registros ni eliminar historiales. */
+export function normalizeBackup(value: ValidBackup): ValidBackup {
+  return {
+    ...value,
+    folders: value.folders ?? [],
+    measurements: value.measurements ?? [],
+    foods: value.foods ?? [],
+    dishes: value.dishes ?? [],
+    foodLog: value.foodLog ?? [],
+    importBatches: value.importBatches ?? [],
+    externalRefs: value.externalRefs ?? [],
+    adaptationProposals: value.adaptationProposals ?? [],
+    adaptationJobs: value.adaptationJobs ?? [],
+    routineRevisionSnapshots: value.routineRevisionSnapshots ?? [],
+    adaptationEventJobs: value.adaptationEventJobs ?? [],
+    coachRuns: value.coachRuns ?? [],
+    coachMessages: value.coachMessages ?? [],
+    coachProfiles: value.coachProfiles ?? [],
+    coachConsents: value.coachConsents ?? [],
+    coachConversations: value.coachConversations ?? [],
+    coachDrafts: value.coachDrafts ?? [],
+  }
+}
