@@ -4,7 +4,8 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CoachPage from './CoachPage'
 import { useBottomDock } from '../components/BottomDock'
-import { startCoachRun, streamCoachRun } from '../lib/coachClient'
+import { refreshCoachRun, startCoachRun, streamCoachRun } from '../lib/coachClient'
+import { db } from '../db/db'
 
 const fixture = vi.hoisted(() => ({
   conversations: [{ id: 'conversation-1', ownerId: 'owner-1', title: 'Rutina de fuerza', createdAt: 1, updatedAt: 1, nextSequence: 1 }, { id: 'conversation-2', ownerId: 'owner-1', title: 'Movilidad', createdAt: 2, updatedAt: 2, nextSequence: 1 }],
@@ -24,7 +25,7 @@ vi.mock('../lib/coachConversations', () => ({
   createCoachConversation: vi.fn(async () => ({ id: 'conversation-2', ownerId: 'owner-1', title: 'Nueva conversación', createdAt: 2, updatedAt: 2, nextSequence: 1 })),
   deleteCoachConversation: vi.fn(async () => true), getCoachDraft: vi.fn(async () => fixture.draft), renameCoachConversation: vi.fn(async (ownerId: string, id: string, title: string) => ({ id, ownerId, title, createdAt: 1, updatedAt: 2, nextSequence: 1 })), setCoachDraft: vi.fn(), flushCoachDraft: vi.fn(),
 }))
-vi.mock('../db/db', () => { const collection = (rows: unknown[]) => { const value = { toArray: vi.fn(async () => rows), count: vi.fn(async () => rows.length), reverse: vi.fn(), limit: vi.fn(), offset: vi.fn(), between: vi.fn(), equals: vi.fn() }; value.reverse.mockReturnValue(value); value.limit.mockReturnValue(value); value.offset.mockReturnValue(value); value.between.mockReturnValue(value); value.equals.mockReturnValue(value); return value }; return { db: { coachConversations: { where: vi.fn(() => collection(fixture.conversations)), get: vi.fn(async (id: string) => fixture.conversations.find((item) => item.id === id)) }, coachMessages: { where: vi.fn(() => collection(fixture.messages)) }, coachRuns: { where: vi.fn(() => collection(fixture.runs)) } } } })
+vi.mock('../db/db', () => { const collection = (rows: unknown[], key?: string) => { const value = { toArray: vi.fn(async () => rows.map((row) => ({ ...(row as Record<string, unknown>) }))), count: vi.fn(async () => rows.length), reverse: vi.fn(), limit: vi.fn(), offset: vi.fn(), between: vi.fn(), equals: vi.fn((needle: unknown) => collection(rows.filter((row) => Boolean(key && typeof row === 'object' && row !== null && (row as Record<string, unknown>)[key] === needle)), key)) }; value.reverse.mockReturnValue(value); value.limit.mockReturnValue(value); value.offset.mockReturnValue(value); value.between.mockReturnValue(value); return value }; return { db: { coachConversations: { where: vi.fn((key: string) => collection(fixture.conversations, key)), get: vi.fn(async (id: string) => fixture.conversations.find((item) => item.id === id)) }, coachMessages: { where: vi.fn((key: string) => collection(fixture.messages, key)) }, coachRuns: { where: vi.fn((key: string) => collection(fixture.runs, key)) } } } })
 
 describe('CoachPage T6', () => {
   beforeEach(() => {
@@ -107,6 +108,44 @@ describe('CoachPage T6', () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
     document.dispatchEvent(new Event('visibilitychange'))
     await waitFor(() => expect(interval).toHaveBeenCalledWith(expect.any(Function), 2_000))
+    interval.mockRestore()
+  })
+
+  it('fusiona solo la conversación consultada y recarga mensajes una vez por transición terminal', async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    const selectedRun = { id: 'run-selected', remoteRunId: 'remote-selected', ownerId: 'owner-1', conversationId: 'conversation-1', eventId: 'event-selected', contextVersion: 'ctx', status: 'queued', request: { event: { payload: { message: 'pregunta' } } }, createdAt: 1, updatedAt: 1 }
+    const otherConversationRun = { id: 'run-other', ownerId: 'owner-1', conversationId: 'conversation-2', eventId: 'event-other', contextVersion: 'ctx', status: 'completed', request: { event: { payload: { message: 'otra pregunta' } } }, createdAt: 1, updatedAt: 1 }
+    fixture.runs.push(selectedRun, otherConversationRun)
+    vi.mocked(refreshCoachRun).mockImplementation(async () => {
+      selectedRun.status = 'completed'
+      return { ...selectedRun } as never
+    })
+    const interval = vi.spyOn(window, 'setInterval').mockImplementation(() => 1 as unknown as ReturnType<typeof window.setInterval>)
+    const user = userEvent.setup()
+    render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    await screen.findByRole('log', { name: 'Conversación con Coach' })
+    await waitFor(() => expect(interval).toHaveBeenCalled())
+    const messageQuery = vi.mocked(db.coachMessages.where)
+    await waitFor(() => expect(messageQuery).toHaveBeenCalled())
+    const beforeFirstPoll = messageQuery.mock.calls.length
+
+    const runQuery = vi.mocked(db.coachRuns.where)
+    const runPoll = () => document.dispatchEvent(new Event('visibilitychange'))
+    runPoll()
+    await waitFor(() => expect(vi.mocked(db.coachRuns.where)).toHaveBeenCalledWith('conversationId'))
+    await waitFor(() => expect(refreshCoachRun).toHaveBeenCalledWith(expect.any(Function), 'run-selected'))
+    await waitFor(() => expect(messageQuery.mock.calls.length).toBeGreaterThan(beforeFirstPoll))
+    const afterTerminalTransition = messageQuery.mock.calls.length
+    const beforeSecondPoll = runQuery.mock.calls.length
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    runPoll()
+    await waitFor(() => expect(runQuery.mock.calls.length).toBeGreaterThan(beforeSecondPoll))
+    expect(refreshCoachRun).toHaveBeenCalledTimes(1)
+    expect(messageQuery.mock.calls.length).toBe(afterTerminalTransition)
+
+    await user.click(screen.getByRole('button', { name: 'Movilidad' }))
+    expect(await screen.findByRole('status', { name: /^Incompleto$/ })).toBeInTheDocument()
     interval.mockRestore()
   })
 })

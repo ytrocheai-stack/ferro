@@ -20,6 +20,8 @@ import { useBottomDock } from '../components/BottomDock'
 const pageSize = 50
 const defaultTitle = 'Nueva conversación'
 const pendingCancellation = (run: CoachRunRecord) => Boolean(run.cancelRequestedAt || run.error === 'cancellation-pending')
+const isTerminalRun = (run: CoachRunRecord) => run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'
+const isActiveRun = (run: CoachRunRecord) => run.status === 'queued' || run.status === 'running'
 const errorLabel = (error?: string) => error === 'provider-rate-limited' ? 'El proveedor limitó temporalmente la consulta.' : error === 'coach-call-timeout' ? 'La respuesta tardó demasiado. Puedes solicitar otro intento.' : error ?? 'No se pudo completar la respuesta.'
 
 function sortRuns(left: CoachRunRecord, right: CoachRunRecord): number {
@@ -185,21 +187,29 @@ export default function CoachPage() {
     if (isCoachStreamingEnabled()) return
     let timer: number | undefined
     let disposed = false
+    let pollInFlight = false
     const poll = () => {
-      if (disposed || document.visibilityState !== 'visible' || selectedIdRef.current !== selectedId) return
-      void Promise.all([loadMessages(selectedId, 'refresh'), db.coachRuns.where('conversationId').equals(selectedId).toArray()]).then(async ([, nextRuns]) => {
+      if (disposed || pollInFlight || document.visibilityState !== 'visible' || selectedIdRef.current !== selectedId) return
+      pollInFlight = true
+      void db.coachRuns.where('conversationId').equals(selectedId).toArray().then(async (nextRuns) => {
+        const previousSelectedRuns = new Map(runsRef.current.filter((run) => run.ownerId === ownerId && run.conversationId === selectedId).map((run) => [run.id, run]))
         const ownedRuns = nextRuns.filter((run) => run.ownerId === ownerId)
         const refreshedRuns = await Promise.all(ownedRuns.map(async (run) => {
-          if (run.remoteRunId && (run.status === 'queued' || run.status === 'running')) {
+          if (run.remoteRunId && isActiveRun(run)) {
             try { return await refreshCoachRun(getTokenRef.current, run.id) ?? run } catch { /* El siguiente ciclo reintentará la consulta. */ }
           }
           return run
         }))
-        if (selectedIdRef.current === selectedId && getCoachAccountId() === ownerId) {
-          setRuns(refreshedRuns)
-          if (refreshedRuns.some((run) => run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled')) await loadMessages(selectedId, 'refresh')
+        if (selectedIdRef.current === selectedId && getCoachAccountId() === ownerId && document.visibilityState === 'visible') {
+          const terminalTransition = refreshedRuns.some((run) => isTerminalRun(run) && (!previousSelectedRuns.has(run.id) || isActiveRun(previousSelectedRuns.get(run.id)!)))
+          setRuns((current) => {
+            const merged = new Map(current.filter((run) => !(run.ownerId === ownerId && run.conversationId === selectedId)).map((run) => [run.id, run]))
+            refreshedRuns.forEach((run) => merged.set(run.id, run))
+            return [...merged.values()]
+          })
+          if (terminalTransition) await loadMessages(selectedId, 'refresh')
         }
-      })
+      }).finally(() => { pollInFlight = false })
     }
     const stop = () => { if (timer !== undefined) { window.clearInterval(timer); timer = undefined } }
     const start = () => { if (document.visibilityState === 'visible' && timer === undefined) timer = window.setInterval(poll, 2_000) }
@@ -207,7 +217,7 @@ export default function CoachPage() {
     start()
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => { disposed = true; stop(); document.removeEventListener('visibilitychange', onVisibilityChange) }
-  }, [loadConversations, loadMessages, ownerId, selectedId])
+  }, [loadMessages, ownerId, selectedId])
 
   useEffect(() => {
     if (!isCoachStreamingEnabled() || !ownerId) return
