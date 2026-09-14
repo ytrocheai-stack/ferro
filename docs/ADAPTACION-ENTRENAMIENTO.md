@@ -1,7 +1,9 @@
 # Adaptación de entrenamiento v1 (beta cerrada)
 
 > Revisión del plan: 2026-08-30. **Correcciones verificadas por hallazgo; beta no aprobada para apertura.**
-> El checkout incluye cambios locales sin publicar. Las regresiones permanentes cubren la cola,
+> Estado de release 2026-09-14: el commit `668189b` está integrado en `main`, la PWA está publicada
+> en Pages y el Worker de producción está desplegado con la configuración de la cuenta permitida.
+> La beta sigue cerrada para apertura general. Las regresiones permanentes cubren la cola,
 > presupuesto, generación mixta, corpus, readiness e idempotencia; aún faltan gates remotos,
 > corpus aprobado, sesión real y pruebas en dispositivos.
 > Ver [auditoría y evidencia](AUDITORIA-COACH-2026-08-30.md).
@@ -56,9 +58,11 @@ y sin gasto adicional. Abrir primero una cuenta; ampliar solo tras revisar fuent
 - Los diagnósticos históricos en `.cache` se conservan como referencia local, pero la autoridad es la
   suite permanente versionada. Detalles y límites en [AUDITORIA-COACH-2026-08-30.md](AUDITORIA-COACH-2026-08-30.md);
   la bitácora está en [PLAN-SDD-COACH-2026-08.md](PLAN-SDD-COACH-2026-08.md).
-- PWA pública y `GET /health`: HTTP 200. No se renovó la comprobación remota de JWT real,
-  readiness autenticado, migraciones, Cron, flags ni presupuesto/créditos remotos.
-- No se desplegó ni se invocó NVIDIA. Los flags de los dos TOML locales siguen en `false`.
+- PWA pública: `version.json` confirma el commit `668189b`; Pages ejecutó correctamente el workflow
+  `34814589701`. `GET /health` del Worker devuelve HTTP 200 y `policyVersion: v1`; la comprobación
+  no invocó modelos. No se ejecutaron benchmarks ni evaluación con proveedor real.
+- El Worker conserva los recursos/bindings existentes y la configuración de producción: beta,
+  embeddings y Flash habilitados solo para la cuenta permitida; Pro, reranking y probe apagados.
 
 El build avisa de un chunk principal de unos 583 kB minificados. Es una tarea de rendimiento
 pendiente; no sustituye los bloqueos funcionales anteriores.

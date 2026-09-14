@@ -45,6 +45,9 @@ completar los gates operativos y de consentimiento descritos en
   `request_json` y decisión del coach.
 - Verificaciones de esta ejecución: `npm run check`, `npm run test:worker`, `npm run test:e2e` y
   `npm run test:e2e:coach`. No se ejecutan benchmarks ni evaluación con modelo real.
+- Publicación verificada: Pages workflow `34814589701` terminó correctamente para `668189b`; `version.json`
+  público confirma ese commit. Después se desplegó `nextrep-adaptation` con Cloudflare, versión
+  `fa2d6eed-654b-48a6-8d07-4fae20332f6f`; `/health` respondió 200 sin llamada de modelo.
 
 La tabla es una matriz de hallazgos técnicos, no una declaración global de que A1–A11 estén
 aprobadas ni una aprobación del despliegue. El agente conversacional privado, su orquestación,

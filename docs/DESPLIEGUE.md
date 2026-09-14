@@ -12,9 +12,14 @@
 > D1 remoto: migraciones 0014/0015 ya aplicadas; presupuesto global disponible verificado.
 > La evaluación de recomendaciones queda pendiente; no se afirma calidad clínica o deportiva.
 
-> Revisión: 2026-09-08Z. El estado local se verificó con build y `wrangler deploy --dry-run` con
-> todos los flags apagados; no se afirma aquí que el checkout actual esté publicado en producción.
-> La PWA pública y el Worker requieren verificación de versión exacta antes del canario.
+> Release verificado 2026-09-14: `main` está en `668189b37f42792a115fc074f270fd0a4c9c5bac`.
+> Pages terminó correctamente el workflow [34814589701](https://github.com/ytrocheai-stack/ferro/actions/runs/34814589701)
+> y `https://ytrocheai-stack.github.io/ferro/version.json` confirma ese commit. Después se desplegó
+> el Worker con la versión `fa2d6eed-654b-48a6-8d07-4fae20332f6f`; `/health` respondió HTTP 200.
+> La verificación no llamó modelos ni cambió recursos, corpus, presupuestos o migraciones.
+
+> Revisión histórica: 2026-09-08Z. El estado local se verificó con build y `wrangler deploy --dry-run`.
+> El estado publicado vigente está documentado en el release verificado anterior.
 > Hay bloqueos reproducidos en la [auditoría del plan](AUDITORIA-COACH-2026-08-30.md).
 
 ## GitHub Pages
@@ -98,8 +103,8 @@ ese paso ni volver a aplicar ALTERs manualmente sin comprobar el historial.
 3. Publicar **primero la PWA compatible**. Revisar los archivos que se incluirán en el commit;
    no añadir indiscriminadamente secretos, diagnósticos temporales ni otros cambios locales.
    El push a `main` desencadena Pages.
-4. Comprobar/aplicar las migraciones D1 pendientes y publicar **después el Worker** con la
-   configuración explícita de producción. `ENABLE_BETA` y proveedores siguen apagados.
+4. Comprobar las migraciones D1 pendientes sin aplicar cambios no solicitados y publicar **después el Worker**
+   con la configuración explícita de producción, conservando la cuenta permitida y las flags del release.
 5. Verificar PWA, manifest, SW, datos públicos, `/health`, CORS y JWT/allowlist con datos
    ficticios. Completar un smoke autenticado y E2E del coach en un entorno de prueba controlado;
    abrir solo la cuenta canaria cuando se hayan aprobado los gates.

@@ -5,6 +5,10 @@
 > revisión no acredita que los cambios locales, las migraciones nuevas o los flags estén desplegados.
 > [Hallazgos y reproducciones](../docs/AUDITORIA-COACH-2026-08-30.md).
 
+> Release 2026-09-14: el Worker `nextrep-adaptation` está desplegado desde `main` en la versión
+> `fa2d6eed-654b-48a6-8d07-4fae20332f6f`. `/health` respondió 200 sin invocar proveedores;
+> la configuración de producción mantiene Flash solo para la cuenta permitida y Pro/reranking/probe apagados.
+
 Worker independiente para adaptación de entrenamiento. Usa el motor determinista compartido,
 JWT de Clerk, origen autorizado y allowlist. El código de producción exige D1, clave HMAC y
 configuración de autenticación. La beta requiere habilitación explícita; las peticiones de análisis
