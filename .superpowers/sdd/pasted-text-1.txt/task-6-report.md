@@ -10,14 +10,14 @@
 - Seguimiento de scroll sólo dentro de 80px del final y acción “Ir al último mensaje” fuera de ese umbral.
 - Borrador aislado por owner/conversación mediante `coachDrafts`, con preservación durante envíos y cambio de conversación.
 - Estados visibles para guardado local, respuesta, completado, error y cancelación pendiente; el compositor conserva el foco y el historial tiene nombres accesibles.
-- Propuestas sólo se ofrecen para runs `completed`, con decisión parseada, contexto vigente y sin reconciliación incierta; la UI exige una segunda confirmación explícita antes de aplicar. Borrar historial no revierte rutinas aplicadas.
+- Propuestas sólo se ofrecen para runs `completed`, con decisión parseada, contexto vigente y `reconciliationState: 'reconciled'`; la UI exige una segunda confirmación explícita antes de aplicar. Borrar historial no revierte rutinas aplicadas.
 - El request de envío recibe el `conversationId` capturado al pulsar enviar; no vuelve a resolver la selección global durante la operación.
 - La paginación usa el índice compuesto existente, offset acumulado y deduplicación por ID para mensajes y conversaciones; el historial expone “Cargar más conversaciones” después de la primera página de 50.
 - Las cargas verifican owner activo y conversación antes/después de IndexedDB, e ignoran resultados que llegan después de cambiar de conversación. El transcript reinicia el ancla al cambiar `conversationId` y conserva el ancla al anteponer mensajes antiguos.
 - `aria-live` quedó limitado al estado breve del Coach; el `role="log"` no anuncia todo el transcript.
 - La generación de carga ahora pertenece a la conversación: la hidratación inicial acepta su propio resultado, y sólo se descartan lecturas cuya conversación ya no está seleccionada.
 - `send` captura `conversationId`, texto y revisión; sólo borra el draft si la selección, revisión y texto siguen coincidiendo al resolver la petición.
-- El transcript sólo etiqueta una propuesta cuando el run está `completed`, la decisión pasa `agentDecisionSchema` y el estado de reconciliación no es pendiente ni incierto.
+- El transcript y la aplicación comparten `isRenderableCoachProposal`; sólo aceptan `status: 'completed'`, decisión válida y `reconciliationState: 'reconciled'` explícito.
 
 ## Archivos T6
 
@@ -38,8 +38,14 @@
 
 - `npm run lint` — OK.
 - `npx tsc --noEmit` — OK.
-- `npx vitest run src/pages/CoachPage.test.tsx src/components/CoachTranscript.test.tsx src/lib/coachClient.test.ts src/lib/coachConversations.test.ts src/components/CoachConversationHistory.test.tsx src/components/CoachComposer.test.tsx src/components/Sheet.test.tsx` — 82 tests OK.
+- `npx vitest run src/pages/CoachPage.test.tsx src/components/CoachTranscript.test.tsx src/lib/coachClient.test.ts src/lib/coachConversations.test.ts src/components/CoachConversationHistory.test.tsx src/components/CoachComposer.test.tsx src/components/Sheet.test.tsx` — 83 tests OK.
 - `git diff --check` — OK.
+
+### Ronda 3
+
+- `isRenderableCoachProposal` exige comparaciones exactas: `run.status === 'completed'` y `run.reconciliationState === 'reconciled'`; `undefined`, `pending` y `uncertain` quedan fuera.
+- `CoachTranscript`, `CoachPage` y `applyCoachChangeSet` usan la misma guardia, por lo que una propuesta no reconciliada no se muestra ni puede aplicarse.
+- Las pruebas cubren un run completado con `reconciliationState` ausente: no aparece la tarjeta y la aplicación se rechaza sin modificar la rutina ni marcar el run como aplicado.
 
 No se ejecutó `npm run check` completo ni E2E completo porque el brief pidió verificación focalizada y el repositorio contiene cambios ajenos preexistentes fuera del alcance de T6.
 

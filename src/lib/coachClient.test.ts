@@ -574,7 +574,7 @@ function routine(): Routine {
 function run(): CoachRunRecord {
   const operationId = 'operation-coach-apply'
   return {
-    id: 'run-coach-apply', ownerId: accountId, eventId: 'event-coach-apply', contextVersion, status: 'completed', request: request(), createdAt: 1, updatedAt: 1,
+    id: 'run-coach-apply', ownerId: accountId, eventId: 'event-coach-apply', contextVersion, status: 'completed', reconciliationState: 'reconciled', request: request(), createdAt: 1, updatedAt: 1,
     decision: {
       kind: 'propose', explanation: 'Aumentar una serie con evidencia.', observations: [], evidence: [],
       changeSet: {
@@ -621,6 +621,15 @@ describe('applyCoachChangeSet', () => {
 
     await expect(applyCoachChangeSet(pending.id)).rejects.toThrow('aún no está completada y validada')
     expect((await db.coachRuns.get(pending.id))?.appliedAt).toBeUndefined()
+    expect((await db.routines.get(routineId))?.revision).toBe(1)
+  })
+
+  it('rechaza una propuesta completada sin reconciliación explícita', async () => {
+    const incomplete = { ...run(), reconciliationState: undefined }
+    await db.coachRuns.put(incomplete)
+
+    await expect(applyCoachChangeSet(incomplete.id)).rejects.toThrow('aún no está completada y validada')
+    expect((await db.coachRuns.get(incomplete.id))?.appliedAt).toBeUndefined()
     expect((await db.routines.get(routineId))?.revision).toBe(1)
   })
 

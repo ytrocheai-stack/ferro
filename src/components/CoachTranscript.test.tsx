@@ -21,6 +21,8 @@ describe('CoachTranscript', () => {
     expect(screen.queryByText('Propuesta validada')).not.toBeInTheDocument()
     rerender(<CoachTranscript conversationId="conversation-1" messages={[message]} runs={[{ ...baseRun, status: 'completed', reconciliationState: 'uncertain' }]} onLoadOlder={() => undefined} hasOlder={false} loadingOlder={false} />)
     expect(screen.queryByText('Propuesta validada')).not.toBeInTheDocument()
+    rerender(<CoachTranscript conversationId="conversation-1" messages={[message]} runs={[{ ...baseRun, status: 'completed' }]} onLoadOlder={() => undefined} hasOlder={false} loadingOlder={false} />)
+    expect(screen.queryByText('Propuesta validada')).not.toBeInTheDocument()
     rerender(<CoachTranscript conversationId="conversation-1" messages={[message]} runs={[{ ...baseRun, status: 'completed', reconciliationState: 'reconciled' }]} onLoadOlder={() => undefined} hasOlder={false} loadingOlder={false} />)
     expect(screen.getByText('Propuesta validada')).toBeInTheDocument()
   })
