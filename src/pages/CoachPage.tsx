@@ -7,7 +7,7 @@ import { db } from '../db/db'
 import type { CoachConversation, CoachMessage, CoachRunRecord } from '../db/types'
 import { getCoachAccountId } from '../lib/coachAccount'
 import { getCoachConsent, getCoachConversationId, setCoachConversationId } from '../lib/coachConsent'
-import { applyCoachChangeSet, isRetryableCoachError, refreshCoachRun, startCoachRun } from '../lib/coachClient'
+import { applyCoachChangeSet, isCoachStreamingEnabled, isRetryableCoachError, refreshCoachRun, startCoachRun, streamCoachRun } from '../lib/coachClient'
 import { ensureCoachConversation, createCoachConversation, deleteCoachConversation, getCoachDraft, renameCoachConversation, setCoachDraft, flushCoachDraft } from '../lib/coachConversations'
 import { PageHeader } from '../components/PageHeader'
 import { CoachComposer } from '../components/CoachComposer'
@@ -67,8 +67,13 @@ export default function CoachPage() {
   const conversationOffset = useRef(0)
   const messageOffset = useRef(0)
   const conversationGeneration = useRef(0)
+  const streamControllers = useRef(new Map<string, AbortController>())
+  const runsRef = useRef<CoachRunRecord[]>([])
+  const getTokenRef = useRef(getToken)
 
   selectedIdRef.current = selectedId
+  runsRef.current = runs
+  getTokenRef.current = getToken
   const selected = conversations.find((item) => item.id === selectedId)
   const selectedRuns = useMemo(() => runs.filter((run) => run.ownerId === ownerId && run.conversationId === selectedId).sort(sortRuns), [ownerId, runs, selectedId])
   const latestRun = selectedRuns.at(-1)
@@ -116,6 +121,28 @@ export default function CoachPage() {
     setHasOlder(total > messageOffset.current)
   }, [ownerId])
 
+  const streamRun = useCallback(async (run: CoachRunRecord) => {
+    if (!isCoachStreamingEnabled() || !ownerId || run.ownerId !== ownerId || streamControllers.current.has(run.id)) return
+    const controller = new AbortController()
+    streamControllers.current.set(run.id, controller)
+    const update = (next: CoachRunRecord) => {
+      if (getCoachAccountId() !== ownerId) return
+      setRuns((current) => current.map((item) => item.id === next.id ? next : item))
+    }
+    try {
+      const next = await streamCoachRun(getTokenRef.current, run.id, controller.signal, update)
+      if (next) update(next)
+      if (next && (next.status === 'completed' || next.status === 'failed' || next.status === 'cancelled')) {
+        // El terminal SSE solo sustituye el parcial; el JSON normal materializa la burbuja una vez.
+        const reconciled = await refreshCoachRun(getTokenRef.current, run.id)
+        if (reconciled) update(reconciled)
+        if (next.conversationId && selectedIdRef.current === next.conversationId) await loadMessages(next.conversationId, 'refresh')
+      }
+    } catch (cause) {
+      if (!(cause instanceof DOMException && cause.name === 'AbortError')) setActionError(errorLabel(cause instanceof Error ? cause.message : undefined))
+    } finally { streamControllers.current.delete(run.id) }
+  }, [loadMessages, ownerId])
+
   useEffect(() => { conversationOffset.current = 0; if (consent) void loadConversations() }, [consent, loadConversations])
 
   useEffect(() => {
@@ -127,15 +154,18 @@ export default function CoachPage() {
     let current = true
     void Promise.all([loadMessages(selectedId), db.coachRuns.where('ownerId').equals(ownerId).toArray(), getCoachDraft(ownerId, selectedId)]).then(([, nextRuns, savedDraft]) => {
       if (!current || generation !== conversationGeneration.current || selectedIdRef.current !== selectedId || getCoachAccountId() !== ownerId) return
-      setRuns(nextRuns.filter((run) => run.ownerId === ownerId))
+      const ownedRuns = nextRuns.filter((run) => run.ownerId === ownerId)
+      setRuns(ownedRuns)
       draftRef.current = savedDraft
       setDraft(savedDraft)
+      if (isCoachStreamingEnabled()) ownedRuns.filter((run) => run.status === 'queued' || run.status === 'running').forEach((run) => { void streamRun(run) })
     })
     return () => { current = false }
-  }, [loadMessages, ownerId, selectedId])
+  }, [loadMessages, ownerId, selectedId, streamRun])
 
   useEffect(() => {
     if (!ownerId || !selectedId) return
+    if (isCoachStreamingEnabled()) return
     const timer = window.setInterval(() => {
       if (selectedIdRef.current !== selectedId) return
       void Promise.all([loadMessages(selectedId, 'refresh'), db.coachRuns.where('ownerId').equals(ownerId).toArray(), loadConversations()]).then(([, nextRuns]) => {
@@ -144,6 +174,20 @@ export default function CoachPage() {
     }, 2_000)
     return () => window.clearInterval(timer)
   }, [loadConversations, loadMessages, ownerId, selectedId])
+
+  useEffect(() => {
+    if (!isCoachStreamingEnabled() || !ownerId) return
+    const reconnect = () => {
+      if (document.visibilityState !== 'visible') return
+      runsRef.current.filter((run) => run.ownerId === ownerId && (run.status === 'queued' || run.status === 'running')).forEach((run) => { void streamRun(run) })
+    }
+    document.addEventListener('visibilitychange', reconnect)
+    return () => {
+      document.removeEventListener('visibilitychange', reconnect)
+      for (const controller of streamControllers.current.values()) controller.abort()
+      streamControllers.current.clear()
+    }
+  }, [ownerId, streamRun])
 
   const selectConversation = async (id: string) => {
     if (!ownerId) return

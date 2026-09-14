@@ -125,6 +125,7 @@ describe('coach submission failures', () => {
   })
 
   it('reconecta snapshots sin POST y reemplaza el parcial con la secuencia nueva', async () => {
+    vi.stubEnv('VITE_ENABLE_COACH_STREAMING', 'true')
     const local = await startCoachRun(async () => null, 'Hola')
     await db.coachRuns.update(local.id, { remoteRunId: 'remote-stream', status: 'running' })
     const fetchMock = vi.fn().mockResolvedValue(new Response(

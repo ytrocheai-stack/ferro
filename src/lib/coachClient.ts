@@ -173,6 +173,11 @@ const remoteId = (run: CoachRunRecord) => run.remoteRunId ?? (run.id.startsWith(
 const DISPATCH_LEASE_MS = 60_000
 export const COACH_CLIENT_TIMEOUT_MS = 30_000
 
+export function isCoachStreamingEnabled(): boolean {
+  const flag = import.meta.env.VITE_ENABLE_COACH_STREAMING as string | undefined
+  return flag === '1' || flag?.toLowerCase() === 'true'
+}
+
 export async function fetchCoach(url: string, init: RequestInit = {}, timeoutMs = COACH_CLIENT_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -434,11 +439,11 @@ function sseRecords(buffer: string): { records: string[]; rest: string } {
 }
 
 /** Cliente de reconexión opt-in: nunca crea un run ni sustituye el polling existente. */
-export async function streamCoachRun(getToken: () => Promise<string | null>, runId: string, signal?: AbortSignal): Promise<CoachRunRecord | undefined> {
+export async function streamCoachRun(getToken: () => Promise<string | null>, runId: string, signal?: AbortSignal, onSnapshot?: (run: CoachRunRecord) => void | Promise<void>): Promise<CoachRunRecord | undefined> {
   const local = await db.coachRuns.get(runId)
   const url = workerUrl()
   const remoteRunId = local ? remoteId(local) : undefined
-  if (!local || !remoteRunId || !url || !navigator.onLine) return local
+  if (!local || !remoteRunId || !url || !navigator.onLine || !isCoachStreamingEnabled()) return local
   const token = await getToken()
   if (!token) return local
   const response = await fetch(`${url}/v1/coach/runs/${encodeURIComponent(remoteRunId)}/events`, {
@@ -459,7 +464,7 @@ export async function streamCoachRun(getToken: () => Promise<string | null>, run
       if (!data) continue
       const event = coachRunSnapshotEventSchema.parse(JSON.parse(data))
       const next = await applyCoachSnapshot(runId, event.snapshot)
-      if (next) current = next
+      if (next) { current = next; await onSnapshot?.(next) }
     }
     if (part.done) break
   }

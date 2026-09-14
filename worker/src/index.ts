@@ -57,6 +57,7 @@ export interface AuthClaims { sub: string }
 export interface WorkerDependencies {
   verify?: (token: string, env: Env) => Promise<AuthClaims>
   now?: () => number
+  sleep?: (milliseconds: number) => Promise<void>
   embedding?: EmbeddingProvider
   retriever?: Retriever
   generation?: GenerationProvider
@@ -83,6 +84,9 @@ const COACH_OUTPUT_TOKENS = 4_000
 export const COACH_CALL_TIMEOUT_MS = 240_000
 export const COACH_GENERATION_STEP_TIMEOUT = '250 seconds'
 const COACH_EXECUTION_MS = 10 * 60 * 1_000
+export const COACH_EVENTS_TIMEOUT_MS = 30_000
+const COACH_EVENTS_POLL_MS = 500
+const COACH_EVENTS_HEARTBEAT_MS = 10_000
 
 const eventSchema = z.object({ analysisId: z.string().min(1).max(120), exerciseId: z.string().min(1).max(120), candidateId: z.string().nullable(), event: z.enum(['accepted', 'rejected', 'edited', 'reverted']) }).strict()
 
@@ -820,7 +824,11 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
   const clock = deps.now ?? Date.now
   const row = await step('coach-run-prepare', async () => {
     const current = await db.prepare('SELECT * FROM coach_runs WHERE id = ?').bind(runId).first<CoachRunRow>()
-    if (!current || ['cancelled', 'completed', 'failed'].includes(current.status)) return null
+    if (!current) return null
+    if (['cancelled', 'completed', 'failed'].includes(current.status)) {
+      await persistActualTerminalSnapshot(db, current.id, clock())
+      return null
+    }
     const now = clock()
     await db.prepare("UPDATE coach_runs SET status = 'running', started_at = COALESCE(started_at, ?), deadline_at = COALESCE(deadline_at, ?), updated_at = ? WHERE id = ? AND status IN ('queued', 'running')").bind(now, now + COACH_EXECUTION_MS, now, runId).run()
     return { ...current, deadline_at: current.deadline_at ?? now + COACH_EXECUTION_MS }
@@ -833,7 +841,6 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
   let decision: AgentDecision | undefined
   let streamedExplanation: string | undefined
   let failure: string | undefined
-  let lastSnapshot: CoachSnapshotRow | undefined
   let snapshotWrites = Promise.resolve()
   const assertActive = async () => {
     const current = await db.prepare('SELECT status, deadline_at FROM coach_runs WHERE id = ?').bind(runId).first<{ status: string; deadline_at: number }>()
@@ -898,7 +905,7 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
               response = generationResult(await withDeadline(inner => stream
                 ? generation.generateStream!(prompt, model, inner, text => {
                   streamedExplanation = text
-                  snapshotWrites = snapshotWrites.then(() => persistCoachSnapshot(db, runId, text, 'running', clock()).then(snapshot => { if (snapshot) lastSnapshot = snapshot }).catch(() => undefined))
+                  snapshotWrites = snapshotWrites.then(() => persistCoachSnapshot(db, runId, text, 'running', clock()).then(() => undefined).catch(() => undefined))
                 })
                 : generation.generate(prompt, model, inner), Math.min(COACH_CALL_TIMEOUT_MS, row.deadline_at - clock()), signal))
               await assertActive()
@@ -945,13 +952,14 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
   await step('coach-run-persist', async () => {
     const ended = clock()
     await snapshotWrites
-    if (failure) {
+    const beforePersist = await db.prepare('SELECT status FROM coach_runs WHERE id = ?').bind(runId).first<{ status: CoachRunRow['status'] }>()
+    if (failure && beforePersist?.status === 'running') {
       await db.prepare("UPDATE coach_runs SET status = 'failed', error_code = ?, usage_json = ?, ended_at = ?, updated_at = ?, workflow_status = 'errored' WHERE id = ? AND status = 'running'").bind(failure, JSON.stringify(usage), ended, ended, runId).run()
-      lastSnapshot = await persistCoachSnapshot(db, runId, streamedExplanation ?? lastSnapshot?.text ?? '', 'failed', ended, true, undefined, failure)
-    } else {
+    } else if (!failure && beforePersist?.status === 'running') {
       await db.prepare("UPDATE coach_runs SET status = 'completed', decision_json = ?, usage_json = ?, ended_at = ?, updated_at = ?, workflow_status = 'complete' WHERE id = ? AND status = 'running'").bind(JSON.stringify(decision), JSON.stringify(usage), ended, ended, runId).run()
-      lastSnapshot = await persistCoachSnapshot(db, runId, decision?.explanation ?? streamedExplanation ?? lastSnapshot?.text ?? '', 'completed', ended, true, decision)
     }
+    // El estado observado después del CAS es la única fuente de verdad del terminal.
+    await persistActualTerminalSnapshot(db, runId, ended)
     return true
   })
   if (!failure && decision && streamedExplanation === decision.explanation) {
@@ -968,17 +976,39 @@ function coachSnapshotResponse(row: CoachSnapshotRow): CoachRunSnapshot {
 }
 
 /** Escribe como máximo un snapshot por segundo; el terminal siempre se fuerza. */
-async function persistCoachSnapshot(db: D1Database, runId: string, text: string, status: CoachRunRow['status'], now: number, terminal = false, decision?: AgentDecision, errorCode?: string): Promise<CoachSnapshotRow | undefined> {
-  const latest = await db.prepare('SELECT * FROM coach_run_snapshots WHERE run_id = ? ORDER BY sequence DESC LIMIT 1').bind(runId).first<CoachSnapshotRow>()
-  if (!terminal && latest && now - latest.created_at < 1_000) return latest
-  const row: CoachSnapshotRow = { run_id: runId, sequence: (latest?.sequence ?? 0) + 1, text: text.slice(0, 32_000), status, decision_json: decision ? JSON.stringify(decision) : null, error_code: errorCode ?? null, created_at: now }
-  await db.prepare('INSERT INTO coach_run_snapshots (run_id, sequence, text, status, decision_json, error_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(row.run_id, row.sequence, row.text, row.status, row.decision_json, row.error_code, row.created_at).run()
-  return row
+export async function persistCoachSnapshot(db: D1Database, runId: string, text: string, status: CoachRunRow['status'], now: number, terminal = false, decision?: AgentDecision, errorCode?: string): Promise<CoachSnapshotRow | undefined> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const latest = await db.prepare('SELECT * FROM coach_run_snapshots WHERE run_id = ? ORDER BY sequence DESC LIMIT 1').bind(runId).first<CoachSnapshotRow>()
+    if (terminal && latest && ['completed', 'failed', 'cancelled'].includes(latest.status)) return latest
+    if (!terminal && latest && now - latest.created_at < 1_000) return latest
+    const row: CoachSnapshotRow = { run_id: runId, sequence: (latest?.sequence ?? 0) + 1, text: text.slice(0, 32_000), status, decision_json: decision ? JSON.stringify(decision) : null, error_code: errorCode ?? null, created_at: now }
+    try {
+      await db.prepare('INSERT INTO coach_run_snapshots (run_id, sequence, text, status, decision_json, error_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(row.run_id, row.sequence, row.text, row.status, row.decision_json, row.error_code, row.created_at).run()
+      return row
+    } catch (cause) {
+      const message = String(cause).toLowerCase()
+      if (!message.includes('unique') && !message.includes('constraint')) throw cause
+      // Otro escritor ganó la misma secuencia. Relee D1 y asigna la siguiente; no se reenvía al proveedor.
+    }
+  }
+  throw new Error('coach-snapshot-sequence-conflict')
+}
+
+async function persistActualTerminalSnapshot(db: D1Database, runId: string, now: number): Promise<void> {
+  const run = await db.prepare('SELECT status, decision_json, error_code FROM coach_runs WHERE id = ?').bind(runId).first<Pick<CoachRunRow, 'status' | 'decision_json' | 'error_code'>>()
+  if (!run || !['completed', 'failed', 'cancelled'].includes(run.status)) return
+  const latest = await db.prepare('SELECT text FROM coach_run_snapshots WHERE run_id = ? ORDER BY sequence DESC LIMIT 1').bind(runId).first<{ text?: string }>()
+  await persistCoachSnapshot(db, runId, latest?.text ?? '', run.status, now, true, parseCoachRowJson<AgentDecision>(run.decision_json), run.error_code ?? undefined)
 }
 
 /** Repara ejecuciones interrumpidas sin reenviar solicitudes al proveedor. */
 export async function reconcileCoachRuns(db: D1Database, accountHash: string, now: number): Promise<void> {
-  await db.prepare("UPDATE coach_runs SET status = 'failed', error_code = 'coach-global-deadline-exceeded', ended_at = ?, updated_at = ?, workflow_status = 'errored' WHERE account_hash = ? AND status IN ('queued', 'running') AND COALESCE(deadline_at, created_at + ?) <= ?").bind(now, now, accountHash, COACH_EXECUTION_MS, now).run()
+  const expired = await db.prepare("SELECT id FROM coach_runs WHERE account_hash = ? AND status IN ('queued', 'running') AND COALESCE(deadline_at, created_at + ?) <= ?").bind(accountHash, COACH_EXECUTION_MS, now).all<{ id: string }>()
+  for (const candidate of expired.results) {
+    await db.prepare("UPDATE coach_runs SET status = 'failed', error_code = 'coach-global-deadline-exceeded', ended_at = ?, updated_at = ?, workflow_status = 'errored' WHERE id = ? AND account_hash = ? AND status IN ('queued', 'running')").bind(now, now, candidate.id, accountHash).run()
+    // Relee la fila después del CAS; una cancelación ganadora conserva cancelled y su snapshot.
+    await persistActualTerminalSnapshot(db, candidate.id, now)
+  }
   await db.prepare("UPDATE coach_budget_leases SET settled = 1, input_tokens = input_estimate, output_tokens = output_estimate WHERE user_hash = ? AND settled = 0 AND EXISTS (SELECT 1 FROM coach_runs WHERE coach_runs.id = coach_budget_leases.run_id AND coach_runs.status IN ('failed', 'cancelled', 'completed'))").bind(accountHash).run()
 }
 
@@ -1020,12 +1050,14 @@ async function createCoachRun(request: Request, env: Env, deps: WorkerDependenci
   const workflow = deps.workflow ?? env.COACH_WORKFLOW
   if (!workflow) {
     await env.DB.prepare("UPDATE coach_runs SET status = 'failed', error_code = 'workflow-not-configured', ended_at = ?, updated_at = ?, workflow_status = 'errored' WHERE id = ?").bind(now, now, runId).run()
+    await persistActualTerminalSnapshot(env.DB, runId, now)
     return error(request, 503, 'workflow-not-configured', env)
   }
   try {
     await workflow.create({ id: runId, params: { runId }, retention: { successRetention: '7 days', errorRetention: '7 days' } })
   } catch {
     await env.DB.prepare("UPDATE coach_runs SET status = 'failed', error_code = 'workflow-create-failed', ended_at = ?, updated_at = ?, workflow_status = 'errored' WHERE id = ?").bind(now, now, runId).run()
+    await persistActualTerminalSnapshot(env.DB, runId, now)
     return error(request, 503, 'workflow-create-failed', env)
   }
   const row = await env.DB.prepare('SELECT * FROM coach_runs WHERE id = ?').bind(runId).first<CoachRunRow>()
@@ -1047,20 +1079,54 @@ async function getCoachRunByEvent(request: Request, env: Env, userId: string, us
   return json(request, coachRunResponse(row, userId), 200, env)
 }
 
-/** SSE de snapshots: el cursor es solo una secuencia y siempre queda aislado por owner. */
-async function getCoachRunEvents(request: Request, env: Env, userHash: string, runId: string): Promise<Response> {
+/** SSE de snapshots: replay, espera acotada y heartbeat; el cursor queda aislado por owner. */
+async function getCoachRunEvents(request: Request, env: Env, userHash: string, runId: string, deps: WorkerDependencies): Promise<Response> {
   if (!env.DB) return error(request, 503, 'D1 es obligatorio para el coach', env)
   const run = await env.DB.prepare('SELECT id FROM coach_runs WHERE id = ? AND account_hash = ?').bind(runId, userHash).first<{ id: string }>()
   if (!run) return error(request, 404, 'Ejecución no encontrada', env)
+  // Una ejecución que terminó mientras no había listener obtiene su terminal antes del replay.
+  await persistActualTerminalSnapshot(env.DB, runId, deps.now?.() ?? Date.now())
   const rawCursor = request.headers.get('Last-Event-ID') ?? new URL(request.url).searchParams.get('after') ?? '0'
   const cursor = Number(rawCursor)
   if (!Number.isInteger(cursor) || cursor < 0) return error(request, 400, 'Cursor de snapshot inválido', env)
-  const rows = await env.DB.prepare('SELECT * FROM coach_run_snapshots WHERE run_id = ? AND sequence > ? ORDER BY sequence ASC').bind(runId, cursor).all<CoachSnapshotRow>()
-  const body = rows.results.map((row) => {
-    const snapshot = coachSnapshotResponse(row)
-    return `id: ${snapshot.sequence}\nevent: snapshot\ndata: ${JSON.stringify({ type: 'snapshot', snapshot })}\n\n`
-  }).join('')
-  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-store', 'X-Accel-Buffering': 'no', ...corsHeaders(request, env) } })
+  const encoder = new TextEncoder()
+  const sleep = deps.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)))
+  const clock = deps.now ?? Date.now
+  const maxIterations = Math.ceil(COACH_EVENTS_TIMEOUT_MS / COACH_EVENTS_POLL_MS) + 1
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let nextSequence = cursor
+      let lastHeartbeat = clock()
+      let closed = false
+      let terminalSeen = false
+      const close = () => { if (!closed) { closed = true; controller.close() } }
+      try {
+        for (let iteration = 0; iteration < maxIterations && !closed; iteration += 1) {
+          const rows = await env.DB!.prepare('SELECT * FROM coach_run_snapshots WHERE run_id = ? AND sequence > ? ORDER BY sequence ASC').bind(runId, nextSequence).all<CoachSnapshotRow>()
+          let terminal = false
+          for (const row of rows.results) {
+            const snapshot = coachSnapshotResponse(row)
+            if (snapshot.sequence <= nextSequence) continue
+            nextSequence = snapshot.sequence
+            terminal = snapshot.status === 'completed' || snapshot.status === 'failed' || snapshot.status === 'cancelled'
+            controller.enqueue(encoder.encode(`id: ${snapshot.sequence}\nevent: snapshot\ndata: ${JSON.stringify({ type: 'snapshot', snapshot })}\n\n`))
+          }
+          if (terminal) { terminalSeen = true; break }
+          const now = clock()
+          if (now - lastHeartbeat >= COACH_EVENTS_HEARTBEAT_MS) {
+            controller.enqueue(encoder.encode(': heartbeat\n\n'))
+            lastHeartbeat = now
+          }
+          if (iteration + 1 < maxIterations) await sleep(COACH_EVENTS_POLL_MS)
+        }
+        if (!terminalSeen && !closed) controller.enqueue(encoder.encode(': timeout\n\n'))
+      } catch {
+        // El cliente conserva el último snapshot y puede reconectar desde su cursor.
+        if (!closed) controller.enqueue(encoder.encode(': stream-error\n\n'))
+      } finally { close() }
+    },
+  })
+  return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-store', 'X-Accel-Buffering': 'no', ...corsHeaders(request, env) } })
 }
 
 async function cancelCoachRun(request: Request, env: Env, deps: WorkerDependencies, userHash: string, userId: string, runId: string, now: number): Promise<Response> {
@@ -1073,7 +1139,9 @@ async function cancelCoachRun(request: Request, env: Env, deps: WorkerDependenci
   }
   await reconcileCoachRuns(env.DB, userHash, now)
   const updated = await env.DB.prepare('SELECT * FROM coach_runs WHERE id = ? AND account_hash = ?').bind(runId, userHash).first<CoachRunRow>()
-  return json(request, updated ? coachRunResponse(updated, userId) : { ok: true }, 200, env)
+  if (updated) await persistActualTerminalSnapshot(env.DB, updated.id, now)
+  const final = updated ? await env.DB.prepare('SELECT * FROM coach_runs WHERE id = ? AND account_hash = ?').bind(runId, userHash).first<CoachRunRow>() : updated
+  return json(request, final ? coachRunResponse(final, userId) : { ok: true }, 200, env)
 }
 
 export class CoachRunWorkflow extends WorkflowEntrypoint<Env, { runId: string }> {
@@ -1103,7 +1171,7 @@ export async function handleRequest(request: Request, env: Env, deps: WorkerDepe
   const auth = await authenticate(request, env, deps); if (auth instanceof Response) return auth
   const pseudonymKey = env.PSEUDONYMIZATION_KEY ?? env.CLERK_JWT_KEY
   const userHash = await hmac(auth.sub, pseudonymKey)
-  if (coachEventsMatch && request.method === 'GET') return getCoachRunEvents(request, env, userHash, decodeURIComponent(coachEventsMatch[1]))
+  if (coachEventsMatch && request.method === 'GET') return getCoachRunEvents(request, env, userHash, decodeURIComponent(coachEventsMatch[1]), deps)
   if (coachEventMatch && request.method === 'GET') return getCoachRunByEvent(request, env, auth.sub, userHash, decodeURIComponent(coachEventMatch[1]), now)
   if (coachRunMatch && request.method === 'GET') return getCoachRun(request, env, auth.sub, userHash, decodeURIComponent(coachRunMatch[1]), now)
   if (request.method === 'GET') {

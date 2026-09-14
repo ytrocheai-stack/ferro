@@ -4,20 +4,21 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import CoachPage from './CoachPage'
 import { useBottomDock } from '../components/BottomDock'
-import { startCoachRun } from '../lib/coachClient'
+import { startCoachRun, streamCoachRun } from '../lib/coachClient'
 
 const fixture = vi.hoisted(() => ({
   conversations: [{ id: 'conversation-1', ownerId: 'owner-1', title: 'Rutina de fuerza', createdAt: 1, updatedAt: 1, nextSequence: 1 }, { id: 'conversation-2', ownerId: 'owner-1', title: 'Movilidad', createdAt: 2, updatedAt: 2, nextSequence: 1 }],
   messages: [] as unknown[],
   runs: [] as unknown[],
   draft: '',
+  streamingEnabled: false,
 }))
 
 vi.mock('@clerk/react', () => ({ useAuth: () => ({ getToken: vi.fn(), isSignedIn: true }) }))
 vi.mock('../components/BottomDock', () => ({ useBottomDock: vi.fn() }))
 vi.mock('../lib/coachAccount', () => ({ getCoachAccountId: () => 'owner-1' }))
 vi.mock('../lib/coachConsent', () => ({ getCoachConsent: () => ({ enabled: true }), getCoachConversationId: () => 'conversation-1', setCoachConversationId: vi.fn() }))
-vi.mock('../lib/coachClient', () => ({ startCoachRun: vi.fn(), refreshCoachRun: vi.fn(), isRetryableCoachError: () => false, applyCoachChangeSet: vi.fn() }))
+vi.mock('../lib/coachClient', () => ({ startCoachRun: vi.fn(), refreshCoachRun: vi.fn(), streamCoachRun: vi.fn(), isCoachStreamingEnabled: () => fixture.streamingEnabled, isRetryableCoachError: () => false, applyCoachChangeSet: vi.fn() }))
 vi.mock('../lib/coachConversations', () => ({
   ensureCoachConversation: vi.fn(async () => fixture.conversations[0]),
   createCoachConversation: vi.fn(async () => ({ id: 'conversation-2', ownerId: 'owner-1', title: 'Nueva conversación', createdAt: 2, updatedAt: 2, nextSequence: 1 })),
@@ -28,7 +29,7 @@ vi.mock('../db/db', () => { const collection = (rows: unknown[]) => { const valu
 describe('CoachPage T6', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    fixture.messages.length = 0; fixture.runs.length = 0; fixture.draft = ''
+    fixture.messages.length = 0; fixture.runs.length = 0; fixture.draft = ''; fixture.streamingEnabled = false
     const target = document.createElement('div'); document.body.append(target)
     vi.mocked(useBottomDock).mockReturnValue({ coachPortalTarget: target } as ReturnType<typeof useBottomDock>)
   })
@@ -80,5 +81,15 @@ describe('CoachPage T6', () => {
     await user.type(editor, 'draft de movilidad')
     resolveRun({ id: 'run-pending', ownerId: 'owner-1', conversationId: 'conversation-1', eventId: 'event-pending', contextVersion: 'ctx', status: 'queued', request: { event: { payload: { message: 'mensaje pendiente' } } }, createdAt: 1, updatedAt: 2 })
     expect(await screen.findByDisplayValue('draft de movilidad')).toBeInTheDocument()
+  })
+
+  it('usa la reconexión SSE solo con la bandera activa y no crea otro run', async () => {
+    fixture.streamingEnabled = true
+    const run = { id: 'run-stream', remoteRunId: 'remote-stream', ownerId: 'owner-1', conversationId: 'conversation-1', eventId: 'event-stream', contextVersion: 'ctx', status: 'running', partialExplanation: 'parcial', request: { event: { payload: { message: 'pregunta' } } }, createdAt: 1, updatedAt: 2 }
+    fixture.runs.push(run)
+    vi.mocked(streamCoachRun).mockImplementation(async (_getToken, _runId, _signal, onSnapshot) => { await onSnapshot?.({ ...run, partialExplanation: 'nuevo parcial' } as never); return { ...run, status: 'completed', partialExplanation: 'respuesta final' } as never })
+    render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    await waitFor(() => expect(streamCoachRun).toHaveBeenCalledWith(expect.any(Function), 'run-stream', expect.any(AbortSignal), expect.any(Function)))
+    expect(startCoachRun).not.toHaveBeenCalled()
   })
 })

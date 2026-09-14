@@ -11,11 +11,13 @@ Implementado localmente y sin despliegue. La bandera `ENABLE_COACH_STREAMING` no
 - `worker/src/index.ts`:
   - persiste snapshots por ejecución con secuencia monotónica;
   - limita snapshots parciales a uno por segundo y fuerza el terminal;
+  - conserva `cancelled` frente a expiración/cancelación y evita que un Workflow reiniciado o una carrera de generación escriba `failed` sobre un run ya cancelado;
   - conserva texto, estado, error y decisión terminal;
-  - expone `GET /v1/coach/runs/:id/events` autenticado por bearer, aislado por `account_hash` y con cursor `Last-Event-ID`/`after`;
+  - expone `GET /v1/coach/runs/:id/events` autenticado por bearer, aislado por `account_hash`, con cursor `Last-Event-ID`/`after`, replay, espera acotada, heartbeats y cierre por timeout/terminal;
+  - reintenta conflictos de secuencia D1 leyendo de nuevo la última secuencia, sin reenviar generación;
   - responde `404` para una ejecución de otra cuenta y nunca crea una ejecución durante reconexión.
-- `src/lib/coachClient.ts` y `src/db/types.ts`: reconexión SSE opt-in mediante `streamCoachRun`, cursor local, deduplicación por secuencia y reemplazo del parcial; se conservan borrador, run y conversación locales.
-- Pruebas focalizadas Worker/cliente para aislamiento, cursor, terminal, reconexión y ausencia de POST.
+- `src/lib/coachClient.ts`, `src/pages/CoachPage.tsx`, `src/components/CoachTranscript.tsx` y `src/db/types.ts`: reconexión SSE opt-in mediante `streamCoachRun`, cursor local, deduplicación por secuencia y reemplazo del parcial; con `VITE_ENABLE_COACH_STREAMING` apagada, `CoachPage` conserva exactamente el polling de 2 segundos; se conservan borrador, run y conversación locales.
+- Pruebas focalizadas Worker/cliente/UI para cancelación, expiración, Workflow reiniciado, carrera de secuencia, conexión viva acotada, aislamiento, cursor, reconexión, reemplazo de parciales y ausencia de POST.
 
 ## Decisiones de seguridad y rollback
 
@@ -23,16 +25,19 @@ Implementado localmente y sin despliegue. La bandera `ENABLE_COACH_STREAMING` no
 - Un snapshot parcial no cambia `decision` ni lo hace aplicable; la aplicación sigue requiriendo una respuesta completada y validada.
 - Una reconexión solo hace GET SSE; no llama al endpoint de creación ni reintenta el Workflow.
 - La tabla y sus filas se conservan aunque se vuelva al polling.
+- La conexión viva tiene un máximo de 30 segundos, consulta cada 500 ms y puede emitir heartbeat; no existe un loop infinito.
+- Compatibilidad verificada: `npm run typecheck:worker` acepta `ReadableStream`, `TextEncoder` y `setTimeout` con el runtime/configuración del Worker, y el harness Worker consume replay, espera, heartbeat, timeout y cierre terminal sin APIs no disponibles; no se encontró bloqueo de runtime en esta ronda.
 
 ## Pendientes / preocupaciones
 
 - No se habilitó el streaming remoto porque T8 exige mantener la bandera apagada hasta acreditar capacidad y ausencia de gasto adicional.
-- El endpoint entrega los snapshots disponibles en la respuesta SSE; el polling existente sigue siendo el rollback operativo. La activación futura deberá añadir la política de duración/reintento del stream en el entorno Cloudflare antes de sustituir el polling.
-- La frecuencia está protegida por consulta de la última fila en D1; si en el futuro hubiera más de un escritor concurrente para la misma ejecución, conviene añadir una estrategia de serialización/insert idempotente específica.
+- El endpoint mantiene una conexión viva solo durante una ventana de 30 segundos; el cliente debe reconectar con su último cursor para seguir observando una ejecución larga.
+- La asignación de secuencia usa clave primaria D1 y reintento tras conflicto; si se añadieran varios procesos con escrituras de idéntico contenido, todavía convendría incorporar una clave de idempotencia de snapshot explícita.
+- El stream de UI se integra bajo una flag frontend separada (`VITE_ENABLE_COACH_STREAMING`), apagada por defecto; el Worker tampoco activa `ENABLE_COACH_STREAMING` por este cambio.
 
 ## Verificación
 
-- `npx vitest run worker/src/coach.test.ts worker/src/coach.durable.test.ts src/lib/coachClient.test.ts` — 71 pruebas aprobadas.
+- `npx vitest run worker/src/coach.test.ts worker/src/coach.durable.test.ts src/lib/coachClient.test.ts src/pages/CoachPage.test.tsx src/components/CoachTranscript.test.tsx` — 85 pruebas aprobadas.
 - `npm run typecheck` — aprobado.
 - `npm run typecheck:worker` — aprobado.
 - `npm run lint` — aprobado.

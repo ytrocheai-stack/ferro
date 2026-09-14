@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath, URL as NodeURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runAgentProtocol } from '../../packages/adaptation-core/src/agent'
-import { COACH_CALL_TIMEOUT_MS, COACH_GENERATION_STEP_TIMEOUT, executeCoachRun, type D1Database, type D1Statement, type Env } from './index'
+import { COACH_CALL_TIMEOUT_MS, COACH_GENERATION_STEP_TIMEOUT, executeCoachRun, persistCoachSnapshot, reconcileCoachRuns, type D1Database, type D1Statement, type Env } from './index'
 import { coachRunRequestSchema } from '../../packages/adaptation-core/src/contract'
 
 const request = coachRunRequestSchema.parse({ event: { id: 'event', accountId: 'user', deviceId: 'device', type: 'message-sent', occurredAt: 1, contextVersion: 'ctx', payload: { message: 'Revisa' } }, context: { version: 'ctx', capturedAt: 1, timezone: 'UTC', isCurrent: true, snapshot: {} } })
@@ -113,6 +113,65 @@ describe('coach durable execution on SQLite', () => {
     expect(generateCalls).toBe(0)
     expect(calls).toBe(2)
     expect(observed).toEqual([{ explanation: 'Mantén el plan.', status: 'completed' }])
+  })
+
+  it('persists a cancelled terminal snapshot when a restarted Workflow sees cancellation', async () => {
+    const f = fixture()
+    f.sql.prepare("UPDATE coach_runs SET status = 'cancelled', error_code = 'cancelled', ended_at = 50 WHERE id = 'run'").run()
+    await executeCoachRun(f.env, 'run', { now: () => 100 }, f.steps)
+    expect(f.sql.prepare("SELECT status, error_code FROM coach_run_snapshots WHERE run_id = 'run' ORDER BY sequence DESC LIMIT 1").get()).toMatchObject({ status: 'cancelled', error_code: 'cancelled' })
+    expect(f.sql.prepare("SELECT status FROM coach_runs WHERE id = 'run'").get()?.status).toBe('cancelled')
+  })
+
+  it('expires only still-active runs and emits a failed terminal snapshot', async () => {
+    const f = fixture()
+    f.sql.prepare("UPDATE coach_runs SET deadline_at = 10 WHERE id = 'run'").run()
+    await reconcileCoachRuns(f.env.DB!, 'account', 20)
+    expect(f.sql.prepare("SELECT status, error_code FROM coach_runs WHERE id = 'run'").get()).toMatchObject({ status: 'failed', error_code: 'coach-global-deadline-exceeded' })
+    expect(f.sql.prepare("SELECT status, error_code FROM coach_run_snapshots WHERE run_id = 'run' ORDER BY sequence DESC LIMIT 1").get()).toMatchObject({ status: 'failed', error_code: 'coach-global-deadline-exceeded' })
+  })
+
+  it('retries a sequence collision and assigns the next D1 sequence', async () => {
+    let latestReads = 0
+    let stored = 0
+    const db: D1Database = {
+      prepare(sql) {
+        let args: unknown[] = []
+        const statement: D1Statement = {
+          bind(...values) { args = values; return statement },
+          async first<T>() { return (sql.includes('coach_run_snapshots') && latestReads++ < 2 ? null : stored ? { run_id: 'run', sequence: stored, text: 'prev', status: 'running', created_at: 1 } : null) as T | null },
+          async all<T>() { return { results: [] as T[] } },
+          async run() {
+            if (sql.includes('INSERT INTO coach_run_snapshots')) {
+              if (stored === 0) { stored = Number(args[1]); return { success: true } }
+              if (Number(args[1]) === 1) throw new Error('UNIQUE constraint failed: coach_run_snapshots.run_id, coach_run_snapshots.sequence')
+              stored = Number(args[1]); return { success: true }
+            }
+            return { success: true }
+          },
+        }
+        return statement
+      },
+      async batch() { return [] },
+    }
+    const results = await Promise.all([
+      persistCoachSnapshot(db, 'run', 'uno', 'running', 2),
+      persistCoachSnapshot(db, 'run', 'dos', 'running', 2_002),
+    ])
+    expect(results.map((result) => result?.sequence).sort()).toEqual([1, 2])
+  })
+
+  it('keeps the failed path from overwriting a run cancelled during generation', async () => {
+    const f = fixture()
+    let calls = 0
+    f.sql.prepare("UPDATE coach_runs SET status = 'running' WHERE id = 'run'").run()
+    await executeCoachRun(f.env, 'run', {
+      now: () => 100,
+      generation: { generate: async () => { calls += 1; f.sql.prepare("UPDATE coach_runs SET status = 'cancelled', error_code = 'cancelled' WHERE id = 'run'").run(); throw new Error('provider-server-error') } },
+    }, f.steps)
+    expect(calls).toBe(1)
+    expect(f.sql.prepare("SELECT status FROM coach_runs WHERE id = 'run'").get()?.status).toBe('cancelled')
+    expect(f.sql.prepare("SELECT status FROM coach_run_snapshots WHERE run_id = 'run' ORDER BY sequence DESC LIMIT 1").get()?.status).toBe('cancelled')
   })
   it('retries persistence after restart without a new provider call, even after the deadline', async () => {
     const f = fixture()

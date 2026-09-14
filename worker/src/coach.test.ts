@@ -18,6 +18,7 @@ function fakeDb() {
         bind(...bound: unknown[]) { values = bound; return statement },
         async first<T = Record<string, unknown>>() {
           if (sql.includes('FROM coach_run_snapshots')) return (snapshots.filter((item) => item.run_id === values[0]).sort((a, b) => Number(b.sequence) - Number(a.sequence))[0] ?? null) as T | null
+          if (sql.includes('SELECT status, decision_json, error_code FROM coach_runs')) return (rows.get(String(values[0]) as string) ?? null) as T | null
           if (sql.includes('SELECT id FROM coach_runs WHERE id = ?')) {
             const row = [...rows.values()].find((item) => item.id === values[0] && item.account_hash === values[1])
             return (row ? { id: row.id } : null) as T | null
@@ -50,6 +51,9 @@ function fakeDb() {
           if (sql.includes('INSERT INTO coach_runs')) {
             const [id, accountHash, eventId, conversationId, contextVersion, requestHash, idempotencyKey, requestJson, createdAt, updatedAt] = values
             rows.set(String(id), { id, account_hash: accountHash, event_id: eventId, conversation_id: conversationId, context_version: contextVersion, request_hash: requestHash, idempotency_key: idempotencyKey, status: 'queued', request_json: requestJson, created_at: createdAt, updated_at: updatedAt })
+          } else if (sql.includes('INSERT INTO coach_run_snapshots')) {
+            const [runId, sequence, text, status, decisionJson, errorCode, createdAt] = values
+            snapshots.push({ run_id: runId, sequence, text, status, decision_json: decisionJson, error_code: errorCode, created_at: createdAt })
           } else if (sql.includes("SET status = 'cancelled'")) {
             const row = rows.get(String(values[2])); if (row) { row.status = 'cancelled'; row.error_code = 'cancelled'; row.ended_at = values[0]; row.updated_at = values[1]; row.workflow_status = 'terminated' }
           }
@@ -133,8 +137,8 @@ describe('private coach runs', () => {
     const created = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
     const id = (await created.json() as { run: { id: string } }).run.id
     snapshots.push({ run_id: id, sequence: 1, text: 'parcial', status: 'running', created_at: 10 })
-    snapshots.push({ run_id: id, sequence: 2, text: 'final', status: 'completed', decision_json: JSON.stringify({ kind: 'maintain', explanation: 'final', observations: [], evidence: [] }), created_at: 20 })
-    const resumed = await handleRequest(new Request(`https://worker.test/v1/coach/runs/${id}/events`, { headers: { ...authHeaders, 'Last-Event-ID': '1' } }), env, deps)
+    const liveDeps = { ...deps, sleep: async () => { if (!snapshots.some((item) => item.sequence === 2)) snapshots.push({ run_id: id, sequence: 2, text: 'final', status: 'completed', decision_json: JSON.stringify({ kind: 'maintain', explanation: 'final', observations: [], evidence: [] }), created_at: 20 }) } }
+    const resumed = await handleRequest(new Request(`https://worker.test/v1/coach/runs/${id}/events`, { headers: { ...authHeaders, 'Last-Event-ID': '1' } }), env, liveDeps)
     expect(resumed.status).toBe(200)
     expect(resumed.headers.get('Content-Type')).toContain('text/event-stream')
     const body = await resumed.text()
@@ -142,6 +146,34 @@ describe('private coach runs', () => {
     expect(body).not.toContain('id: 1')
     rows.get(id)!.account_hash = 'other-account'
     expect((await handleRequest(new Request(`https://worker.test/v1/coach/runs/${id}/events`, { headers: authHeaders }), env, deps)).status).toBe(404)
+  })
+
+  it('closes a quiet SSE connection after the bounded window and emits heartbeat', async () => {
+    const { db } = fakeDb()
+    const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    let now = 0
+    const deps = { verify: async () => ({ sub: 'user_1' }), now: () => now, sleep: async () => { now += 500 } }
+    const created = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
+    const id = (await created.json() as { run: { id: string } }).run.id
+    const response = await handleRequest(new Request(`https://worker.test/v1/coach/runs/${id}/events`, { headers: authHeaders }), env, deps)
+    const body = await response.text()
+    expect(body).toContain(': heartbeat')
+    expect(body).toContain(': timeout')
+  })
+
+  it('cancels durably with a cancelled terminal snapshot and does not rewrite it as failed', async () => {
+    const { db, rows, snapshots } = fakeDb()
+    const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
+    const created = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
+    const id = (await created.json() as { run: { id: string } }).run.id
+    rows.get(id)!.status = 'running'
+    const cancelled = await handleRequest(new Request(`https://worker.test/v1/coach/runs/${id}/cancel`, { method: 'POST', headers: authHeaders, body: '{}' }), env, deps)
+    expect((await cancelled.json() as { run: { status: string } }).run.status).toBe('cancelled')
+    expect(snapshots.at(-1)).toMatchObject({ run_id: id, status: 'cancelled', error_code: 'cancelled' })
+    expect(snapshots.some((snapshot) => snapshot.status === 'failed')).toBe(false)
   })
 
   it('does not continue a completed turn from another conversation', async () => {
