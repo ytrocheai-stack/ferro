@@ -104,7 +104,7 @@ export function normalizeCoachRequestForTransport(value: unknown): ParsedCoachRu
   }, 'Solicitud pendiente del coach')
 }
 
-export async function buildCoachRequest(message: string, causedByEventId?: string, eventType: CoachEvent['type'] = 'message-sent', options: { eventId?: string; payload?: Record<string, unknown> } = {}): Promise<ParsedCoachRunRequest | null> {
+export async function buildCoachRequest(message: string, causedByEventId?: string, eventType: CoachEvent['type'] = 'message-sent', options: { eventId?: string; payload?: Record<string, unknown>; conversationId?: string } = {}): Promise<ParsedCoachRunRequest | null> {
   const trimmedMessage = message.trim()
   if (!trimmedMessage) throw messageError('Escribe un mensaje para el coach')
   if (trimmedMessage.length > COACH_MAX_MESSAGE_CHARS) throw messageError(`El mensaje del coach no puede superar ${COACH_MAX_MESSAGE_CHARS} caracteres`)
@@ -120,7 +120,12 @@ export async function buildCoachRequest(message: string, causedByEventId?: strin
     readCoachConsentRecord(accountId, consent.deviceId),
   ])
   const recentFinished = workouts.filter((workout) => Number.isFinite(workout.endedAt)).slice(0, 6)
-  const conversation = await getSelectedCoachConversation(accountId)
+  const conversation = options.conversationId
+    ? await db.coachConversations.get(options.conversationId).then((value) => {
+      if (!value || value.ownerId !== accountId || value.pendingDeletion) throw messageError('La conversación seleccionada no existe o no pertenece a esta cuenta')
+      return value
+    })
+    : await getSelectedCoachConversation(accountId)
   const messages = boundConversation(previousMessages.filter((message) => message.conversationId === conversation.id))
   const conversationId = conversation.id
   const consentRevision = consentRecord?.revision ?? consent.acceptedAt
@@ -374,8 +379,8 @@ async function dispatchRun(getToken: () => Promise<string | null>, localId: stri
   return reconcileRun(localId, value)
 }
 
-export async function startCoachRun(getToken: () => Promise<string | null>, message: string, options: { causedByEventId?: string } = {}): Promise<CoachRunRecord> {
-  const request = await buildCoachRequest(message, options.causedByEventId)
+export async function startCoachRun(getToken: () => Promise<string | null>, message: string, options: { causedByEventId?: string; conversationId?: string } = {}): Promise<CoachRunRecord> {
+  const request = await buildCoachRequest(message, options.causedByEventId, 'message-sent', { conversationId: options.conversationId })
   if (!request) throw new Error('Activa el consentimiento del coach y escribe un mensaje')
   const local = await admitCoachRun(request)
   return dispatchRun(getToken, local.id)
@@ -482,11 +487,12 @@ export async function applyCoachChangeSet(runId: string): Promise<void> {
   if (!ownerId) throw new Error('Se requiere una cuenta para aplicar la propuesta')
   const initial = await db.coachRuns.get(runId)
   if (!initial || initial.ownerId !== ownerId || initial.decision?.kind !== 'propose') throw new Error('No hay una propuesta aplicable de tu cuenta')
+  if (initial.status !== 'completed' || initial.reconciliationState === 'uncertain') throw new Error('La propuesta aún no está completada y validada')
   if (initial.appliedAt) return
   const parsed = agentDecisionSchema.parse(initial.decision)
   if (parsed.kind !== 'propose' || parsed.changeSet.accountId !== ownerId || parsed.changeSet.expectedContextVersion !== initial.contextVersion) throw new Error('La propuesta ya no pertenece al contexto vigente')
   if (initial.request.event.conversationId && initial.request.event.conversationId !== 'legacy-conversation') {
-    const current = await buildCoachRequest(String(initial.request.event.payload?.message ?? ''), initial.request.event.causedByEventId, initial.request.event.type)
+    const current = await buildCoachRequest(String(initial.request.event.payload?.message ?? ''), initial.request.event.causedByEventId, initial.request.event.type, { conversationId: initial.request.event.conversationId })
     if (!current || current.context.version !== initial.contextVersion) throw new Error('El contexto cambió; recalcula la propuesta antes de aplicarla')
   }
   const futurePlan = parsed.changeSet.futurePlan

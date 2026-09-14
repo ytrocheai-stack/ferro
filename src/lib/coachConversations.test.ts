@@ -53,6 +53,16 @@ describe('conversaciones locales del coach', () => {
     expect(await db.coachMessages.count()).toBe(4)
   })
 
+  it('construye el request con la conversación capturada aunque cambie la selección global', async () => {
+    const captured = await createCoachConversation('account-a', 'Capturada')
+    await db.coachMessages.put({ id: 'captured-seed', ownerId: 'account-a', runId: 'captured-run', conversationId: captured.id, sequence: 1, role: 'user', content: 'capturada', createdAt: 1, contextVersion: 'ctx' })
+    const other = await createCoachConversation('account-a', 'Otra')
+    const request = await buildCoachRequest('capturada', undefined, 'message-sent', { conversationId: captured.id })
+    expect(request?.event.conversationId).toBe(captured.id)
+    expect(request?.context.snapshot.conversation.map((message) => message.content)).toEqual(['capturada'])
+    expect(other.ownerId).toBe('account-a')
+  })
+
   it('marca eliminación pendiente y cancelación sin borrar contenido, y elimina después', async () => {
     const conversation = await ensureCoachConversation('account-a')
     const run = { id: 'run-pending', ownerId: 'account-a', eventId: 'event-pending', conversationId: conversation.id, contextVersion: 'ctx', status: 'running' as const, request: {} as never, createdAt: 1, updatedAt: 1 }

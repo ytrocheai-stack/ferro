@@ -16,7 +16,7 @@ vi.mock('../lib/coachConversations', () => ({
   createCoachConversation: vi.fn(async () => ({ id: 'conversation-2', ownerId: 'owner-1', title: 'Nueva conversación', createdAt: 2, updatedAt: 2, nextSequence: 1 })),
   deleteCoachConversation: vi.fn(async () => true), getCoachDraft: vi.fn(async () => ''), renameCoachConversation: vi.fn(async (ownerId: string, id: string, title: string) => ({ id, ownerId, title, createdAt: 1, updatedAt: 2, nextSequence: 1 })), setCoachDraft: vi.fn(), flushCoachDraft: vi.fn(),
 }))
-vi.mock('../db/db', () => { const collection = (rows: unknown[]) => { const value = { toArray: vi.fn(async () => rows), count: vi.fn(async () => rows.length), reverse: vi.fn(), limit: vi.fn(), offset: vi.fn(), between: vi.fn(), equals: vi.fn() }; value.reverse.mockReturnValue(value); value.limit.mockReturnValue(value); value.offset.mockReturnValue(value); value.between.mockReturnValue(value); value.equals.mockReturnValue(value); return value }; return { db: { coachConversations: { where: vi.fn(() => collection([{ id: 'conversation-1', ownerId: 'owner-1', title: 'Rutina de fuerza', createdAt: 1, updatedAt: 1, nextSequence: 1 }])) }, coachMessages: { where: vi.fn(() => collection([])) }, coachRuns: { where: vi.fn(() => collection([])) } } } })
+vi.mock('../db/db', () => { const collection = (rows: unknown[]) => { const value = { toArray: vi.fn(async () => rows), count: vi.fn(async () => rows.length), reverse: vi.fn(), limit: vi.fn(), offset: vi.fn(), between: vi.fn(), equals: vi.fn() }; value.reverse.mockReturnValue(value); value.limit.mockReturnValue(value); value.offset.mockReturnValue(value); value.between.mockReturnValue(value); value.equals.mockReturnValue(value); return value }; const conversations = [{ id: 'conversation-1', ownerId: 'owner-1', title: 'Rutina de fuerza', createdAt: 1, updatedAt: 1, nextSequence: 1 }]; return { db: { coachConversations: { where: vi.fn(() => collection(conversations)), get: vi.fn(async (id: string) => conversations.find((item) => item.id === id)) }, coachMessages: { where: vi.fn(() => collection([])) }, coachRuns: { where: vi.fn(() => collection([])) } } } })
 
 describe('CoachPage T6', () => {
   beforeEach(() => {
@@ -28,8 +28,16 @@ describe('CoachPage T6', () => {
   it('muestra conversación identificada y permite cambiar el borrador por conversación', async () => {
     const user = userEvent.setup(); render(<MemoryRouter><CoachPage /></MemoryRouter>)
     expect(await screen.findByRole('log', { name: 'Conversación con Coach' })).toBeInTheDocument()
+    expect(screen.getByRole('log', { name: 'Conversación con Coach' })).not.toHaveAttribute('aria-live')
     const editor = screen.getByRole('textbox', { name: 'Mensaje para el coach' }); await user.type(editor, 'consulta local')
     expect(editor).toHaveValue('consulta local')
+  })
+
+  it('abre el historial móvil con el componente de conversaciones real', async () => {
+    const user = userEvent.setup(); render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    await user.click(screen.getByRole('button', { name: 'Abrir historial' }))
+    expect(await screen.findByRole('heading', { name: 'Historial' })).toBeInTheDocument()
+    expect(screen.getAllByRole('complementary', { name: 'Historial de conversaciones' }).length).toBeGreaterThan(0)
   })
 
   it('crea un nuevo chat reutilizable y no duplica el historial visual', async () => {
@@ -41,6 +49,6 @@ describe('CoachPage T6', () => {
   it('envía al chat seleccionado y conserva la separación de la UI durante la respuesta', async () => {
     vi.mocked(startCoachRun).mockResolvedValue({ id: 'run-1', ownerId: 'owner-1', conversationId: 'conversation-1', eventId: 'event-1', contextVersion: 'context-1', status: 'queued', request: { event: { payload: { message: 'hola' } } }, createdAt: 1, updatedAt: 1 } as never)
     const user = userEvent.setup(); render(<MemoryRouter><CoachPage /></MemoryRouter>); const editor = await screen.findByRole('textbox', { name: 'Mensaje para el coach' }); await user.type(editor, 'hola'); await user.click(screen.getByRole('button', { name: 'Enviar' }))
-    await waitFor(() => expect(startCoachRun).toHaveBeenCalledWith(expect.any(Function), 'hola'))
+    await waitFor(() => expect(startCoachRun).toHaveBeenCalledWith(expect.any(Function), 'hola', { conversationId: 'conversation-1', causedByEventId: undefined }))
   })
 })

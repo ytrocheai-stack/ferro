@@ -615,6 +615,15 @@ describe('applyCoachChangeSet', () => {
     expect(snapshot?.routine.exercises[0]?.plannedSets).toBe(3)
   })
 
+  it.each(['queued', 'running'] as const)('rechaza una propuesta %s aunque tenga decision propose', async (status) => {
+    const pending = { ...run(), status, endedAt: undefined }
+    await db.coachRuns.put(pending)
+
+    await expect(applyCoachChangeSet(pending.id)).rejects.toThrow('aún no está completada y validada')
+    expect((await db.coachRuns.get(pending.id))?.appliedAt).toBeUndefined()
+    expect((await db.routines.get(routineId))?.revision).toBe(1)
+  })
+
   it('rechaza una propuesta obsoleta sin escribir cambios parciales', async () => {
     await db.routines.put({ ...routine(), revision: 2 })
 

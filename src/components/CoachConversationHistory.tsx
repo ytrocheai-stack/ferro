@@ -1,14 +1,18 @@
 import type { CoachConversation } from '../db/types'
 
-export function CoachConversationHistory({ conversations, selectedId, onSelect, onNew, onRename, onDelete }: {
+export function CoachConversationHistory({ conversations, selectedId, onSelect, onNew, onRename, onDelete, onLoadMore, hasMore, loadingMore, className }: {
   conversations: CoachConversation[]
   selectedId?: string
   onSelect: (id: string) => void
   onNew: () => void
   onRename: (conversation: CoachConversation) => void
   onDelete: (conversation: CoachConversation) => void
+  onLoadMore?: () => void
+  hasMore?: boolean
+  loadingMore?: boolean
+  className?: string
 }) {
-  return <aside className="coach-history" aria-label="Historial de conversaciones">
+  return <aside className={className ?? 'coach-history'} aria-label="Historial de conversaciones">
     <div className="flex items-center justify-between gap-2">
       <h2 className="text-sm font-bold uppercase tracking-wide text-muted">Conversaciones</h2>
       <button className="btn btn-surface min-h-10 px-3 text-sm" type="button" onClick={onNew}>Nuevo chat</button>
@@ -20,6 +24,7 @@ export function CoachConversationHistory({ conversations, selectedId, onSelect, 
         <button className="pressable shrink-0 rounded-lg text-muted" type="button" aria-label={`Renombrar ${conversation.title}`} onClick={() => onRename(conversation)}>•••</button>
         <button className="pressable shrink-0 rounded-lg px-1 text-xs text-danger" type="button" aria-label={`Eliminar ${conversation.title}`} onClick={() => onDelete(conversation)}>×</button>
       </div>)}
+      {hasMore && <button className="btn btn-surface mt-2 min-h-10 px-3 text-sm" type="button" onClick={onLoadMore} disabled={loadingMore}>{loadingMore ? 'Cargando…' : 'Cargar más conversaciones'}</button>}
     </div>
   </aside>
 }
