@@ -68,6 +68,12 @@ export default function CoachPage() {
   const activeRunId = runs.find((run) => run.status === 'queued' || run.status === 'running')?.id
   const loadInFlight = useRef(false)
   const refreshInFlight = useRef<string | null>(null)
+  const messageRevision = useRef(0)
+
+  const editMessage = useCallback((value: string) => {
+    messageRevision.current += 1
+    setMessage(value)
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -111,6 +117,7 @@ export default function CoachPage() {
   const send = useCallback(async () => {
     if (!message.trim() || busy) return
     const sentMessage = message
+    const sentRevision = messageRevision.current
     setBusy(true)
     setActionError(undefined)
     try {
@@ -118,7 +125,7 @@ export default function CoachPage() {
       const next = await startCoachRun(getToken, sentMessage, { causedByEventId })
       setRuns((current) => [next, ...current.filter((run) => run.id !== next.id)])
       setSelected(next)
-      if (next.status !== 'failed') setMessage((current) => current === sentMessage ? '' : current)
+      if (next.status !== 'failed') setMessage((current) => messageRevision.current === sentRevision && current === sentMessage ? '' : current)
     } catch (cause) { setActionError(cause instanceof Error ? cause.message : 'No se pudo enviar el mensaje. Inténtalo de nuevo.') } finally { setBusy(false) }
   }, [busy, getToken, message, selected])
 
@@ -163,7 +170,7 @@ export default function CoachPage() {
       <PageHeader title="Coach" action={<button className="page-header__profile pressable text-xs" onClick={() => setRecentOpen((open) => !open)} aria-label="Conversaciones recientes">{runs.length}</button>} />
       <p className="mt-4 text-base leading-6 text-muted">Revisa tu entrenamiento y pregunta al coach. Tú confirmas cada cambio antes de aplicarlo.</p>
       {actionError && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{actionError}</p>}
-      {runs.length === 0 && <section className="mt-5" aria-labelledby="coach-suggestions-title"><h2 id="coach-suggestions-title" className="text-xl font-semibold">¿Qué quieres revisar?</h2><div className="mt-3 grid gap-2">{['Revisar mi último entreno', 'Ajustar mi rutina', 'Resolver una duda'].map((suggestion) => <button key={suggestion} className="btn btn-surface justify-start text-left" onClick={() => setMessage(suggestion)}>{suggestion}</button>)}</div></section>}
+      {runs.length === 0 && <section className="mt-5" aria-labelledby="coach-suggestions-title"><h2 id="coach-suggestions-title" className="text-xl font-semibold">¿Qué quieres revisar?</h2><div className="mt-3 grid gap-2">{['Revisar mi último entreno', 'Ajustar mi rutina', 'Resolver una duda'].map((suggestion) => <button key={suggestion} className="btn btn-surface justify-start text-left" onClick={() => editMessage(suggestion)}>{suggestion}</button>)}</div></section>}
 
       {selected && (
         <section className="card mt-4 p-4" aria-live="polite">
@@ -186,6 +193,6 @@ export default function CoachPage() {
         </section>
       )}
       {recentOpen && runs && runs.length > 0 && <div className="mt-5"><h2 className="text-xl font-semibold">Conversaciones recientes</h2><div className="mt-2 flex flex-col gap-2">{runs.filter((run) => run.ownerId === ownerId).slice(0, 8).map((run) => <button className="card flex items-center justify-between px-3 py-3 text-left text-sm" key={run.id} type="button" onClick={() => { setSelected(run); setRecentOpen(false) }}><span className="line-clamp-2">{String(run.request.event.payload?.message ?? 'Ejecución del coach')}</span><span className="ml-2 shrink-0 text-xs text-muted">{runLabel(run)}</span></button>)}</div></div>}
-    </div>{coachPortalTarget && createPortal(<CoachComposer message={message} busy={busy} sendDisabled={Boolean(activeRunId)} followUp={selected?.decision?.kind === 'ask'} onChange={setMessage} onSend={() => void send()} />, coachPortalTarget)}</>
+    </div>{coachPortalTarget && createPortal(<CoachComposer message={message} busy={busy} sendDisabled={Boolean(activeRunId)} followUp={selected?.decision?.kind === 'ask'} onChange={editMessage} onSend={() => void send()} />, coachPortalTarget)}</>
   )
 }

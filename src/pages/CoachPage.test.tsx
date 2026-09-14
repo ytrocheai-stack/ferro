@@ -65,4 +65,31 @@ describe('CoachPage', () => {
 
     expect(editor).toHaveValue('segundo borrador')
   })
+
+  it('conserva el borrador si fue editado y volvió al mismo texto durante el envío', async () => {
+    const user = userEvent.setup()
+    let resolveRun!: (run: CoachRunRecord) => void
+    vi.mocked(startCoachRun).mockImplementationOnce(() => new Promise((resolve) => { resolveRun = resolve }))
+    render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    const editor = await screen.findByRole('textbox', { name: 'Mensaje para el coach' })
+
+    await user.type(editor, 'mismo mensaje')
+    await user.click(screen.getByRole('button', { name: 'Enviar' }))
+    await user.clear(editor)
+    await user.type(editor, 'texto intermedio')
+    await user.clear(editor)
+    await user.type(editor, 'mismo mensaje')
+    await act(async () => resolveRun({
+      id: 'run-aba',
+      ownerId: 'owner-1',
+      eventId: 'event-aba',
+      contextVersion: 'context-1',
+      status: 'completed',
+      request: { event: { payload: { message: 'mismo mensaje' } } },
+      createdAt: 1,
+      updatedAt: 1,
+    } as unknown as CoachRunRecord))
+
+    expect(editor).toHaveValue('mismo mensaje')
+  })
 })
