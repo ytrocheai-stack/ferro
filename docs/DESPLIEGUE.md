@@ -1,5 +1,19 @@
 # Despliegue de NextRep
 
+## T0 — restricción de proveedor y modelo
+
+T0 no implementa una migración de modelo. El coach usa el proveedor actualmente
+configurado en cada entorno: NVIDIA en el Worker; desarrollo declara Kimi y
+producción declara DeepSeek Flash. `gpt-5.6-luna` está documentado para la API de
+Codex, pero no está verificado un acceso desde esta PWA usando la suscripción del
+usuario sin nuevas credenciales ni facturación de API. Por tanto, la aplicación no
+afirma usar Luna y no se cambia ningún modelo activo, secreto, flag ni credencial.
+
+La ejecución de este paso puede usar Luna como agente dentro de Codex; eso no es
+evidencia de que la PWA tenga acceso a Luna. Las comprobaciones de T0 son locales y
+documentales: no implican acceso remoto, despliegue, Clerk real ni teclado Android
+real. Ver el informe [T0](MIGRACION-NEXTREP-T0-2026-09.md).
+
 > Actualización 2026-09-10: por petición del usuario, se prepara el coach privado sin
 > ejecutar benchmarks ni evaluar la calidad del modelo. Producción usa DeepSeek Flash,
 > consentimiento `coach-context-v2` y beta/embeddings/Flash habilitados únicamente para

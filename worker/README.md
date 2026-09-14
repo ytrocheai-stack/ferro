@@ -1,5 +1,21 @@
 # NextRep Adaptation Worker
 
+## T0 — proveedor y modelos fijados
+
+Este paso es documental y no migra el modelo. El Worker usa el proveedor NVIDIA
+configurado actualmente. La configuración por entorno es explícita: `worker/wrangler.toml`
+declara Kimi para desarrollo con las flags apagadas, mientras
+`worker/wrangler.production.toml` declara DeepSeek Flash para producción; Pro,
+reranking y provider probe permanecen apagados. `gpt-5.6-luna` está documentado
+para la API de Codex, pero no está verificado que esta PWA pueda acceder a él con la
+suscripción del usuario sin nuevas credenciales ni facturación de API. No se debe
+interpretar el uso de Luna como agente dentro de Codex como modelo del Worker.
+
+No se modifican secretos, modelos activos, flags ni endpoints. Las comprobaciones
+de este bloqueo son locales y documentales; no acreditan acceso remoto, despliegue,
+Clerk real ni teclado Android real. El detalle y las comprobaciones pendientes están
+en [el informe T0](../docs/MIGRACION-NEXTREP-T0-2026-09-09.md).
+
 > Auditoría 2026-08-30: correcciones verificadas por hallazgo, **no abrir la beta**. El endpoint remoto
 > [health](https://nextrep-adaptation.yehoshuatroche.workers.dev/health) responde 200, pero esta
 > revisión no acredita que los cambios locales, las migraciones nuevas o los flags estén desplegados.
