@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CoachMessage, CoachRunRecord } from '../db/types'
+import { isRenderableCoachProposal } from '../lib/coachPresentation'
 
 export function CoachTranscript({ conversationId, messages, runs, onLoadOlder, hasOlder, loadingOlder }: { conversationId?: string; messages: CoachMessage[]; runs: CoachRunRecord[]; onLoadOlder: () => void; hasOlder: boolean; loadingOlder: boolean }) {
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -40,7 +41,7 @@ export function CoachTranscript({ conversationId, messages, runs, onLoadOlder, h
       {ordered.length === 0 && <p className="py-12 text-center text-sm text-muted">Escribe una pregunta para comenzar este chat.</p>}
       {ordered.map((message) => { const run = runById.get(message.runId); return <article className={`coach-message coach-message--${message.role}`} key={message.id}>
         <p className="text-xs font-semibold text-muted">{message.role === 'user' ? 'Tú' : 'Coach'}</p><p className="mt-1 whitespace-pre-wrap text-sm leading-6">{message.content}</p>
-        {run?.decision?.kind === 'propose' && message.role === 'assistant' && <div className="mt-3 rounded-xl border border-border bg-surface-2 p-3 text-sm"><strong>Propuesta pendiente</strong><p className="mt-1 text-muted">Revisa y confirma los cambios antes de aplicarlos.</p></div>}
+        {run && isRenderableCoachProposal(run) && message.role === 'assistant' && <div className="mt-3 rounded-xl border border-border bg-surface-2 p-3 text-sm"><strong>Propuesta validada</strong><p className="mt-1 text-muted">Revisa y confirma los cambios antes de aplicarlos.</p></div>}
       </article> })}
     </div>
     {showLatest && <button className="coach-transcript__latest btn btn-surface min-h-10 px-3 text-sm" type="button" onClick={() => { const node = viewportRef.current; if (node) { node.scrollTop = node.scrollHeight; wasNearBottom.current = true; setShowLatest(false) } }}>Ir al último mensaje</button>}

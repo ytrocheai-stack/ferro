@@ -6,21 +6,29 @@ import CoachPage from './CoachPage'
 import { useBottomDock } from '../components/BottomDock'
 import { startCoachRun } from '../lib/coachClient'
 
+const fixture = vi.hoisted(() => ({
+  conversations: [{ id: 'conversation-1', ownerId: 'owner-1', title: 'Rutina de fuerza', createdAt: 1, updatedAt: 1, nextSequence: 1 }, { id: 'conversation-2', ownerId: 'owner-1', title: 'Movilidad', createdAt: 2, updatedAt: 2, nextSequence: 1 }],
+  messages: [] as unknown[],
+  runs: [] as unknown[],
+  draft: '',
+}))
+
 vi.mock('@clerk/react', () => ({ useAuth: () => ({ getToken: vi.fn(), isSignedIn: true }) }))
 vi.mock('../components/BottomDock', () => ({ useBottomDock: vi.fn() }))
 vi.mock('../lib/coachAccount', () => ({ getCoachAccountId: () => 'owner-1' }))
 vi.mock('../lib/coachConsent', () => ({ getCoachConsent: () => ({ enabled: true }), getCoachConversationId: () => 'conversation-1', setCoachConversationId: vi.fn() }))
 vi.mock('../lib/coachClient', () => ({ startCoachRun: vi.fn(), refreshCoachRun: vi.fn(), isRetryableCoachError: () => false, applyCoachChangeSet: vi.fn() }))
 vi.mock('../lib/coachConversations', () => ({
-  ensureCoachConversation: vi.fn(async () => ({ id: 'conversation-1', ownerId: 'owner-1', title: 'Nueva conversación', createdAt: 1, updatedAt: 1, nextSequence: 1 })),
+  ensureCoachConversation: vi.fn(async () => fixture.conversations[0]),
   createCoachConversation: vi.fn(async () => ({ id: 'conversation-2', ownerId: 'owner-1', title: 'Nueva conversación', createdAt: 2, updatedAt: 2, nextSequence: 1 })),
-  deleteCoachConversation: vi.fn(async () => true), getCoachDraft: vi.fn(async () => ''), renameCoachConversation: vi.fn(async (ownerId: string, id: string, title: string) => ({ id, ownerId, title, createdAt: 1, updatedAt: 2, nextSequence: 1 })), setCoachDraft: vi.fn(), flushCoachDraft: vi.fn(),
+  deleteCoachConversation: vi.fn(async () => true), getCoachDraft: vi.fn(async () => fixture.draft), renameCoachConversation: vi.fn(async (ownerId: string, id: string, title: string) => ({ id, ownerId, title, createdAt: 1, updatedAt: 2, nextSequence: 1 })), setCoachDraft: vi.fn(), flushCoachDraft: vi.fn(),
 }))
-vi.mock('../db/db', () => { const collection = (rows: unknown[]) => { const value = { toArray: vi.fn(async () => rows), count: vi.fn(async () => rows.length), reverse: vi.fn(), limit: vi.fn(), offset: vi.fn(), between: vi.fn(), equals: vi.fn() }; value.reverse.mockReturnValue(value); value.limit.mockReturnValue(value); value.offset.mockReturnValue(value); value.between.mockReturnValue(value); value.equals.mockReturnValue(value); return value }; const conversations = [{ id: 'conversation-1', ownerId: 'owner-1', title: 'Rutina de fuerza', createdAt: 1, updatedAt: 1, nextSequence: 1 }]; return { db: { coachConversations: { where: vi.fn(() => collection(conversations)), get: vi.fn(async (id: string) => conversations.find((item) => item.id === id)) }, coachMessages: { where: vi.fn(() => collection([])) }, coachRuns: { where: vi.fn(() => collection([])) } } } })
+vi.mock('../db/db', () => { const collection = (rows: unknown[]) => { const value = { toArray: vi.fn(async () => rows), count: vi.fn(async () => rows.length), reverse: vi.fn(), limit: vi.fn(), offset: vi.fn(), between: vi.fn(), equals: vi.fn() }; value.reverse.mockReturnValue(value); value.limit.mockReturnValue(value); value.offset.mockReturnValue(value); value.between.mockReturnValue(value); value.equals.mockReturnValue(value); return value }; return { db: { coachConversations: { where: vi.fn(() => collection(fixture.conversations)), get: vi.fn(async (id: string) => fixture.conversations.find((item) => item.id === id)) }, coachMessages: { where: vi.fn(() => collection(fixture.messages)) }, coachRuns: { where: vi.fn(() => collection(fixture.runs)) } } } })
 
 describe('CoachPage T6', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    fixture.messages.length = 0; fixture.runs.length = 0; fixture.draft = ''
     const target = document.createElement('div'); document.body.append(target)
     vi.mocked(useBottomDock).mockReturnValue({ coachPortalTarget: target } as ReturnType<typeof useBottomDock>)
   })
@@ -31,6 +39,14 @@ describe('CoachPage T6', () => {
     expect(screen.getByRole('log', { name: 'Conversación con Coach' })).not.toHaveAttribute('aria-live')
     const editor = screen.getByRole('textbox', { name: 'Mensaje para el coach' }); await user.type(editor, 'consulta local')
     expect(editor).toHaveValue('consulta local')
+  })
+
+  it('hidrata draft y runs de la conversación inicial sin descartar su propio resultado', async () => {
+    fixture.draft = 'borrador hidratado'
+    fixture.runs.push({ id: 'run-hydrated', ownerId: 'owner-1', conversationId: 'conversation-1', eventId: 'event-hydrated', contextVersion: 'ctx', status: 'completed', decision: { kind: 'ask', explanation: 'Listo', questions: ['¿Qué equipo tienes?'], observations: [], evidence: [] }, request: { event: { payload: { message: 'pregunta anterior' } } }, createdAt: 1, updatedAt: 2 })
+    render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    expect(await screen.findByDisplayValue('borrador hidratado')).toBeInTheDocument()
+    expect(await screen.findByText('Completado')).toBeInTheDocument()
   })
 
   it('abre el historial móvil con el componente de conversaciones real', async () => {
@@ -50,5 +66,19 @@ describe('CoachPage T6', () => {
     vi.mocked(startCoachRun).mockResolvedValue({ id: 'run-1', ownerId: 'owner-1', conversationId: 'conversation-1', eventId: 'event-1', contextVersion: 'context-1', status: 'queued', request: { event: { payload: { message: 'hola' } } }, createdAt: 1, updatedAt: 1 } as never)
     const user = userEvent.setup(); render(<MemoryRouter><CoachPage /></MemoryRouter>); const editor = await screen.findByRole('textbox', { name: 'Mensaje para el coach' }); await user.type(editor, 'hola'); await user.click(screen.getByRole('button', { name: 'Enviar' }))
     await waitFor(() => expect(startCoachRun).toHaveBeenCalledWith(expect.any(Function), 'hola', { conversationId: 'conversation-1', causedByEventId: undefined }))
+  })
+
+  it('no limpia el draft de la conversación enviada si cambia la selección mientras espera', async () => {
+    let resolveRun!: (value: unknown) => void
+    vi.mocked(startCoachRun).mockImplementationOnce(() => new Promise((resolve) => { resolveRun = resolve }) as never)
+    const user = userEvent.setup(); render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    const editor = await screen.findByRole('textbox', { name: 'Mensaje para el coach' })
+    await user.type(editor, 'mensaje pendiente')
+    await user.click(screen.getByRole('button', { name: 'Enviar' }))
+    await user.click(await screen.findByRole('button', { name: 'Movilidad' }))
+    await user.clear(editor)
+    await user.type(editor, 'draft de movilidad')
+    resolveRun({ id: 'run-pending', ownerId: 'owner-1', conversationId: 'conversation-1', eventId: 'event-pending', contextVersion: 'ctx', status: 'queued', request: { event: { payload: { message: 'mensaje pendiente' } } }, createdAt: 1, updatedAt: 2 })
+    expect(await screen.findByDisplayValue('draft de movilidad')).toBeInTheDocument()
   })
 })

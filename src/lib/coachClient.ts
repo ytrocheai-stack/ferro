@@ -259,6 +259,7 @@ async function reconcileRun(localId: string, value: unknown): Promise<CoachRunRe
     const next: CoachRunRecord = {
       ...local, remoteRunId: parsed.run.id, updatedAt: Date.now(),
       dispatchToken: undefined, dispatchLeaseExpiresAt: undefined,
+      reconciliationState: remoteTerminal ? 'reconciled' : local.reconciliationState,
       cancelRequestedAt: remoteTerminal ? undefined : local.cancelRequestedAt,
       lastError: remoteTerminal ? undefined : local.lastError,
       ...(!ignoreStatus ? {
@@ -487,7 +488,7 @@ export async function applyCoachChangeSet(runId: string): Promise<void> {
   if (!ownerId) throw new Error('Se requiere una cuenta para aplicar la propuesta')
   const initial = await db.coachRuns.get(runId)
   if (!initial || initial.ownerId !== ownerId || initial.decision?.kind !== 'propose') throw new Error('No hay una propuesta aplicable de tu cuenta')
-  if (initial.status !== 'completed' || initial.reconciliationState === 'uncertain') throw new Error('La propuesta aún no está completada y validada')
+  if (initial.status !== 'completed' || initial.reconciliationState === 'pending' || initial.reconciliationState === 'uncertain') throw new Error('La propuesta aún no está completada y validada')
   if (initial.appliedAt) return
   const parsed = agentDecisionSchema.parse(initial.decision)
   if (parsed.kind !== 'propose' || parsed.changeSet.accountId !== ownerId || parsed.changeSet.expectedContextVersion !== initial.contextVersion) throw new Error('La propuesta ya no pertenece al contexto vigente')

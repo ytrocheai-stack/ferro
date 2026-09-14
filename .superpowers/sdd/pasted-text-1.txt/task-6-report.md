@@ -15,6 +15,9 @@
 - La paginación usa el índice compuesto existente, offset acumulado y deduplicación por ID para mensajes y conversaciones; el historial expone “Cargar más conversaciones” después de la primera página de 50.
 - Las cargas verifican owner activo y conversación antes/después de IndexedDB, e ignoran resultados que llegan después de cambiar de conversación. El transcript reinicia el ancla al cambiar `conversationId` y conserva el ancla al anteponer mensajes antiguos.
 - `aria-live` quedó limitado al estado breve del Coach; el `role="log"` no anuncia todo el transcript.
+- La generación de carga ahora pertenece a la conversación: la hidratación inicial acepta su propio resultado, y sólo se descartan lecturas cuya conversación ya no está seleccionada.
+- `send` captura `conversationId`, texto y revisión; sólo borra el draft si la selección, revisión y texto siguen coincidiendo al resolver la petición.
+- El transcript sólo etiqueta una propuesta cuando el run está `completed`, la decisión pasa `agentDecisionSchema` y el estado de reconciliación no es pendiente ni incierto.
 
 ## Archivos T6
 
@@ -26,6 +29,8 @@
 - `src/lib/coachClient.ts`
 - `src/lib/coachClient.test.ts`
 - `src/lib/coachConversations.test.ts`
+- `src/lib/coachPresentation.ts`
+- `src/components/CoachTranscript.test.tsx`
 - `src/App.tsx`
 - `src/index.css`
 
@@ -33,7 +38,7 @@
 
 - `npm run lint` — OK.
 - `npx tsc --noEmit` — OK.
-- `npx vitest run src/pages/CoachPage.test.tsx src/lib/coachClient.test.ts src/lib/coachConversations.test.ts src/components/CoachConversationHistory.test.tsx src/components/CoachComposer.test.tsx src/components/Sheet.test.tsx` — 79 tests OK.
+- `npx vitest run src/pages/CoachPage.test.tsx src/components/CoachTranscript.test.tsx src/lib/coachClient.test.ts src/lib/coachConversations.test.ts src/components/CoachConversationHistory.test.tsx src/components/CoachComposer.test.tsx src/components/Sheet.test.tsx` — 82 tests OK.
 - `git diff --check` — OK.
 
 No se ejecutó `npm run check` completo ni E2E completo porque el brief pidió verificación focalizada y el repositorio contiene cambios ajenos preexistentes fuera del alcance de T6.
@@ -42,4 +47,5 @@ No se ejecutó `npm run check` completo ni E2E completo porque el brief pidió v
 
 - La cobertura E2E específica de viewport 320–1440px y scroll real queda pendiente; la UI está preparada con media query y los tests unitarios cubren selección, borrador, nuevo chat y envío.
 - No se ejecutó E2E real en viewport 320–1440px ni scroll de navegador; las pruebas focalizadas cubren el Sheet móvil, paginación del historial, selección capturada, estados de aplicación y aislamiento de `aria-live`.
+- No se ejecutó `npm run check` completo; la validación de esta ronda fue focalizada y no incluyó despliegue.
 - La consulta de estado sigue usando el polling local existente de 2 segundos para reflejar respuestas reconciliadas.
