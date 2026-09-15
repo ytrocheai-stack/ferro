@@ -6,7 +6,7 @@
 
 ## Objetivo
 
-El Coach debe responder desde el teléfono aunque la PC del propietario esté apagada. La generación se ejecutará en el Worker de Cloudflare con `gemini-3.6-flash` como proveedor preferido y `deepseek-ai/deepseek-v4-flash-0731` en NVIDIA como respaldo. Ambos endpoints se usarán exclusivamente en sus niveles gratuitos.
+El Coach debe responder desde el teléfono aunque la PC del propietario esté apagada. La generación se ejecutará en el Worker de Cloudflare con `gemini-3.5-flash-lite` como proveedor preferido y `deepseek-ai/deepseek-v4-flash-0731` en NVIDIA como respaldo. Ambos endpoints se usarán exclusivamente en sus niveles gratuitos.
 
 No se usará OpenAI, Codex, GPT-5.6 Luna ni una API key de OpenAI. El Coach tampoco producirá una respuesta determinista cuando no haya una respuesta válida de un proveedor generativo.
 
@@ -25,7 +25,7 @@ No se usará OpenAI, Codex, GPT-5.6 Luna ni una API key de OpenAI. El Coach tamp
 
 La generación se separará detrás de una interfaz común. Cada adaptador declara su identificador de proveedor, modelo, capacidad de streaming, timeout y forma de normalizar uso y errores.
 
-- `GeminiGenerationProvider`: llama a la API Gemini con `gemini-3.6-flash`, salida JSON estructurada y el mismo contrato `agentWireResponseSchema` que valida hoy el Worker.
+- `GeminiGenerationProvider`: llama a la API Gemini con `gemini-3.5-flash-lite`, salida JSON estructurada y el mismo contrato `agentWireResponseSchema` que valida hoy el Worker.
 - `NvidiaGenerationProvider`: conserva el endpoint OpenAI-compatible de NVIDIA y el modelo `deepseek-ai/deepseek-v4-flash-0731`.
 - `CoachGenerationRouter`: selecciona proveedor, reserva cuota, registra el intento y ejecuta como máximo un intento enviado por proveedor para cada llamada lógica del protocolo del agente.
 
@@ -124,7 +124,7 @@ Variables no secretas previstas:
 | Variable | Valor o regla |
 |---|---|
 | `COACH_PROVIDER_ORDER` | `gemini,nvidia` |
-| `GEMINI_MODEL` | `gemini-3.6-flash` |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` |
 | `GEMINI_REQUESTS_PER_MINUTE` | Obligatoria y sin valor predeterminado; se copia del límite efectivo de AI Studio. |
 | `GEMINI_INPUT_TOKENS_PER_MINUTE` | Obligatoria y sin valor predeterminado; se copia del límite efectivo de AI Studio. |
 | `GEMINI_REQUESTS_PER_DAY` | Obligatoria y sin valor predeterminado; se copia del límite efectivo de AI Studio. |
@@ -193,7 +193,7 @@ El rollback desactiva Gemini o NVIDIA mediante flags y orden de proveedores, sin
 ## Criterios de aceptación
 
 - El Coach responde en el teléfono con la PC apagada.
-- Gemini 3.6 Flash atiende las solicitudes normales; NVIDIA DeepSeek solo recibe fallback o tráfico cuando Gemini no está disponible.
+- Gemini 3.5 Flash Lite atiende las solicitudes normales; NVIDIA DeepSeek solo recibe fallback o tráfico cuando Gemini no está disponible.
 - No existe uso de OpenAI/Codex/Luna.
 - Ningún fallo de proveedores produce una respuesta determinista del Coach.
 - NVIDIA nunca excede el gate coordinado de 40 RPM y no se bloquea por tokens.
@@ -203,7 +203,7 @@ El rollback desactiva Gemini o NVIDIA mediante flags y orden de proveedores, sin
 
 ## Fuentes de límites y modelo
 
-- [Gemini 3.6 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash)
+- [Gemini 3.5 Flash Lite](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite)
 - [Límites de Gemini API](https://ai.google.dev/gemini-api/docs/rate-limits)
 - [Precios de Gemini Developer API](https://ai.google.dev/gemini-api/docs/pricing)
 - [NVIDIA API Documentation](https://docs.api.nvidia.com/)

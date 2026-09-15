@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import globals from 'globals'
 
 export default tseslint.config(
-  { ignores: ['dist', 'dev-dist', '.cache', '.playwright-cli', 'public/data', 'public/images', 'public/videos'] },
+  { ignores: ['dist', 'dev-dist', '.cache', '.playwright-cli', 'test-results', 'playwright-report', 'public/data', 'public/images', 'public/videos'] },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {

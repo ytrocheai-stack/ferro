@@ -2,7 +2,7 @@ import { agentWireJsonSchema, agentWireResponseSchema } from '../../../packages/
 import { ProviderError, type GenerationProvider, type GenerationResult } from '../index'
 import { retryAfterMilliseconds, type GeminiQuotaReservation } from './quota'
 
-export const GEMINI_MODEL = 'gemini-3.6-flash' as const
+export const GEMINI_MODEL = 'gemini-3.5-flash-lite' as const
 export function geminiGenerateContentUrl(model: string): string {
   if (!/^gemini-[a-z0-9][a-z0-9.-]*$/i.test(model)) throw new ProviderError('Modelo Gemini inválido', undefined, 'invalid-config')
   return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`

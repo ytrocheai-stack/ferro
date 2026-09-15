@@ -41,14 +41,14 @@ describe('CoachGenerationRouter', () => {
       runId: 'run',
       order: ['gemini', 'nvidia'],
       providers: { gemini: provider(wire), nvidia: { generate: async () => { nvidiaCalls++; return wire } } },
-      models: { gemini: 'gemini-3.6-flash', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
+      models: { gemini: 'gemini-3.5-flash-lite', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
       enabled: { gemini: true, nvidia: true },
       now: () => 100,
     })
 
     await expect(router.generate('prompt', 1, undefined, content => JSON.parse(content))).resolves.toMatchObject({ content: wire, provider: 'gemini' })
     expect(nvidiaCalls).toBe(0)
-    expect(sqlite.prepare('SELECT provider, model, logical_call_no, dispatch_status, status FROM coach_run_attempts').all()).toEqual([{ provider: 'gemini', model: 'gemini-3.6-flash', logical_call_no: 1, dispatch_status: 'succeeded', status: 'succeeded' }])
+    expect(sqlite.prepare('SELECT provider, model, logical_call_no, dispatch_status, status FROM coach_run_attempts').all()).toEqual([{ provider: 'gemini', model: 'gemini-3.5-flash-lite', logical_call_no: 1, dispatch_status: 'succeeded', status: 'succeeded' }])
     sqlite.close()
   })
 
@@ -61,7 +61,7 @@ describe('CoachGenerationRouter', () => {
       runId: 'run',
       order: ['gemini', 'nvidia'],
       providers: { gemini: { generate: async () => { geminiCalls++; throw new ProviderError('fallo', 503, 'server-error') } }, nvidia: { generate: async () => { nvidiaCalls++; return wire } } },
-      models: { gemini: 'gemini-3.6-flash', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
+      models: { gemini: 'gemini-3.5-flash-lite', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
       enabled: { gemini: true, nvidia: true },
       now: () => 100,
     })
@@ -86,7 +86,7 @@ describe('CoachGenerationRouter', () => {
         gemini: { generate: async () => ({ content: 42 } as never) },
         nvidia: provider(wire),
       },
-      models: { gemini: 'gemini-3.6-flash', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
+      models: { gemini: 'gemini-3.5-flash-lite', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
       enabled: { gemini: true, nvidia: true },
       now: () => 100,
     })
@@ -107,7 +107,7 @@ describe('CoachGenerationRouter', () => {
       runId: 'run',
       order: ['nvidia', 'gemini'],
       providers: { nvidia: provider(new ProviderError('fallo', 503, 'server-error')), gemini: { generate: async () => { geminiCalls++; return wire } } },
-      models: { gemini: 'gemini-3.6-flash', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
+      models: { gemini: 'gemini-3.5-flash-lite', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
       enabled: { gemini: true, nvidia: true },
       now: () => 61_001,
     })
@@ -125,7 +125,7 @@ describe('CoachGenerationRouter', () => {
       runId: 'run',
       order: ['gemini', 'nvidia'],
       providers: { gemini: provider(new ProviderError('cancelado', undefined, 'cancelled')), nvidia: { generate: async () => { nvidiaCalls++; return wire } } },
-      models: { gemini: 'gemini-3.6-flash', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
+      models: { gemini: 'gemini-3.5-flash-lite', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
       enabled: { gemini: true, nvidia: true },
       now: () => 100,
     })
@@ -148,7 +148,7 @@ describe('CoachGenerationRouter', () => {
         gemini: { generate: async () => { calls++; return wire } },
         nvidia: { generate: async () => { calls++; return wire } },
       },
-      models: { gemini: 'gemini-3.6-flash', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
+      models: { gemini: 'gemini-3.5-flash-lite', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
       enabled: { gemini: true, nvidia: true },
       now: () => 100,
     })
@@ -161,14 +161,14 @@ describe('CoachGenerationRouter', () => {
 
   it('no reenvía un intento sent después de reiniciar', async () => {
     const { sqlite, db } = fixture()
-    sqlite.prepare("INSERT INTO coach_run_attempts (id, run_id, attempt_no, fingerprint, model, provider, logical_call_no, dispatch_status, status, created_at, updated_at) VALUES ('sent', 'run', 1, 'old', 'gemini-3.6-flash', 'gemini', 1, 'sent', 'sent', 1, 1)").run()
+    sqlite.prepare("INSERT INTO coach_run_attempts (id, run_id, attempt_no, fingerprint, model, provider, logical_call_no, dispatch_status, status, created_at, updated_at) VALUES ('sent', 'run', 1, 'old', 'gemini-3.5-flash-lite', 'gemini', 1, 'sent', 'sent', 1, 1)").run()
     let calls = 0
     const router = new CoachGenerationRouter({
       db,
       runId: 'run',
       order: ['gemini', 'nvidia'],
       providers: { gemini: { generate: async () => { calls++; return wire } }, nvidia: provider(wire) },
-      models: { gemini: 'gemini-3.6-flash', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
+      models: { gemini: 'gemini-3.5-flash-lite', nvidia: 'deepseek-ai/deepseek-v4-flash-0731' },
       enabled: { gemini: true, nvidia: true },
       now: () => 100,
     })

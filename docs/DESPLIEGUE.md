@@ -1,8 +1,16 @@
 # Despliegue de NextRep
 
+> Preparación 2026-09-15: por petición del propietario, Gemini cambia a
+> `gemini-3.5-flash-lite`. AI Studio muestra el proyecto **YT autoclips** en nivel
+> gratuito, con **15 RPM, 250.000 tokens de entrada/minuto y 500 RPD**; los valores
+> están en `wrangler.production.toml`. D1 remoto ya tiene `0014`–`0018`, verificado
+> después de respaldar y aplicar las tres migraciones pendientes. La publicación
+> y los canarios siguen pendientes de guardar `GEMINI_API_KEY` y completar los
+> accesos autenticados. Véase [la bitácora](RELEASE-2026-09-15.md).
+
 ## Beta privada — Gemini preferido y NVIDIA fallback
 
-La configuración declarativa fija `gemini-3.6-flash` como proveedor preferido y
+La configuración declarativa fija `gemini-3.5-flash-lite` como proveedor preferido y
 `deepseek-ai/deepseek-v4-flash-0731` como fallback NVIDIA. El orden es `gemini,nvidia`,
 NVIDIA se coordina a 40 RPM, `ENABLE_COACH_STREAMING=false` y el consentimiento requerido
 es `coach-context-v3-gemini-nvidia`. Desarrollo conserva los proveedores apagados.

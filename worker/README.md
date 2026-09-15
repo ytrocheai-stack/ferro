@@ -4,7 +4,7 @@
 
 La configuración por entorno es explícita: `worker/wrangler.toml` declara Gemini/NVIDIA
 con las flags apagadas para desarrollo, mientras `worker/wrangler.production.toml` fija
-`gemini-3.6-flash` como preferido y `deepseek-ai/deepseek-v4-flash-0731` como fallback,
+`gemini-3.5-flash-lite` como preferido y `deepseek-ai/deepseek-v4-flash-0731` como fallback,
 con 40 RPM NVIDIA, `coach-context-v3-gemini-nvidia` y streaming apagado. Pro,
 reranking y provider probe permanecen apagados. `gpt-5.6-luna` está documentado
 para la API de Codex, pero no está verificado que esta PWA pueda acceder a él con la

@@ -18,7 +18,7 @@ function response(overrides: Partial<GeminiResponse> = {}): Response {
   })
 }
 
-describe('Gemini 3.6 Flash generation transport', () => {
+describe('Gemini 3.5 Flash Lite generation transport', () => {
   it('sends the exact structured JSON request with the API key only in x-goog-api-key', async () => {
     let url = ''
     let init: RequestInit | undefined
