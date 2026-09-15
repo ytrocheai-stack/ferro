@@ -12,6 +12,11 @@ El plan T0–T12 quedó implementado en el checkout local y verificado sin despl
 - `npm run test:e2e` — OK: 30 pasadas y 2 omitidas por las condiciones explícitas de esas pruebas.
 - `npm run build` — OK de forma independiente: 1.729 módulos transformados, `dist/404.html`, service worker y verificador público correctos.
 - `npx vitest run packages/agent-lab/src/cli.test.ts` — OK: 2/2 tras retirar una propiedad de parámetro TypeScript que Node 25 no soporta en modo strip-only.
+- `npm test` — OK en la verificación final explícita: 59 archivos, 385 pruebas.
+
+## Revisión final independiente
+
+Un revisor de solo lectura con `gpt-5.6-luna` en esfuerzo bajo inspeccionó el paquete completo `0cee58c..HEAD`, la bitácora y este informe. No encontró fallos críticos/importantes demostrables, cambios fuera de alcance relevantes ni invariantes de `AGENTS.md` rotos.
 
 ## Corrección final de verificación
 
