@@ -252,8 +252,6 @@ function providerRequestGate(env: Env): RequestGate {
     const rpm = positiveLimit(env.NVIDIA_REQUESTS_PER_MINUTE, 40)
     while (!signal.aborted) {
       if (await reserveProviderRequest(env.DB, Date.now(), rpm)) return
-      const state = await env.DB.prepare("SELECT used_requests, max_requests FROM provider_request_limits WHERE provider = 'nvidia'").first<{ used_requests: number; max_requests: number }>()
-      if (!state || state.used_requests >= state.max_requests) throw new ProviderError('Presupuesto global NVIDIA agotado o no inicializado')
       await new Promise<void>((resolve, reject) => {
         const abort = () => { clearTimeout(timer); reject(new ProviderError('Solicitud cancelada', undefined, 'cancelled')) }
         const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, Math.ceil(60_000 / rpm))
@@ -684,6 +682,9 @@ interface CoachAttemptRow {
   attempt_no: number
   fingerprint: string
   model: string
+  provider?: 'gemini' | 'nvidia'
+  logical_call_no?: number
+  dispatch_status?: 'reserved' | 'sent' | 'succeeded' | 'failed' | 'uncertain'
   status: 'reserved' | 'sent' | 'succeeded' | 'failed' | 'uncertain'
   response_json?: string | null
   usage_json?: string | null
@@ -718,14 +719,14 @@ async function reserveCoachAttempt(db: D1Database, runId: string, attemptNo: num
     throw new Error('uncertain-outcome')
   }
   const id = `${runId}:attempt:${attemptNo}`
-  await db.prepare('INSERT INTO coach_run_attempts (id, run_id, attempt_no, fingerprint, model, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, \'reserved\', ?, ?)').bind(id, runId, attemptNo, fingerprint, model, now, now).run()
-  await db.prepare("UPDATE coach_run_attempts SET status = 'sent', updated_at = ? WHERE id = ? AND status = 'reserved'").bind(now, id).run()
+  await db.prepare('INSERT INTO coach_run_attempts (id, run_id, attempt_no, fingerprint, model, provider, logical_call_no, dispatch_status, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, \'nvidia\', ?, \'reserved\', \'reserved\', ?, ?)').bind(id, runId, attemptNo, fingerprint, model, attemptNo, now, now).run()
+  await db.prepare("UPDATE coach_run_attempts SET status = 'sent', dispatch_status = 'sent', updated_at = ? WHERE id = ? AND status = 'reserved'").bind(now, id).run()
   await db.prepare('UPDATE coach_runs SET attempt_count = ?, updated_at = ? WHERE id = ?').bind(attemptNo, now, runId).run()
   return { id, run_id: runId, attempt_no: attemptNo, fingerprint, model, status: 'sent' }
 }
 
 async function finishCoachAttempt(db: D1Database, attemptId: string, update: { status: CoachAttemptRow['status']; responseJson?: string; usageJson?: string; errorCode?: string; retryAfterMs?: number }, now: number): Promise<void> {
-  await db.prepare('UPDATE coach_run_attempts SET status = ?, response_json = ?, usage_json = ?, error_code = ?, retry_after_ms = ?, updated_at = ? WHERE id = ?').bind(update.status, update.responseJson ?? null, update.usageJson ?? null, update.errorCode ?? null, update.retryAfterMs ?? null, now, attemptId).run()
+  await db.prepare('UPDATE coach_run_attempts SET status = ?, dispatch_status = ?, response_json = ?, usage_json = ?, error_code = ?, retry_after_ms = ?, updated_at = ? WHERE id = ?').bind(update.status, update.status, update.responseJson ?? null, update.usageJson ?? null, update.errorCode ?? null, update.retryAfterMs ?? null, now, attemptId).run()
 }
 
 function coachRunResponse(row: CoachRunRow, accountId: string): unknown {

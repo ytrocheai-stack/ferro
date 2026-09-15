@@ -18,8 +18,6 @@ export async function reserveRemoteRequest(rpm: number, signal: AbortSignal): Pr
   while (!signal.aborted) {
     const result = await query(GLOBAL_REQUEST_RESERVATION_SQL, requestReservationValues(Date.now(), rpm))
     if (result.meta?.changes === 1) return
-    const state = (await query("SELECT used_requests, max_requests FROM provider_request_limits WHERE provider = 'nvidia'")).results?.[0]
-    if (!state || state.used_requests >= state.max_requests) throw new Error('Presupuesto global NVIDIA agotado o no inicializado')
     await new Promise<void>((resolve, reject) => {
       const abort = () => { clearTimeout(timer); reject(new Error('Cancelado antes de la reserva global')) }
       const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, Math.ceil(60_000 / rpm))
