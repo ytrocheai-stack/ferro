@@ -290,12 +290,7 @@ async function providerFetchJson<T>(fetcher: typeof fetch, url: string, init: Re
     const payload = await withDeadline(async (signal) => {
       await requestGate?.(signal)
       const response = await fetcher(url, { ...init, signal })
-      if (!response.ok) {
-        const retryAfter = response.headers.get('Retry-After')
-        const seconds = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : retryAfter ? Math.max(0, Date.parse(retryAfter) - Date.now()) : undefined
-        if (response.status === 429 && seconds !== undefined && Number.isFinite(seconds)) await requestGate?.defer?.(seconds)
-        throw new ProviderError(`Proveedor respondió ${response.status}`, response.status, response.status === 429 ? 'rate-limit' : response.status >= 500 ? 'server-error' : undefined, Number.isFinite(seconds) ? seconds : undefined)
-      }
+      if (!response.ok) throw await providerHttpError(response, requestGate)
       return await response.json() as T
     }, timeoutMs, externalSignal)
     breaker.success(); return payload
@@ -304,6 +299,19 @@ async function providerFetchJson<T>(fetcher: typeof fetch, url: string, init: Re
     if (countsAsProviderFailure) breaker.failure()
     throw cause
   }
+}
+
+function retryAfterMilliseconds(headers: Headers): number | undefined {
+  const value = headers.get('Retry-After')?.trim()
+  if (!value) return undefined
+  const milliseconds = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) * 1_000 : Date.parse(value) - Date.now()
+  return Number.isFinite(milliseconds) && milliseconds >= 0 ? milliseconds : undefined
+}
+
+async function providerHttpError(response: Response, requestGate?: RequestGate): Promise<ProviderError> {
+  const retryAfterMs = retryAfterMilliseconds(response.headers)
+  if (response.status === 429 && retryAfterMs !== undefined) await requestGate?.defer?.(retryAfterMs)
+  return new ProviderError(`Proveedor respondió ${response.status}`, response.status, response.status === 429 ? 'rate-limit' : response.status >= 500 ? 'server-error' : undefined, retryAfterMs)
 }
 
 export class NvidiaEmbeddingProvider implements EmbeddingProvider {
@@ -339,7 +347,7 @@ export class NvidiaGenerationProvider implements GenerationProvider {
       const result = await withDeadline(async inner => {
         await this.requestGate?.(inner)
         const response = await this.fetcher('https://integrate.api.nvidia.com/v1/chat/completions', { method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'system', content: this.systemPrompt }, { role: 'user', content: prompt }], ...generationParameters(model), max_tokens: OUTPUT_TOKENS_PER_ATTEMPT, stream: true, stream_options: { include_usage: true } }), signal: inner })
-        if (!response.ok) throw new ProviderError(`Proveedor respondió ${response.status}`, response.status, response.status === 429 ? 'rate-limit' : response.status >= 500 ? 'server-error' : undefined)
+        if (!response.ok) throw await providerHttpError(response, this.requestGate)
         if (!response.body) throw new ProviderError('El proveedor no devolvió un cuerpo SSE')
         const parser = new SafeDecisionExplanationParser(onExplanation)
         const reader = response.body.getReader()

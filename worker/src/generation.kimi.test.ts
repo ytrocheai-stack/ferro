@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NvidiaGenerationProvider, selectEvidence, VectorizeRetriever, type D1Database } from './index'
+import { NvidiaGenerationProvider, selectEvidence, VectorizeRetriever, type D1Database, type RequestGate } from './index'
 import { corpusMetadataKey, vectorPhysicalId } from '../../packages/corpus-identity/src/index.mjs'
 import { buildAgentInstructions } from '../../packages/adaptation-core/src/agent'
 
@@ -66,5 +66,15 @@ describe('Kimi generation transport', () => {
     setTimeout(() => controller.abort(), 10)
     await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
     expect(cancelled).toBe(true)
+  })
+
+  it('preserva Retry-After y difiere durablemente un 429 del camino streaming', async () => {
+    let deferredRetryAfter: number | undefined
+    const gate = (async () => undefined) as RequestGate
+    gate.defer = async retryAfterMs => { deferredRetryAfter = retryAfterMs }
+    const provider = new NvidiaGenerationProvider('test', async () => new Response('{}', { status: 429, headers: { 'Retry-After': '10' } }), undefined, gate)
+
+    await expect(provider.generateStream('consulta', 'moonshotai/kimi-k3')).rejects.toMatchObject({ status: 429, code: 'rate-limit', retryAfterMs: 10_000 })
+    expect(deferredRetryAfter).toBe(10_000)
   })
 })

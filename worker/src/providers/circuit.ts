@@ -66,8 +66,11 @@ export async function acquireProviderCircuit(db: ProviderDatabase, provider: Pro
 export async function recordProviderSuccess(db: ProviderDatabase, provider: ProviderName, now: number, leaseId?: string): Promise<void> {
   await db.prepare(`UPDATE provider_circuit_state SET consecutive_failures = 0, opened_at = NULL, cooldown_until = 0,
     half_open_lease_id = NULL, half_open_lease_until = NULL, updated_at = ?
-    WHERE provider = ? AND ((half_open_lease_id IS NULL AND ? IS NULL) OR half_open_lease_id = ?)`)
-    .bind(now, provider, leaseId ?? null, leaseId ?? null).run()
+    WHERE provider = ? AND (
+      (opened_at IS NULL AND half_open_lease_id IS NULL AND ? IS NULL) OR
+      (opened_at IS NOT NULL AND half_open_lease_id = ? AND ? IS NOT NULL)
+    )`)
+    .bind(now, provider, leaseId ?? null, leaseId ?? null, leaseId ?? null).run()
 }
 
 export async function recordProviderFailure(db: ProviderDatabase, provider: ProviderName, now: number, retryAfterMs = 0, options: ProviderCircuitOptions = {}, leaseId?: string): Promise<CircuitState> {

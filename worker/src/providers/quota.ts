@@ -4,8 +4,7 @@ export const NVIDIA_DEFAULT_REQUESTS_PER_MINUTE = 40
 export const NVIDIA_MIN_DISPATCH_INTERVAL_MS = 1_500
 export const GEMINI_PACIFIC_TIME_ZONE = 'America/Los_Angeles'
 export const GEMINI_ESTIMATE_BYTES_PER_TOKEN = 3
-export const GEMINI_ESTIMATE_OVERHEAD_TOKENS = 32
-export const GEMINI_ESTIMATE_MARGIN_TOKENS = 16
+export const GEMINI_ESTIMATE_FIXED_MARGIN_TOKENS = 64
 
 export interface GeminiQuotaLimits {
   requestsPerMinute: number
@@ -46,12 +45,17 @@ function pacificDayKey(now: number): string {
 
 export function geminiPacificDayKey(now: number): string { return pacificDayKey(now) }
 
-export function estimateGeminiInputTokens(input: string): number {
-  // Cota deliberadamente conservadora para reservar antes del envío: UTF-8 a
-  // 3 bytes/token (no 4), más 32 tokens de envoltura JSON/sistema y 16 de
-  // margen fijo para puntuación densa, emoji y tokenización no uniforme. No
-  // llama a countTokens porque eso sería otra solicitud al proveedor.
-  return Math.max(1, Math.ceil(new TextEncoder().encode(input).byteLength / GEMINI_ESTIMATE_BYTES_PER_TOKEN) + GEMINI_ESTIMATE_OVERHEAD_TOKENS + GEMINI_ESTIMATE_MARGIN_TOKENS)
+export function estimateGeminiInputTokens(serializedRequest: string): number {
+  if (typeof serializedRequest !== 'string') throw new ProviderQuotaError('Request Gemini no serializado', 'invalid-config')
+  // La entrada es el JSON completo que se enviará: incluye instrucciones del
+  // sistema, contenido del usuario, configuración y esquema. La base combina
+  // bytes UTF-8 (Unicode multibyte) con escalares Unicode (puntuación densa y
+  // símbolos que pueden tokenizarse individualmente); el margen fijo cubre
+  // fronteras de tokenización. Es una cota de presupuesto documentada, no una
+  // afirmación de que bytes/3 sea el tokenizer ni una llamada a countTokens.
+  const utf8Bytes = new TextEncoder().encode(serializedRequest).byteLength
+  const unicodeScalars = Array.from(serializedRequest).length
+  return Math.max(1, Math.max(Math.ceil(utf8Bytes / GEMINI_ESTIMATE_BYTES_PER_TOKEN), unicodeScalars) + GEMINI_ESTIMATE_FIXED_MARGIN_TOKENS)
 }
 
 export function parseGeminiPromptTokenCount(usageMetadata: unknown): number | undefined {
@@ -165,28 +169,41 @@ export async function reserveGeminiRequest(db: ProviderDatabase, now: number, es
 export async function reconcileGeminiInputTokens(db: ProviderDatabase, reservation: GeminiQuotaReservation, usageMetadata: unknown, now: number): Promise<{ inputTokens: number; estimated: boolean }> {
   if (!reservation.reserved) throw new ProviderQuotaError('No se puede reconciliar una reserva Gemini no concedida', 'invalid-config')
   const measured = parseGeminiPromptTokenCount(usageMetadata)
-  const marker = await db.prepare(`INSERT OR IGNORE INTO gemini_quota_reconciliations
-    (reservation_id, minute_key, estimated_input_tokens, measured_input_tokens, usage_incomplete, reconciled_at)
-    VALUES (?, ?, ?, ?, ?, ?)`)
-    .bind(reservation.reservationId, reservation.minuteKey, reservation.estimatedInputTokens, measured ?? null, measured === undefined ? 1 : 0, now).run()
-  if (!changed(marker)) {
-    const existing = await db.prepare('SELECT measured_input_tokens, usage_incomplete FROM gemini_quota_reconciliations WHERE reservation_id = ?').bind(reservation.reservationId).first<{ measured_input_tokens: number | null; usage_incomplete: number }>()
-    return { inputTokens: existing?.measured_input_tokens ?? reservation.estimatedInputTokens, estimated: existing?.usage_incomplete === 1 }
+  type ReconciliationRow = { measured_input_tokens: number | null; usage_incomplete: number; state_applied: number }
+  const existing = await db.prepare('SELECT measured_input_tokens, usage_incomplete, state_applied FROM gemini_quota_reconciliations WHERE reservation_id = ?').bind(reservation.reservationId).first<ReconciliationRow>()
+  if (existing?.state_applied === 1) return { inputTokens: existing.measured_input_tokens ?? reservation.estimatedInputTokens, estimated: existing.usage_incomplete === 1 }
+
+  // INSERT + contador + finalización del marcador forman una transacción D1.
+  // El UPDATE lee los valores del marcador, así un reintento de un marcador
+  // pendiente conserva exactamente el usageMetadata original.
+  const statements = [
+    db.prepare(`INSERT OR IGNORE INTO gemini_quota_reconciliations
+      (reservation_id, minute_key, estimated_input_tokens, measured_input_tokens, usage_incomplete, reconciled_at, state_applied, state_applied_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, NULL)`)
+      .bind(reservation.reservationId, reservation.minuteKey, reservation.estimatedInputTokens, measured ?? null, measured === undefined ? 1 : 0, now),
+    db.prepare(`UPDATE gemini_quota_state
+      SET minute_input_tokens = CASE
+            WHEN minute_key = ? AND (SELECT measured_input_tokens FROM gemini_quota_reconciliations WHERE reservation_id = ? ) IS NOT NULL
+              THEN MAX(0, minute_input_tokens + (SELECT measured_input_tokens - estimated_input_tokens FROM gemini_quota_reconciliations WHERE reservation_id = ?))
+            ELSE minute_input_tokens
+          END,
+          input_tokens_estimated = input_tokens_estimated + (SELECT estimated_input_tokens FROM gemini_quota_reconciliations WHERE reservation_id = ?),
+          input_tokens_measured = input_tokens_measured + COALESCE((SELECT measured_input_tokens FROM gemini_quota_reconciliations WHERE reservation_id = ?), 0),
+          usage_incomplete = CASE WHEN usage_incomplete = 1 OR (SELECT usage_incomplete FROM gemini_quota_reconciliations WHERE reservation_id = ?) = 1 THEN 1 ELSE 0 END,
+          updated_at = ?
+      WHERE id = 1 AND EXISTS (SELECT 1 FROM gemini_quota_reconciliations WHERE reservation_id = ? AND state_applied = 0)`)
+      .bind(reservation.minuteKey, reservation.reservationId, reservation.reservationId, reservation.reservationId, reservation.reservationId, reservation.reservationId, now, reservation.reservationId),
+    db.prepare(`UPDATE gemini_quota_reconciliations SET state_applied = 1, state_applied_at = ? WHERE reservation_id = ? AND state_applied = 0`)
+      .bind(now, reservation.reservationId),
+  ]
+  if (typeof db.batch !== 'function') {
+    await statements[0].run()
+    throw new ProviderQuotaError('D1.batch no está disponible; reconciliación queda pendiente', 'database')
   }
-  if (measured === undefined) {
-    await db.prepare(`UPDATE gemini_quota_state
-      SET input_tokens_estimated = input_tokens_estimated + ?, usage_incomplete = 1, updated_at = ? WHERE id = 1`)
-      .bind(reservation.estimatedInputTokens, now).run()
-    return { inputTokens: reservation.estimatedInputTokens, estimated: true }
-  }
-  const delta = measured - reservation.estimatedInputTokens
-  await db.prepare(`UPDATE gemini_quota_state
-    SET minute_input_tokens = CASE WHEN minute_key = ? THEN MAX(0, minute_input_tokens + ?) ELSE minute_input_tokens END,
-        input_tokens_estimated = input_tokens_estimated + ?,
-        input_tokens_measured = input_tokens_measured + ?,
-        updated_at = ? WHERE id = 1`)
-    .bind(reservation.minuteKey, delta, reservation.estimatedInputTokens, measured, now).run()
-  return { inputTokens: measured, estimated: false }
+  await db.batch(statements)
+  const completed = await db.prepare('SELECT measured_input_tokens, usage_incomplete, state_applied FROM gemini_quota_reconciliations WHERE reservation_id = ?').bind(reservation.reservationId).first<ReconciliationRow>()
+  if (!completed || completed.state_applied !== 1) throw new ProviderQuotaError('Reconciliación Gemini pendiente de aplicar', 'database')
+  return { inputTokens: completed.measured_input_tokens ?? reservation.estimatedInputTokens, estimated: completed.usage_incomplete === 1 }
 }
 
 export type { ProviderName }

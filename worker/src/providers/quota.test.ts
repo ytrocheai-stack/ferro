@@ -90,28 +90,52 @@ describe('cuotas durables de proveedores', () => {
     sqlite.close()
   })
 
-  it('estima de forma conservadora y reconcilia usageMetadata sin countTokens', async () => {
+  it('estima el request serializado completo con margen adversarial y reconcilia usageMetadata sin countTokens', async () => {
     const { sqlite, db } = fixture()
-    const inputs = [
-      'fuerza 💪 y recuperación',
-      '¡¡¡¡,,,,....::::;;;;????!!!!(((( )))) [[ ]] {{ }}',
-      '{"name":"sentadilla","sets":[{"weightKg":100,"reps":8,"notes":"💪 recuperación"}]}',
+    const requests = [
+      { systemInstruction: { parts: [{ text: 'Devuelve JSON estricto.' }] }, contents: [{ role: 'user', parts: [{ text: 'fuerza 💪 y recuperación' }] }], generationConfig: { responseMimeType: 'application/json' } },
+      { systemInstruction: { parts: [{ text: '¡¡¡¡,,,,....::::;;;;????!!!!(((( )))) [[ ]] {{ }}' }] }, contents: [{ role: 'user', parts: [{ text: '\ud83d\udca5\u0301'.repeat(1000) }] }], generationConfig: { responseMimeType: 'application/json' } },
+      { systemInstruction: { parts: [{ text: 'JSON' }] }, contents: [{ role: 'user', parts: [{ text: JSON.stringify({ name: 'sentadilla', sets: [{ weightKg: 100, reps: 8, notes: '💪 recuperación' }] }) }] }], generationConfig: { responseMimeType: 'application/json', responseJsonSchema: { type: 'object', properties: { name: { type: 'string' } } } } },
     ]
-    for (const input of inputs) {
-      const utf8Bytes = new TextEncoder().encode(input).byteLength
-      expect(estimateGeminiInputTokens(input)).toBeGreaterThan(Math.ceil(utf8Bytes / 4))
+    for (const request of requests) {
+      const serialized = JSON.stringify(request)
+      const utf8Bytes = new TextEncoder().encode(serialized).byteLength
+      const scalarCount = Array.from(serialized).length
+      expect(estimateGeminiInputTokens(serialized)).toBeGreaterThan(Math.ceil(utf8Bytes / 3))
+      expect(estimateGeminiInputTokens(serialized)).toBeGreaterThan(scalarCount)
     }
-    const estimate = estimateGeminiInputTokens('fuerza 💪 y recuperación')
+    const estimate = estimateGeminiInputTokens(JSON.stringify(requests[0]))
     expect(estimate).toBeGreaterThan(0)
     expect(parseGeminiPromptTokenCount({ promptTokenCount: 23 })).toBe(23)
     expect(parseGeminiPromptTokenCount({ promptTokenCount: -1 })).toBeUndefined()
-    const reservation = await reserveGeminiRequest(db, 10_000, estimate, { requestsPerMinute: 10, inputTokensPerMinute: 100, requestsPerDay: 10 }, 'attempt-uncertain')
+    const reservation = await reserveGeminiRequest(db, 10_000, estimate, { requestsPerMinute: 10, inputTokensPerMinute: 1_000, requestsPerDay: 10 }, 'attempt-uncertain')
     const missing = await reconcileGeminiInputTokens(db, reservation, undefined, 10_001)
     expect(missing).toEqual({ inputTokens: estimate, estimated: true })
     expect(await reconcileGeminiInputTokens(db, reservation, { promptTokenCount: 999 }, 10_002)).toEqual({ inputTokens: estimate, estimated: true })
-    const measuredReservation = await reserveGeminiRequest(db, 70_000, 20, { requestsPerMinute: 10, inputTokensPerMinute: 100, requestsPerDay: 10 })
+    const measuredReservation = await reserveGeminiRequest(db, 70_000, 20, { requestsPerMinute: 10, inputTokensPerMinute: 1_000, requestsPerDay: 10 })
     expect(await reconcileGeminiInputTokens(db, measuredReservation, { promptTokenCount: 5 }, 70_001)).toEqual({ inputTokens: 5, estimated: false })
     expect(sqlite.prepare('SELECT input_tokens_estimated, input_tokens_measured, usage_incomplete FROM gemini_quota_state').get()).toEqual({ input_tokens_estimated: estimate + 20, input_tokens_measured: 5, usage_incomplete: 1 })
+    sqlite.close()
+  })
+
+  it('deja la reconciliación pendiente si falla el batch y la completa sin doble contabilizar al reintentar', async () => {
+    const { sqlite, db } = fixture()
+    const reservation = await reserveGeminiRequest(db, 10_000, 20, { requestsPerMinute: 10, inputTokensPerMinute: 100, requestsPerDay: 10 }, 'batch-failure')
+    const failingDb = {
+      ...db,
+      async batch(statements: D1Statement[]) {
+        await statements[0].run()
+        throw new Error('fallo entre pasos')
+      },
+    } as D1Database
+
+    await expect(reconcileGeminiInputTokens(failingDb, reservation, { promptTokenCount: 25 }, 10_001)).rejects.toThrow('fallo entre pasos')
+    expect(sqlite.prepare('SELECT state_applied, measured_input_tokens FROM gemini_quota_reconciliations WHERE reservation_id = ?').get('batch-failure')).toEqual({ state_applied: 0, measured_input_tokens: 25 })
+    expect(sqlite.prepare('SELECT input_tokens_measured, input_tokens_estimated FROM gemini_quota_state').get()).toEqual({ input_tokens_measured: 0, input_tokens_estimated: 0 })
+
+    await expect(reconcileGeminiInputTokens(db, reservation, { promptTokenCount: 25 }, 10_002)).resolves.toEqual({ inputTokens: 25, estimated: false })
+    expect(sqlite.prepare('SELECT state_applied, state_applied_at FROM gemini_quota_reconciliations WHERE reservation_id = ?').get('batch-failure')).toMatchObject({ state_applied: 1, state_applied_at: 10_002 })
+    expect(sqlite.prepare('SELECT input_tokens_measured, input_tokens_estimated FROM gemini_quota_state').get()).toEqual({ input_tokens_measured: 25, input_tokens_estimated: 20 })
     sqlite.close()
   })
 
@@ -159,6 +183,14 @@ describe('circuitos durables de proveedores', () => {
     expect((await acquireProviderCircuit(db, 'gemini', 102, { halfOpenLeaseMs: 20 })).permission).toBe('open')
     await recordProviderSuccess(db, 'gemini', 103, halfOpen.leaseId)
     expect((await acquireProviderCircuit(db, 'gemini', 103)).permission).toBe('closed')
+    sqlite.close()
+  })
+
+  it('no limpia un circuito abierto por un éxito tardío sin lease', async () => {
+    const { sqlite, db } = fixture()
+    await recordProviderFailure(db, 'gemini', 1, 0, { failureThreshold: 1, cooldownMs: 100 })
+    await recordProviderSuccess(db, 'gemini', 2)
+    expect(sqlite.prepare("SELECT consecutive_failures, opened_at, cooldown_until FROM provider_circuit_state WHERE provider='gemini'").get()).toEqual({ consecutive_failures: 1, opened_at: 1, cooldown_until: 101 })
     sqlite.close()
   })
 
