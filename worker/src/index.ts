@@ -1,5 +1,5 @@
 import { COACH_MODELS, DEEPSEEK_FLASH_MODEL, generationCapabilities, generationParameters, KIMI_MODEL } from '../../packages/corpus-pipeline/src/generation'
-import { GLOBAL_REQUEST_RESERVATION_SQL, requestReservationValues } from '../../packages/corpus-pipeline/src/request-gate'
+import { deferNvidiaRequest, reserveNvidiaRequest, waitForNvidiaRequest } from './providers/quota'
 import { enrichWithSourceSummaries } from '../../packages/corpus-retrieval/src/summary-context.mjs'
 import { verifyToken } from '@clerk/backend'
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers'
@@ -241,26 +241,24 @@ export class ProviderError extends Error {
 }
 
 export async function reserveProviderRequest(db: D1Database, now: number, requestsPerMinute: number): Promise<boolean> {
-  const result = await db.prepare(GLOBAL_REQUEST_RESERVATION_SQL).bind(...requestReservationValues(now, requestsPerMinute)).run()
-  return result.meta?.changes === 1
+  return (await reserveNvidiaRequest(db, now, requestsPerMinute)).reserved
 }
 
-type RequestGate = (signal: AbortSignal) => Promise<void>
-function providerRequestGate(env: Env): RequestGate {
-  return async signal => {
+export type RequestGate = ((signal: AbortSignal) => Promise<void>) & { defer?: (retryAfterMs: number) => Promise<void> }
+export function providerRequestGate(env: Env): RequestGate {
+  const gate = (async signal => {
     if (!env.DB) throw new ProviderError('D1 requerido para coordinar solicitudes NVIDIA')
     const rpm = positiveLimit(env.NVIDIA_REQUESTS_PER_MINUTE, 40)
-    while (!signal.aborted) {
-      if (await reserveProviderRequest(env.DB, Date.now(), rpm)) return
-      await new Promise<void>((resolve, reject) => {
-        const abort = () => { clearTimeout(timer); reject(new ProviderError('Solicitud cancelada', undefined, 'cancelled')) }
-        const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, Math.ceil(60_000 / rpm))
-        signal.addEventListener('abort', abort, { once: true })
-        if (signal.aborted) abort()
-      })
+    try { await waitForNvidiaRequest(env.DB, { signal, requestsPerMinute: rpm }) } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'cancelled') throw new ProviderError('Solicitud cancelada', undefined, 'cancelled')
+      throw error
     }
-    throw new ProviderError('Solicitud cancelada', undefined, 'cancelled')
+  }) as RequestGate
+  gate.defer = async retryAfterMs => {
+    if (!env.DB) throw new ProviderError('D1 requerido para coordinar solicitudes NVIDIA')
+    await deferNvidiaRequest(env.DB, Date.now(), retryAfterMs)
   }
+  return gate
 }
 
 export async function withDeadline<T>(operation: (signal: AbortSignal) => Promise<T>, timeoutMs: number, externalSignal?: AbortSignal): Promise<T> {
@@ -295,6 +293,7 @@ async function providerFetchJson<T>(fetcher: typeof fetch, url: string, init: Re
       if (!response.ok) {
         const retryAfter = response.headers.get('Retry-After')
         const seconds = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : retryAfter ? Math.max(0, Date.parse(retryAfter) - Date.now()) : undefined
+        if (response.status === 429 && seconds !== undefined && Number.isFinite(seconds)) await requestGate?.defer?.(seconds)
         throw new ProviderError(`Proveedor respondió ${response.status}`, response.status, response.status === 429 ? 'rate-limit' : response.status >= 500 ? 'server-error' : undefined, Number.isFinite(seconds) ? seconds : undefined)
       }
       return await response.json() as T

@@ -1,7 +1,7 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
-import { handleRequest, reserveProviderRequest, type D1Database, type Env } from './index'
+import { describe, expect, it, vi } from 'vitest'
+import { handleRequest, NvidiaGenerationProvider, providerRequestGate, reserveProviderRequest, type D1Database, type Env } from './index'
 
 function sqliteD1(): { sqlite: DatabaseSync; database: D1Database } {
   const sqlite = new DatabaseSync(':memory:')
@@ -41,6 +41,35 @@ function analysisInput() {
 }
 
 describe('presupuesto real del Worker', () => {
+  it('la ruta efectiva providerRequestGate reserva tras migrar sin insert manual', async () => {
+    const { sqlite, database } = sqliteD1()
+    const gate = providerRequestGate({ DB: database, NVIDIA_REQUESTS_PER_MINUTE: '40' } as Env)
+    await gate(new AbortController().signal)
+    expect(sqlite.prepare("SELECT used_requests FROM provider_request_limits WHERE provider='nvidia'").get()).toEqual({ used_requests: 1 })
+    sqlite.close()
+  })
+
+  it('conecta un 429 del fetch al defer durable de NVIDIA', async () => {
+    const { sqlite, database } = sqliteD1()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(10_000)
+    let calls = 0
+    const fetcher: typeof fetch = async () => {
+      calls++
+      return new Response('{}', { status: 429, headers: { 'Retry-After': '10' } })
+    }
+    try {
+      const gate = providerRequestGate({ DB: database, NVIDIA_REQUESTS_PER_MINUTE: '40' } as Env)
+      const provider = new NvidiaGenerationProvider('fixture', fetcher, undefined, gate)
+      await expect(provider.generate('prompt', 'fixture-model')).rejects.toMatchObject({ status: 429, retryAfterMs: 10_000 })
+      expect(calls).toBe(1)
+      expect(await reserveProviderRequest(database, 19_999, 40)).toBe(false)
+      expect(await reserveProviderRequest(database, 20_000, 40)).toBe(true)
+    } finally {
+      clock.mockRestore()
+      sqlite.close()
+    }
+  })
+
   it('el modo solicitudes no interpreta tokens históricos como saldo NVIDIA agotado', async () => {
     const { sqlite, database } = sqliteD1()
     const headers = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json' }
@@ -55,7 +84,8 @@ describe('presupuesto real del Worker', () => {
   })
   it('espacia solicitudes globales de NVIDIA atómicamente entre usuarios e instancias', async () => {
     const { sqlite, database } = sqliteD1()
-    sqlite.exec("INSERT INTO provider_request_limits(provider,next_allowed_at,used_requests,max_requests) VALUES ('nvidia',0,2722,4500)")
+    sqlite.exec("INSERT OR IGNORE INTO provider_request_limits(provider,next_allowed_at,used_requests,max_requests) VALUES ('nvidia',0,0,0)")
+    sqlite.exec("UPDATE provider_request_limits SET next_allowed_at=0, used_requests=2722, max_requests=4500 WHERE provider='nvidia'")
     const now = 1_700_000_000_000
     const results = await Promise.all([reserveProviderRequest(database, now, 40), reserveProviderRequest(database, now, 40)])
     expect(results.filter(Boolean)).toHaveLength(1)
@@ -63,12 +93,12 @@ describe('presupuesto real del Worker', () => {
     expect(await reserveProviderRequest(database, now + 1500, 40)).toBe(true)
     sqlite.close()
   })
-  it('requiere fila inicializada pero no usa max_requests como autorización NVIDIA', async () => {
+  it('usa la fila NVIDIA sembrada por la migración y no interpreta max_requests como autorización', async () => {
     const { sqlite, database } = sqliteD1()
-    expect(await reserveProviderRequest(database, 10000, 40)).toBe(false)
-    sqlite.exec("INSERT INTO provider_request_limits(provider,next_allowed_at,used_requests,max_requests) VALUES ('nvidia',0,4499,4500)")
+    sqlite.exec("UPDATE provider_request_limits SET next_allowed_at=0, used_requests=4499, max_requests=4500 WHERE provider='nvidia'")
+    expect(await reserveProviderRequest(database, 10000, 40)).toBe(true)
     const results = await Promise.all([reserveProviderRequest(database, 10000, 40), reserveProviderRequest(database, 10000, 40)])
-    expect(results.filter(Boolean)).toHaveLength(1)
+    expect(results.filter(Boolean)).toHaveLength(0)
     expect(await reserveProviderRequest(database, 11500, 40)).toBe(true)
     expect(await reserveProviderRequest(database, 12999, 40)).toBe(false)
     expect(await reserveProviderRequest(database, 13000, 40)).toBe(true)

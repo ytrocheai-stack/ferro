@@ -66,8 +66,8 @@ export async function acquireProviderCircuit(db: ProviderDatabase, provider: Pro
 export async function recordProviderSuccess(db: ProviderDatabase, provider: ProviderName, now: number, leaseId?: string): Promise<void> {
   await db.prepare(`UPDATE provider_circuit_state SET consecutive_failures = 0, opened_at = NULL, cooldown_until = 0,
     half_open_lease_id = NULL, half_open_lease_until = NULL, updated_at = ?
-    WHERE provider = ? AND (half_open_lease_id IS NULL OR half_open_lease_id = ?)`)
-    .bind(now, provider, leaseId ?? '').run()
+    WHERE provider = ? AND ((half_open_lease_id IS NULL AND ? IS NULL) OR half_open_lease_id = ?)`)
+    .bind(now, provider, leaseId ?? null, leaseId ?? null).run()
 }
 
 export async function recordProviderFailure(db: ProviderDatabase, provider: ProviderName, now: number, retryAfterMs = 0, options: ProviderCircuitOptions = {}, leaseId?: string): Promise<CircuitState> {
@@ -79,20 +79,24 @@ export async function recordProviderFailure(db: ProviderDatabase, provider: Prov
     SET consecutive_failures = consecutive_failures + 1,
         opened_at = CASE WHEN consecutive_failures + 1 >= ? OR ? > 0 THEN ? ELSE opened_at END,
         cooldown_until = CASE WHEN consecutive_failures + 1 >= ? OR ? > 0 THEN MAX(cooldown_until, ?) ELSE cooldown_until END,
-        half_open_lease_id = CASE WHEN ? IS NULL OR half_open_lease_id = ? THEN NULL ELSE half_open_lease_id END,
-        half_open_lease_until = CASE WHEN ? IS NULL OR half_open_lease_id = ? THEN NULL ELSE half_open_lease_until END,
-        updated_at = ? WHERE provider = ?`)
-    .bind(config.failureThreshold, retryAfterMs, now, config.failureThreshold, retryAfterMs, cooldownUntil, leaseId ?? null, leaseId ?? '', leaseId ?? null, leaseId ?? '', now, provider).run()
+        half_open_lease_id = NULL,
+        half_open_lease_until = NULL,
+        updated_at = ? WHERE provider = ?
+      AND ((half_open_lease_id IS NULL AND ? IS NULL) OR half_open_lease_id = ?)`)
+    .bind(config.failureThreshold, retryAfterMs, now, config.failureThreshold, retryAfterMs, cooldownUntil, now, provider, leaseId ?? null, leaseId ?? null).run()
   const row = await db.prepare('SELECT provider, consecutive_failures, opened_at, cooldown_until, half_open_lease_id, half_open_lease_until FROM provider_circuit_state WHERE provider = ?').bind(provider).first<CircuitState>()
   if (!row) throw new ProviderQuotaError('No se pudo leer el circuito del proveedor')
   return row
 }
 
-export async function openProviderCircuitUntil(db: ProviderDatabase, provider: ProviderName, now: number, retryAfterMs: number): Promise<void> {
-  if (!Number.isFinite(retryAfterMs) || retryAfterMs < 0) throw new ProviderQuotaError('Retry-After inválido', 'invalid-config')
+export async function openProviderCircuitUntil(db: ProviderDatabase, provider: ProviderName, now: number, retryAfterMs: number, leaseId?: string): Promise<void> {
+  if (!Number.isFinite(now) || !Number.isFinite(retryAfterMs) || retryAfterMs < 0) throw new ProviderQuotaError('Retry-After inválido', 'invalid-config')
   await ensureCircuitRow(db, provider)
-  await db.prepare(`UPDATE provider_circuit_state SET opened_at = COALESCE(opened_at, ?), cooldown_until = MAX(cooldown_until, ?), updated_at = ? WHERE provider = ?`)
-    .bind(now, now + retryAfterMs, now, provider).run()
+  await db.prepare(`UPDATE provider_circuit_state
+    SET opened_at = COALESCE(opened_at, ?), cooldown_until = MAX(cooldown_until, ?),
+        half_open_lease_id = NULL, half_open_lease_until = NULL, updated_at = ?
+    WHERE provider = ? AND ((half_open_lease_id IS NULL AND ? IS NULL) OR half_open_lease_id = ?)`)
+    .bind(now, now + retryAfterMs, now, provider, leaseId ?? null, leaseId ?? null).run()
 }
 
 export class DurableProviderCircuit {

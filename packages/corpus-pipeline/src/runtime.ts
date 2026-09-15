@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { parseEnv } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
-import { reserveRemoteRequest } from './remote-request-gate.ts'
+import { deferRemoteRequest, reserveRemoteRequest } from './remote-request-gate.ts'
 
 export const EMBEDDING_MODEL = 'nvidia/nemotron-3-embed-1b'
 export const FLASH_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
@@ -122,6 +122,7 @@ export class ProviderSession {
       })
       if (!response.ok) {
         const retryAfterMs = response.status === 429 ? retryAfterMillis(response.headers.get('retry-after')) : undefined
+        if (retryAfterMs !== undefined && this.fetcher === fetch) await deferRemoteRequest(retryAfterMs, controller.signal)
         ledger.attempts[id].state = 'rejected'
         ledger.attempts[id].failure = { httpStatus: response.status, at: new Date().toISOString(), ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) }
         writeJson(path.join(this.directory, 'ledger.json'), ledger)

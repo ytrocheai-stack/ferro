@@ -3,6 +3,9 @@ import { ProviderQuotaError, changed, type ProviderDatabase, type ProviderName, 
 export const NVIDIA_DEFAULT_REQUESTS_PER_MINUTE = 40
 export const NVIDIA_MIN_DISPATCH_INTERVAL_MS = 1_500
 export const GEMINI_PACIFIC_TIME_ZONE = 'America/Los_Angeles'
+export const GEMINI_ESTIMATE_BYTES_PER_TOKEN = 3
+export const GEMINI_ESTIMATE_OVERHEAD_TOKENS = 32
+export const GEMINI_ESTIMATE_MARGIN_TOKENS = 16
 
 export interface GeminiQuotaLimits {
   requestsPerMinute: number
@@ -12,6 +15,7 @@ export interface GeminiQuotaLimits {
 
 export interface GeminiQuotaReservation extends ProviderQuotaResult {
   provider: 'gemini'
+  reservationId: string
   minuteKey: number
   pacificDay: string
   estimatedInputTokens: number
@@ -42,11 +46,12 @@ function pacificDayKey(now: number): string {
 
 export function geminiPacificDayKey(now: number): string { return pacificDayKey(now) }
 
-export function estimateGeminiInputTokens(input: string, charsPerToken = 4): number {
-  if (!Number.isFinite(charsPerToken) || charsPerToken <= 0) throw new ProviderQuotaError('Estimador de tokens inválido', 'invalid-config')
-  // La estimación usa bytes UTF-8 y redondea hacia arriba para ser conservadora
-  // con español, Unicode y mensajes mezclados. No llama a countTokens.
-  return Math.max(1, Math.ceil(new TextEncoder().encode(input).byteLength / charsPerToken))
+export function estimateGeminiInputTokens(input: string): number {
+  // Cota deliberadamente conservadora para reservar antes del envío: UTF-8 a
+  // 3 bytes/token (no 4), más 32 tokens de envoltura JSON/sistema y 16 de
+  // margen fijo para puntuación densa, emoji y tokenización no uniforme. No
+  // llama a countTokens porque eso sería otra solicitud al proveedor.
+  return Math.max(1, Math.ceil(new TextEncoder().encode(input).byteLength / GEMINI_ESTIMATE_BYTES_PER_TOKEN) + GEMINI_ESTIMATE_OVERHEAD_TOKENS + GEMINI_ESTIMATE_MARGIN_TOKENS)
 }
 
 export function parseGeminiPromptTokenCount(usageMetadata: unknown): number | undefined {
@@ -124,10 +129,17 @@ function validateGeminiLimits(limits: GeminiQuotaLimits): GeminiQuotaLimits {
  * ventanas se reinician al cambiar la ventana de minuto o el día civil del
  * Pacífico, de manera atómica con la reserva.
  */
-export async function reserveGeminiRequest(db: ProviderDatabase, now: number, estimatedInputTokens: number, limits: GeminiQuotaLimits): Promise<GeminiQuotaReservation> {
+function newReservationId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `gemini:${Date.now()}:${Math.random().toString(36).slice(2)}`
+}
+
+export async function reserveGeminiRequest(db: ProviderDatabase, now: number, estimatedInputTokens: number, limits: GeminiQuotaLimits, reservationId = newReservationId()): Promise<GeminiQuotaReservation> {
   if (!Number.isFinite(now)) throw new ProviderQuotaError('Marca de tiempo inválida', 'invalid-config')
   const safeEstimate = nonNegativeSafeInteger(estimatedInputTokens, 'input tokens')
   const safeLimits = validateGeminiLimits(limits)
+  if (!reservationId.trim()) throw new ProviderQuotaError('Identificador de reserva Gemini inválido', 'invalid-config')
   const minuteKey = Math.floor(now / 60_000)
   const pacificDay = pacificDayKey(now)
   const result = await db.prepare(`UPDATE gemini_quota_state
@@ -145,13 +157,22 @@ export async function reserveGeminiRequest(db: ProviderDatabase, now: number, es
     minuteKey, safeLimits.requestsPerMinute, minuteKey, safeEstimate, safeLimits.inputTokensPerMinute,
     pacificDay, safeLimits.requestsPerDay,
   ).run()
-  if (!changed(result)) return { reserved: false, provider: 'gemini', minuteKey, pacificDay, estimatedInputTokens: safeEstimate }
-  return { reserved: true, provider: 'gemini', minuteKey, pacificDay, estimatedInputTokens: safeEstimate }
+  if (!changed(result)) return { reserved: false, provider: 'gemini', reservationId, minuteKey, pacificDay, estimatedInputTokens: safeEstimate }
+  return { reserved: true, provider: 'gemini', reservationId, minuteKey, pacificDay, estimatedInputTokens: safeEstimate }
 }
 
 /** Reconciliación del uso de entrada de una reserva Gemini. */
 export async function reconcileGeminiInputTokens(db: ProviderDatabase, reservation: GeminiQuotaReservation, usageMetadata: unknown, now: number): Promise<{ inputTokens: number; estimated: boolean }> {
+  if (!reservation.reserved) throw new ProviderQuotaError('No se puede reconciliar una reserva Gemini no concedida', 'invalid-config')
   const measured = parseGeminiPromptTokenCount(usageMetadata)
+  const marker = await db.prepare(`INSERT OR IGNORE INTO gemini_quota_reconciliations
+    (reservation_id, minute_key, estimated_input_tokens, measured_input_tokens, usage_incomplete, reconciled_at)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+    .bind(reservation.reservationId, reservation.minuteKey, reservation.estimatedInputTokens, measured ?? null, measured === undefined ? 1 : 0, now).run()
+  if (!changed(marker)) {
+    const existing = await db.prepare('SELECT measured_input_tokens, usage_incomplete FROM gemini_quota_reconciliations WHERE reservation_id = ?').bind(reservation.reservationId).first<{ measured_input_tokens: number | null; usage_incomplete: number }>()
+    return { inputTokens: existing?.measured_input_tokens ?? reservation.estimatedInputTokens, estimated: existing?.usage_incomplete === 1 }
+  }
   if (measured === undefined) {
     await db.prepare(`UPDATE gemini_quota_state
       SET input_tokens_estimated = input_tokens_estimated + ?, usage_incomplete = 1, updated_at = ? WHERE id = 1`)

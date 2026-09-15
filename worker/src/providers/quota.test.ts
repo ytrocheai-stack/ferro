@@ -4,7 +4,7 @@ import { fileURLToPath, URL as NodeURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { D1Database, D1Statement } from '../index'
 import { deferNvidiaRequest, estimateGeminiInputTokens, geminiPacificDayKey, parseGeminiPromptTokenCount, reconcileGeminiInputTokens, reserveGeminiRequest, reserveNvidiaRequest, waitForNvidiaRequest } from './quota'
-import { acquireProviderCircuit, recordProviderFailure, recordProviderSuccess } from './circuit'
+import { acquireProviderCircuit, openProviderCircuitUntil, recordProviderFailure, recordProviderSuccess } from './circuit'
 
 function fixture(): { sqlite: DatabaseSync; db: D1Database } {
   const sqlite = new DatabaseSync(':memory:')
@@ -33,12 +33,14 @@ describe('cuotas durables de proveedores', () => {
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining(['provider', 'logical_call_no', 'dispatch_status']))
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM gemini_quota_state').get()).toEqual({ count: 1 })
     expect(sqlite.prepare("SELECT provider FROM provider_circuit_state ORDER BY provider").all()).toEqual([{ provider: 'gemini' }, { provider: 'nvidia' }])
+    expect(sqlite.prepare("SELECT provider, next_allowed_at, used_requests, max_requests FROM provider_request_limits WHERE provider='nvidia'").get()).toEqual({ provider: 'nvidia', next_allowed_at: 0, used_requests: 0, max_requests: 0 })
     sqlite.close()
   })
 
   it('reserva NVIDIA globalmente, ignora max_requests y conserva 1.500 ms a 40 RPM', async () => {
     const { sqlite, db } = fixture()
-    sqlite.exec("INSERT INTO provider_request_limits(provider,next_allowed_at,used_requests,max_requests) VALUES ('nvidia',0,4499,1)")
+    sqlite.exec("INSERT OR IGNORE INTO provider_request_limits(provider,next_allowed_at,used_requests,max_requests) VALUES ('nvidia',0,0,0)")
+    sqlite.exec("UPDATE provider_request_limits SET next_allowed_at=0, used_requests=4499, max_requests=1 WHERE provider='nvidia'")
     const first = await reserveNvidiaRequest(db, 1_700_000_000_000, 40)
     expect(first.reserved).toBe(true)
     expect((await reserveNvidiaRequest(db, 1_700_000_000_000 + 1_499, 40)).reserved).toBe(false)
@@ -49,7 +51,7 @@ describe('cuotas durables de proveedores', () => {
 
   it('coordina dos isolates concurrentes y respeta Retry-After sin devolver una reserva', async () => {
     const { sqlite, db } = fixture()
-    sqlite.exec("INSERT INTO provider_request_limits(provider,next_allowed_at,used_requests,max_requests) VALUES ('nvidia',0,0,0)")
+    sqlite.exec("UPDATE provider_request_limits SET next_allowed_at=0, used_requests=0, max_requests=0 WHERE provider='nvidia'")
     const results = await Promise.all([reserveNvidiaRequest(db, 10_000, 40), reserveNvidiaRequest(db, 10_000, 40)])
     expect(results.filter((result) => result.reserved)).toHaveLength(1)
     await deferNvidiaRequest(db, 10_000, 10_000)
@@ -65,6 +67,7 @@ describe('cuotas durables de proveedores', () => {
     const pending = waitForNvidiaRequest(db, { now: () => 1_000, signal: controller.signal, sleep: () => new Promise<void>(() => undefined) })
     controller.abort()
     await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
+    expect((await db.prepare("SELECT used_requests FROM provider_request_limits WHERE provider='nvidia'").first<{ used_requests: number }>())?.used_requests).toBe(1)
   })
 
   it('reserva RPM, TPM y RPD Gemini con ventanas atómicas y día del Pacífico', async () => {
@@ -74,7 +77,9 @@ describe('cuotas durables de proveedores', () => {
     expect(geminiPacificDayKey(now)).toBe('2026-01-14')
     const first = await reserveGeminiRequest(db, now, 60, limits)
     expect(first.reserved).toBe(true)
-    expect((await reserveGeminiRequest(db, now, 41, limits)).reserved).toBe(false)
+    const denied = await reserveGeminiRequest(db, now, 41, limits)
+    expect(denied.reserved).toBe(false)
+    await expect(reconcileGeminiInputTokens(db, denied, { promptTokenCount: 1 }, now + 1)).rejects.toMatchObject({ code: 'invalid-config' })
     expect((await reserveGeminiRequest(db, now + 60_000, 40, limits)).reserved).toBe(true)
     expect((await reserveGeminiRequest(db, now + 120_000, 1, limits)).reserved).toBe(false)
     // 08:01Z is midnight in Los Angeles for this winter date: RPD resets.
@@ -87,16 +92,56 @@ describe('cuotas durables de proveedores', () => {
 
   it('estima de forma conservadora y reconcilia usageMetadata sin countTokens', async () => {
     const { sqlite, db } = fixture()
+    const inputs = [
+      'fuerza 💪 y recuperación',
+      '¡¡¡¡,,,,....::::;;;;????!!!!(((( )))) [[ ]] {{ }}',
+      '{"name":"sentadilla","sets":[{"weightKg":100,"reps":8,"notes":"💪 recuperación"}]}',
+    ]
+    for (const input of inputs) {
+      const utf8Bytes = new TextEncoder().encode(input).byteLength
+      expect(estimateGeminiInputTokens(input)).toBeGreaterThan(Math.ceil(utf8Bytes / 4))
+    }
     const estimate = estimateGeminiInputTokens('fuerza 💪 y recuperación')
     expect(estimate).toBeGreaterThan(0)
     expect(parseGeminiPromptTokenCount({ promptTokenCount: 23 })).toBe(23)
     expect(parseGeminiPromptTokenCount({ promptTokenCount: -1 })).toBeUndefined()
-    const reservation = await reserveGeminiRequest(db, 10_000, estimate, { requestsPerMinute: 10, inputTokensPerMinute: 100, requestsPerDay: 10 })
+    const reservation = await reserveGeminiRequest(db, 10_000, estimate, { requestsPerMinute: 10, inputTokensPerMinute: 100, requestsPerDay: 10 }, 'attempt-uncertain')
     const missing = await reconcileGeminiInputTokens(db, reservation, undefined, 10_001)
     expect(missing).toEqual({ inputTokens: estimate, estimated: true })
+    expect(await reconcileGeminiInputTokens(db, reservation, { promptTokenCount: 999 }, 10_002)).toEqual({ inputTokens: estimate, estimated: true })
     const measuredReservation = await reserveGeminiRequest(db, 70_000, 20, { requestsPerMinute: 10, inputTokensPerMinute: 100, requestsPerDay: 10 })
     expect(await reconcileGeminiInputTokens(db, measuredReservation, { promptTokenCount: 5 }, 70_001)).toEqual({ inputTokens: 5, estimated: false })
     expect(sqlite.prepare('SELECT input_tokens_estimated, input_tokens_measured, usage_incomplete FROM gemini_quota_state').get()).toEqual({ input_tokens_estimated: estimate + 20, input_tokens_measured: 5, usage_incomplete: 1 })
+    sqlite.close()
+  })
+
+  it('comparte el límite entre dos wrappers de cuentas distintas y no reserva al cancelar la espera', async () => {
+    const { sqlite, db } = fixture()
+    const makeWrapper = () => ({
+      prepare: (query: string) => {
+        let args: SQLInputValue[] = []
+        const statement: D1Statement = {
+          bind(...values) { args = values as SQLInputValue[]; return statement },
+          async first<T>() { return (sqlite.prepare(query).get(...args) ?? null) as T | null },
+          async all<T>() { return { results: sqlite.prepare(query).all(...args) as T[] } },
+          async run() { const result = sqlite.prepare(query).run(...args); return { success: true, meta: { changes: Number(result.changes) } } },
+        }
+        return statement
+      },
+      async batch(statements: D1Statement[]) { return Promise.all(statements.map((statement) => statement.run())) },
+    } as D1Database)
+    const accountA = makeWrapper()
+    const accountB = makeWrapper()
+    const results = await Promise.all([
+      reserveGeminiRequest(accountA, 20_000, 1, { requestsPerMinute: 1, inputTokensPerMinute: 10, requestsPerDay: 10 }),
+      reserveGeminiRequest(accountB, 20_000, 1, { requestsPerMinute: 1, inputTokensPerMinute: 10, requestsPerDay: 10 }),
+    ])
+    expect(results.filter((result) => result.reserved)).toHaveLength(1)
+    await reserveNvidiaRequest(db, 20_000, 40)
+    const controller = new AbortController()
+    const pending = waitForNvidiaRequest(db, { now: () => 20_000, sleep: () => new Promise<void>(() => undefined), signal: controller.signal })
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
     sqlite.close()
   })
 })
@@ -117,10 +162,40 @@ describe('circuitos durables de proveedores', () => {
     sqlite.close()
   })
 
+  it('ignora fallos y éxitos tardíos sin el lease vigente o con un lease distinto', async () => {
+    const { sqlite, db } = fixture()
+    await recordProviderFailure(db, 'gemini', 1, 0, { failureThreshold: 1, cooldownMs: 10, halfOpenLeaseMs: 20 })
+    const lease = await acquireProviderCircuit(db, 'gemini', 11, { halfOpenLeaseMs: 20 })
+    expect(lease.permission).toBe('half-open')
+    await recordProviderFailure(db, 'gemini', 12, 1000, { failureThreshold: 1, cooldownMs: 10, halfOpenLeaseMs: 20 }, 'stale-lease')
+    const afterStaleFailure = sqlite.prepare('SELECT consecutive_failures, cooldown_until, half_open_lease_id FROM provider_circuit_state WHERE provider = \'gemini\'').get()
+    expect(afterStaleFailure).toEqual({ consecutive_failures: 1, cooldown_until: 11, half_open_lease_id: lease.leaseId })
+    await recordProviderSuccess(db, 'gemini', 13, 'stale-lease')
+    const afterStaleSuccess = sqlite.prepare('SELECT consecutive_failures, cooldown_until, half_open_lease_id FROM provider_circuit_state WHERE provider = \'gemini\'').get()
+    expect(afterStaleSuccess).toEqual(afterStaleFailure)
+    await recordProviderSuccess(db, 'gemini', 14, lease.leaseId)
+    await recordProviderFailure(db, 'gemini', 15, 1000, { failureThreshold: 1, cooldownMs: 10, halfOpenLeaseMs: 20 }, lease.leaseId)
+    const afterLateResult = sqlite.prepare('SELECT consecutive_failures, cooldown_until, half_open_lease_id FROM provider_circuit_state WHERE provider = \'gemini\'').get()
+    expect(afterLateResult).toEqual({ consecutive_failures: 0, cooldown_until: 0, half_open_lease_id: null })
+    sqlite.close()
+  })
+
   it('abre por Retry-After aunque no haya alcanzado el umbral', async () => {
     const { db } = fixture()
     const state = await recordProviderFailure(db, 'nvidia', 1_000, 10_000, { failureThreshold: 3, cooldownMs: 100 })
     expect(state.opened_at).toBe(1_000)
     expect(state.cooldown_until).toBe(11_000)
+  })
+
+  it('abre por Retry-After y limpia el lease half-open sólo con el CAS correspondiente', async () => {
+    const { sqlite, db } = fixture()
+    await recordProviderFailure(db, 'nvidia', 1_000, 0, { failureThreshold: 1, cooldownMs: 100, halfOpenLeaseMs: 20 })
+    const lease = await acquireProviderCircuit(db, 'nvidia', 1_100, { halfOpenLeaseMs: 20 })
+    expect(lease.permission).toBe('half-open')
+    await openProviderCircuitUntil(db, 'nvidia', 1_101, 5_000, 'stale-lease')
+    expect(sqlite.prepare("SELECT half_open_lease_id, cooldown_until FROM provider_circuit_state WHERE provider='nvidia'").get()).toEqual({ half_open_lease_id: lease.leaseId, cooldown_until: 1_100 })
+    await openProviderCircuitUntil(db, 'nvidia', 1_101, 5_000, lease.leaseId)
+    expect(sqlite.prepare("SELECT half_open_lease_id, cooldown_until FROM provider_circuit_state WHERE provider='nvidia'").get()).toEqual({ half_open_lease_id: null, cooldown_until: 6_101 })
+    sqlite.close()
   })
 })

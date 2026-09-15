@@ -53,6 +53,20 @@ INSERT OR IGNORE INTO provider_circuit_state(provider) VALUES ('gemini'), ('nvid
 CREATE INDEX IF NOT EXISTS provider_circuit_state_cooldown
   ON provider_circuit_state(cooldown_until, provider);
 
--- 0010/0014 conservan la tabla histórica. No se crea una fila NVIDIA aquí:
--- la conciliación/operación existente decide cuándo inicializarla. max_requests
--- no es autorización; used_requests sólo conserva telemetría diagnóstica.
+-- 0010/0014 conservan la tabla histórica. max_requests no es autorización;
+-- used_requests sólo conserva telemetría diagnóstica.
+-- La reserva efectiva debe funcionar inmediatamente después de migrar una base
+-- nueva y también al re-ejecutar esta migración durante una recuperación.
+INSERT OR IGNORE INTO provider_request_limits (provider, next_allowed_at, used_requests, max_requests)
+VALUES ('nvidia', 0, 0, 0);
+
+-- Una reconciliación Gemini por reserva/attemptId. La clave impide cobrar dos
+-- veces el mismo resultado aunque dos isolates lo procesen simultáneamente.
+CREATE TABLE IF NOT EXISTS gemini_quota_reconciliations (
+  reservation_id TEXT PRIMARY KEY,
+  minute_key INTEGER NOT NULL,
+  estimated_input_tokens INTEGER NOT NULL CHECK (estimated_input_tokens >= 0),
+  measured_input_tokens INTEGER,
+  usage_incomplete INTEGER NOT NULL CHECK (usage_incomplete IN (0, 1)),
+  reconciled_at INTEGER NOT NULL
+);
