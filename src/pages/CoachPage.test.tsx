@@ -114,6 +114,43 @@ describe('CoachPage T6', () => {
     expect(startCoachRun).not.toHaveBeenCalled()
   })
 
+  it('mantiene el fallback 404 en polling tras ocultar y volver a mostrar la página', async () => {
+    fixture.streamingEnabled = true
+    const run = { id: 'run-sse-404', remoteRunId: 'remote-sse-404', ownerId: 'owner-1', conversationId: 'conversation-1', eventId: 'event-sse-404', contextVersion: 'ctx', status: 'running', request: { event: { payload: { message: 'pregunta' } } }, createdAt: 1, updatedAt: 2 }
+    fixture.runs.push(run)
+    vi.mocked(streamCoachRun).mockResolvedValue({ kind: 'polling', run } as never)
+    vi.mocked(refreshCoachRun).mockResolvedValue({ ...run, status: 'running', updatedAt: 3 } as never)
+    const interval = vi.spyOn(window, 'setInterval').mockImplementation(() => 1 as unknown as ReturnType<typeof window.setInterval>)
+    render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    await waitFor(() => expect(streamCoachRun).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(interval).toHaveBeenCalledWith(expect.any(Function), 2_000))
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+
+    await waitFor(() => expect(vi.mocked(db.coachRuns.where)).toHaveBeenCalledWith('conversationId'))
+    await waitFor(() => expect(refreshCoachRun).toHaveBeenCalledWith(expect.any(Function), 'run-sse-404', expect.any(AbortSignal)))
+    expect(streamCoachRun).toHaveBeenCalledTimes(1)
+    interval.mockRestore()
+  })
+
+  it.each([
+    ['provider-circuit-open', 'El proveedor está temporalmente no disponible. Puedes solicitar otro intento.'],
+    ['coach-providers-unavailable', 'Los proveedores del coach no están disponibles. Puedes solicitar otro intento.'],
+  ] as const)('muestra y permite reintentar el error %s', async (error, label) => {
+    fixture.retryable = true
+    const failedRun = { id: `run-${error}`, ownerId: 'owner-1', conversationId: 'conversation-1', eventId: `event-${error}`, contextVersion: 'ctx', status: 'failed', error, request: { event: { payload: { message: 'pregunta' } } }, createdAt: 1, updatedAt: 2 }
+    fixture.runs.push(failedRun)
+    vi.mocked(retryCoachRun).mockResolvedValue({ ...failedRun, status: 'queued' } as never)
+    const user = userEvent.setup()
+    render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    expect(await screen.findByText(label)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Reintentar' }))
+    await waitFor(() => expect(retryCoachRun).toHaveBeenCalledWith(expect.any(Function), failedRun.id))
+  })
+
   it('connects Reintentar to a new idempotent dispatch when the run has no remote ID', async () => {
     fixture.retryable = true
     const failedRun = { id: 'run-retry', ownerId: 'owner-1', conversationId: 'conversation-1', eventId: 'event-retry', contextVersion: 'ctx', status: 'failed', error: 'unknown-outcome', request: { event: { payload: { message: 'pregunta' } } }, createdAt: 1, updatedAt: 2 }

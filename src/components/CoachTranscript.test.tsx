@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { CoachMessage, CoachRunRecord } from '../db/types'
 import { CoachTranscript } from './CoachTranscript'
 
@@ -38,5 +38,20 @@ describe('CoachTranscript', () => {
     Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 240 })
     rerender(<CoachTranscript conversationId="conversation-1" messages={[]} runs={[{ ...baseRun, status: 'running', snapshotSequence: 3, partialExplanation: 'Segunda parte' }]} onLoadOlder={() => undefined} hasOlder={false} loadingOlder={false} />)
     expect(viewport.scrollTop).toBe(90)
+  })
+
+  it('sigue el final si el usuario estaba cerca y permite cargar mensajes antiguos', () => {
+    const onLoadOlder = vi.fn()
+    const { rerender } = render(<CoachTranscript conversationId="conversation-1" messages={[message]} runs={[]} onLoadOlder={onLoadOlder} hasOlder={true} loadingOlder={false} />)
+    const viewport = screen.getByRole('log', { name: 'Conversación con Coach' })
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 200 })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 50 })
+    viewport.scrollTop = 130
+    fireEvent.scroll(viewport)
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 240 })
+    rerender(<CoachTranscript conversationId="conversation-1" messages={[message, { ...message, id: 'message-2', sequence: 2, content: 'Respuesta nueva' }]} runs={[]} onLoadOlder={onLoadOlder} hasOlder={true} loadingOlder={false} />)
+    expect(viewport.scrollTop).toBe(240)
+    fireEvent.click(screen.getByRole('button', { name: 'Cargar mensajes anteriores' }))
+    expect(onLoadOlder).toHaveBeenCalledTimes(1)
   })
 })

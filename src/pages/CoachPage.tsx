@@ -23,7 +23,7 @@ const pendingCancellation = (run: CoachRunRecord) => Boolean(run.cancelRequested
 const isTerminalRun = (run: CoachRunRecord) => run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'
 const isActiveRun = (run: CoachRunRecord) => run.status === 'queued' || run.status === 'running'
 const isAbortError = (cause: unknown) => typeof cause === 'object' && cause !== null && 'name' in cause && (cause as { name?: unknown }).name === 'AbortError'
-const errorLabel = (error?: string) => error === 'provider-rate-limited' ? 'El proveedor limitó temporalmente la consulta.' : error === 'coach-call-timeout' ? 'La respuesta tardó demasiado. Puedes solicitar otro intento.' : error ?? 'No se pudo completar la respuesta.'
+const errorLabel = (error?: string) => error === 'provider-rate-limited' ? 'El proveedor limitó temporalmente la consulta.' : error === 'provider-circuit-open' ? 'El proveedor está temporalmente no disponible. Puedes solicitar otro intento.' : error === 'coach-providers-unavailable' ? 'Los proveedores del coach no están disponibles. Puedes solicitar otro intento.' : error === 'coach-call-timeout' ? 'La respuesta tardó demasiado. Puedes solicitar otro intento.' : error ?? 'No se pudo completar la respuesta.'
 
 function sortRuns(left: CoachRunRecord, right: CoachRunRecord): number {
   return left.updatedAt - right.updatedAt || left.createdAt - right.createdAt || left.id.localeCompare(right.id)
@@ -64,6 +64,7 @@ export default function CoachPage() {
   const [editingTitle, setEditingTitle] = useState<CoachConversation>()
   const [titleDraft, setTitleDraft] = useState('')
   const [actionError, setActionError] = useState<string>()
+  const streamPollingIdsRef = useRef<Set<string>>(new Set())
   const [streamPollingIds, setStreamPollingIds] = useState<Set<string>>(() => new Set())
   const revision = useRef(0)
   const draftRef = useRef('')
@@ -77,6 +78,16 @@ export default function CoachPage() {
   const runsRef = useRef<CoachRunRecord[]>([])
   const getTokenRef = useRef(getToken)
   const streamRunRef = useRef<(run: CoachRunRecord) => Promise<void>>(async () => undefined)
+
+  const updateStreamPolling = useCallback((runId: string, polling: boolean) => {
+    const current = streamPollingIdsRef.current
+    if (current.has(runId) === polling) return
+    const next = new Set(current)
+    if (polling) next.add(runId)
+    else next.delete(runId)
+    streamPollingIdsRef.current = next
+    setStreamPollingIds(next)
+  }, [])
 
   selectedIdRef.current = selectedId
   runsRef.current = runs
@@ -143,12 +154,9 @@ export default function CoachPage() {
       latest = streamOutcome?.run
       if (latest) update(latest)
       if (streamOutcome?.kind === 'polling') {
-        setStreamPollingIds((current) => current.has(run.id) ? current : new Set(current).add(run.id))
+        updateStreamPolling(run.id, true)
       } else if (streamOutcome) {
-        setStreamPollingIds((current) => {
-          if (!current.has(run.id)) return current
-          const next = new Set(current); next.delete(run.id); return next
-        })
+        updateStreamPolling(run.id, false)
       }
       if (latest && (streamOutcome?.kind === 'terminal' || streamOutcome?.kind === 'cancelled')) {
         // El terminal SSE solo sustituye el parcial; el JSON normal materializa la burbuja una vez.
@@ -171,7 +179,7 @@ export default function CoachPage() {
       const timer = window.setTimeout(() => { streamTimers.current.delete(run.id); void streamRunRef.current(run) }, delay)
       streamTimers.current.set(run.id, timer)
     }
-  }, [loadMessages, ownerId])
+  }, [loadMessages, ownerId, updateStreamPolling])
   streamRunRef.current = streamRun
 
   useEffect(() => { conversationOffset.current = 0; if (consent) void loadConversations() }, [consent, loadConversations])
@@ -228,9 +236,7 @@ export default function CoachPage() {
         if (!controller.signal.aborted && selectedIdRef.current === selectedId && getCoachAccountId() === ownerId && document.visibilityState === 'visible') {
           const terminalTransition = refreshedRuns.some((run) => isTerminalRun(run) && (!previousSelectedRuns.has(run.id) || isActiveRun(previousSelectedRuns.get(run.id)!)))
           const terminalFallbacks = refreshedRuns.filter((run) => isTerminalRun(run)).map((run) => run.id)
-          if (terminalFallbacks.length) setStreamPollingIds((current) => {
-            const next = new Set(current); terminalFallbacks.forEach((id) => next.delete(id)); return next
-          })
+          terminalFallbacks.forEach((id) => updateStreamPolling(id, false))
           setRuns((current) => {
             const merged = new Map(current.filter((run) => !(run.ownerId === ownerId && run.conversationId === selectedId)).map((run) => [run.id, run]))
             refreshedRuns.forEach((run) => merged.set(run.id, run))
@@ -255,13 +261,13 @@ export default function CoachPage() {
     start()
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => { disposed = true; stop(); document.removeEventListener('visibilitychange', onVisibilityChange) }
-  }, [loadMessages, ownerId, selectedId, streamPollingIds])
+  }, [loadMessages, ownerId, selectedId, streamPollingIds, updateStreamPolling])
 
   useEffect(() => {
     if (!isCoachStreamingEnabled() || !ownerId) return
     const reconnect = () => {
       if (document.visibilityState !== 'visible') return
-      runsRef.current.filter((run) => run.ownerId === ownerId && (run.status === 'queued' || run.status === 'running')).forEach((run) => { void streamRun(run) })
+      runsRef.current.filter((run) => run.ownerId === ownerId && (run.status === 'queued' || run.status === 'running') && !streamPollingIdsRef.current.has(run.id)).forEach((run) => { void streamRun(run) })
     }
     const pauseOrReconnect = () => {
       if (document.visibilityState === 'visible') { reconnect(); return }
