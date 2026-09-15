@@ -310,6 +310,48 @@ describe('validación de respaldos', () => {
     }
   })
 
+  it('revierte IndexedDB y el estado local si falla la persistencia de Zustand', async () => {
+    setCoachAccountId('owner-a')
+    const original = { ...base.workouts[0], name: 'Original' }
+    const originalConsent = { ...coachRecords.coachConsents[0], enabled: false, revision: 7, updatedAt: 7 }
+    await db.workouts.put(original)
+    await db.coachConsents.put(originalConsent)
+    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', acceptedAt: 7, enabled: false }]))
+    const settingsBefore = useSettings.getState()
+    const nutritionBefore = useNutrition.getState()
+    const settingsStorage = useSettings.persist.getOptions().storage
+    const nutritionStorage = useNutrition.persist.getOptions().storage
+    const quotaStorage = { getItem: () => null, setItem: () => { throw new DOMException('sin espacio', 'QuotaExceededError') }, removeItem: () => undefined }
+    useSettings.persist.setOptions({ storage: quotaStorage })
+    useNutrition.persist.setOptions({ storage: quotaStorage })
+    const backup = { ...base, version: 11 as const, ...coachRecords, settings: { theme: settingsBefore.theme === 'dark' ? 'light' : 'dark' }, nutritionGoals: { kcal: nutritionBefore.goals.kcal + 1 } }
+
+    try {
+      await expect(importBackup(new File([JSON.stringify(backup)], 'quota-local-state.json'))).rejects.toMatchObject({ name: 'QuotaExceededError' })
+      expect(await db.workouts.toArray()).toEqual([original])
+      expect(await db.coachConsents.toArray()).toEqual([originalConsent])
+      expect(useSettings.getState()).toEqual(settingsBefore)
+      expect(useNutrition.getState()).toEqual(nutritionBefore)
+      expect(localStorage.getItem('ferro-coach-consent')).toBe(JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', acceptedAt: 7, enabled: false }]))
+    } finally {
+      useSettings.persist.setOptions({ storage: settingsStorage })
+      useNutrition.persist.setOptions({ storage: nutritionStorage })
+    }
+  })
+
+  it('hace prevalecer el consentimiento vigente de localStorage sobre una fila disabled importada', async () => {
+    setCoachAccountId('owner-a')
+    const current = { ...coachRecords.coachConsents[0], enabled: false, revision: 9, updatedAt: 9 }
+    await db.coachConsents.put(current)
+    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', acceptedAt: 9, enabled: true }]))
+    const imported = { ...coachRecords.coachConsents[0], enabled: true, revision: 999, updatedAt: 999 }
+
+    await importBackup(new File([JSON.stringify({ ...base, version: 11, ...coachRecords, coachConsents: [imported] })], 'consent-authority.json'))
+
+    expect(await db.coachConsents.get(current.id)).toEqual({ ...current, enabled: true })
+    expect(localStorage.getItem('ferro-coach-consent')).toBe(JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', acceptedAt: 9, enabled: true }]))
+  })
+
   it.each([9, 10] as const)('reimporta el contenido de una base v%s migrada, incluidos los IDs de mensajes históricos', async (version) => {
     setCoachAccountId('owner-a')
     const name = `backup-migration-${crypto.randomUUID()}`

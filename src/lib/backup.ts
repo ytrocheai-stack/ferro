@@ -30,7 +30,7 @@ import { backupSchema, normalizeBackup, photosBackupSchema, type ValidBackup } f
 import { normalizeRoutine } from './adaptation'
 import { CONTEXT_INVALIDATED_MESSAGE } from './adaptationErrors'
 import { getCoachAccountId } from './coachAccount'
-import { getCoachConsent, getCoachDeviceId, readCoachConsentRecord } from './coachConsent'
+import { getCoachConsent, getCoachDeviceId } from './coachConsent'
 
 interface BackupFile {
   app: 'ferro'
@@ -126,6 +126,167 @@ export interface ImportResult {
   measurements: number
 }
 
+const importTables = [
+  db.workouts,
+  db.routines,
+  db.customExercises,
+  db.folders,
+  db.measurements,
+  db.foods,
+  db.dishes,
+  db.foodLog,
+  db.importBatches,
+  db.externalRefs,
+  db.adaptationProposals,
+  db.adaptationJobs,
+  db.routineRevisionSnapshots,
+  db.adaptationEventJobs,
+  db.coachRuns,
+  db.coachMessages,
+  db.coachProfiles,
+  db.coachConsents,
+  db.coachConversations,
+  db.coachDrafts,
+] as const
+
+interface ImportDatabaseSnapshot {
+  workouts: Workout[]
+  routines: Routine[]
+  customExercises: CustomExercise[]
+  folders: Folder[]
+  measurements: Measurement[]
+  foods: Food[]
+  dishes: Dish[]
+  foodLog: FoodLogEntry[]
+  importBatches: ImportBatch[]
+  externalRefs: ExternalRef[]
+  adaptationProposals: AdaptationProposal[]
+  adaptationJobs: AdaptationJob[]
+  routineRevisionSnapshots: RoutineRevisionSnapshot[]
+  adaptationEventJobs: AdaptationEventJob[]
+  coachRuns: CoachRunRecord[]
+  coachMessages: CoachMessage[]
+  coachProfiles: CoachProfile[]
+  coachConsents: CoachConsentRecord[]
+  coachConversations: CoachConversation[]
+  coachDrafts: CoachDraft[]
+}
+
+async function snapshotImportDatabase(): Promise<ImportDatabaseSnapshot> {
+  return db.transaction('r', importTables, () => Promise.all([
+    db.workouts.toArray(),
+    db.routines.toArray(),
+    db.customExercises.toArray(),
+    db.folders.toArray(),
+    db.measurements.toArray(),
+    db.foods.toArray(),
+    db.dishes.toArray(),
+    db.foodLog.toArray(),
+    db.importBatches.toArray(),
+    db.externalRefs.toArray(),
+    db.adaptationProposals.toArray(),
+    db.adaptationJobs.toArray(),
+    db.routineRevisionSnapshots.toArray(),
+    db.adaptationEventJobs.toArray(),
+    db.coachRuns.toArray(),
+    db.coachMessages.toArray(),
+    db.coachProfiles.toArray(),
+    db.coachConsents.toArray(),
+    db.coachConversations.toArray(),
+    db.coachDrafts.toArray(),
+  ]).then(([workouts, routines, customExercises, folders, measurements, foods, dishes, foodLog, importBatches, externalRefs, adaptationProposals, adaptationJobs, routineRevisionSnapshots, adaptationEventJobs, coachRuns, coachMessages, coachProfiles, coachConsents, coachConversations, coachDrafts]) => ({
+    workouts,
+    routines,
+    customExercises,
+    folders,
+    measurements,
+    foods,
+    dishes,
+    foodLog,
+    importBatches,
+    externalRefs,
+    adaptationProposals,
+    adaptationJobs,
+    routineRevisionSnapshots,
+    adaptationEventJobs,
+    coachRuns,
+    coachMessages,
+    coachProfiles,
+    coachConsents,
+    coachConversations,
+    coachDrafts,
+  })))
+}
+
+async function restoreImportDatabase(snapshot: ImportDatabaseSnapshot): Promise<void> {
+  await db.transaction('rw', importTables, async () => {
+    await Promise.all([
+      db.workouts.clear(),
+      db.routines.clear(),
+      db.customExercises.clear(),
+      db.folders.clear(),
+      db.measurements.clear(),
+      db.foods.clear(),
+      db.dishes.clear(),
+      db.foodLog.clear(),
+      db.importBatches.clear(),
+      db.externalRefs.clear(),
+      db.adaptationProposals.clear(),
+      db.adaptationJobs.clear(),
+      db.routineRevisionSnapshots.clear(),
+      db.adaptationEventJobs.clear(),
+      db.coachRuns.clear(),
+      db.coachMessages.clear(),
+      db.coachProfiles.clear(),
+      db.coachConsents.clear(),
+      db.coachConversations.clear(),
+      db.coachDrafts.clear(),
+    ])
+    await Promise.all([
+      db.workouts.bulkPut(snapshot.workouts),
+      db.routines.bulkPut(snapshot.routines),
+      db.customExercises.bulkPut(snapshot.customExercises),
+      db.folders.bulkPut(snapshot.folders),
+      db.measurements.bulkPut(snapshot.measurements),
+      db.foods.bulkPut(snapshot.foods),
+      db.dishes.bulkPut(snapshot.dishes),
+      db.foodLog.bulkPut(snapshot.foodLog),
+      db.importBatches.bulkPut(snapshot.importBatches),
+      db.externalRefs.bulkPut(snapshot.externalRefs),
+      db.adaptationProposals.bulkPut(snapshot.adaptationProposals),
+      db.adaptationJobs.bulkPut(snapshot.adaptationJobs),
+      db.routineRevisionSnapshots.bulkPut(snapshot.routineRevisionSnapshots),
+      db.adaptationEventJobs.bulkPut(snapshot.adaptationEventJobs),
+      db.coachRuns.bulkPut(snapshot.coachRuns),
+      db.coachMessages.bulkPut(snapshot.coachMessages),
+      db.coachProfiles.bulkPut(snapshot.coachProfiles),
+      db.coachConsents.bulkPut(snapshot.coachConsents),
+      db.coachConversations.bulkPut(snapshot.coachConversations),
+      db.coachDrafts.bulkPut(snapshot.coachDrafts),
+    ])
+  })
+}
+
+const noOpPersistStorage = { getItem: () => null, setItem: () => undefined, removeItem: () => undefined }
+
+function restoreLocalState(snapshot: { settings: ReturnType<typeof useSettings.getState>; nutrition: ReturnType<typeof useNutrition.getState> }): void {
+  const settingsStorage = useSettings.persist.getOptions().storage
+  useSettings.persist.setOptions({ storage: noOpPersistStorage })
+  try {
+    useSettings.setState(snapshot.settings, true)
+  } finally {
+    useSettings.persist.setOptions({ storage: settingsStorage })
+  }
+
+  const nutritionStorage = useNutrition.persist.getOptions().storage
+  useNutrition.persist.setOptions({ storage: noOpPersistStorage })
+  try {
+    useNutrition.setState(snapshot.nutrition, true)
+  } finally {
+    useNutrition.persist.setOptions({ storage: nutritionStorage })
+  }
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
 }
@@ -205,18 +366,33 @@ export async function importBackup(file: File): Promise<ImportResult> {
   ])
   if (coachOwners.size > 0 && !activeOwner) throw new Error('Se requiere una cuenta activa para importar datos del Coach; no se ha modificado nada')
   if (activeOwner && [...coachOwners].some((ownerId) => ownerId !== activeOwner)) throw new Error('El backup pertenece a otra cuenta; no se ha modificado nada')
+  const databaseSnapshot = await snapshotImportDatabase()
+  const localStateSnapshot = { settings: useSettings.getState(), nutrition: useNutrition.getState() }
   await db.transaction(
     'rw',
-    [db.workouts, db.routines, db.customExercises, db.folders, db.measurements, db.foods, db.dishes, db.foodLog, db.importBatches, db.externalRefs, db.adaptationProposals, db.adaptationJobs, db.routineRevisionSnapshots, db.adaptationEventJobs, db.coachRuns, db.coachMessages, db.coachProfiles, db.coachConsents, db.coachConversations, db.coachDrafts],
+    importTables,
     async () => {
       // Leer dentro de la misma transacción evita restaurar un consentimiento
       // obsoleto si otra pestaña lo revoca mientras se valida el archivo.
-      const preservedConsents = await db.coachConsents.toArray()
-      if (activeOwner) {
-        const currentDeviceId = getCoachDeviceId()
+      const currentDeviceId = activeOwner ? getCoachDeviceId() : undefined
+      const existingConsents = await db.coachConsents.toArray()
+      const existingCurrentConsent = activeOwner && currentDeviceId
+        ? existingConsents.find((consent) => consent.ownerId === activeOwner && consent.deviceId === currentDeviceId)
+        : undefined
+      const preservedConsents = existingConsents.filter((consent) => !(activeOwner && consent.ownerId === activeOwner && consent.deviceId === currentDeviceId))
+      if (activeOwner && currentDeviceId) {
         const localConsent = getCoachConsent(activeOwner)
-        const storedConsent = await readCoachConsentRecord(activeOwner, currentDeviceId)
-        if (localConsent && !storedConsent) preservedConsents.push({ id: `${activeOwner}:${currentDeviceId}`, ownerId: activeOwner, deviceId: currentDeviceId, version: localConsent.version, enabled: true, revision: localConsent.acceptedAt, acceptedAt: localConsent.acceptedAt, updatedAt: localConsent.acceptedAt })
+        if (localConsent) {
+          preservedConsents.push({
+            ...(existingCurrentConsent ?? { id: `${activeOwner}:${currentDeviceId}`, ownerId: activeOwner, deviceId: currentDeviceId, revision: localConsent.acceptedAt, acceptedAt: localConsent.acceptedAt, updatedAt: localConsent.acceptedAt }),
+            ownerId: activeOwner,
+            deviceId: currentDeviceId,
+            version: localConsent.version,
+            enabled: true,
+          })
+        } else if (existingCurrentConsent) {
+          preservedConsents.push(existingCurrentConsent)
+        }
       }
       await Promise.all([
         db.workouts.clear(),
@@ -267,8 +443,17 @@ export async function importBackup(file: File): Promise<ImportResult> {
       ])
     },
   )
-  if (data.settings) useSettings.getState().update(data.settings)
-  if (data.nutritionGoals) useNutrition.getState().setGoals(data.nutritionGoals)
+  try {
+    if (data.settings) useSettings.getState().update(data.settings)
+    if (data.nutritionGoals) useNutrition.getState().setGoals(data.nutritionGoals)
+  } catch (error) {
+    try {
+      await restoreImportDatabase(databaseSnapshot)
+    } finally {
+      restoreLocalState(localStateSnapshot)
+    }
+    throw error
+  }
   return {
     workouts: data.workouts.length,
     routines: data.routines?.length ?? 0,

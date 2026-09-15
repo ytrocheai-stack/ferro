@@ -339,9 +339,14 @@ async function repairCoachPersistence(tx: Transaction): Promise<void> {
     const next = { id: resolvedId, ownerId, title, createdAt, updatedAt, nextSequence: 1 } satisfies CoachConversation
     await conversations.put(next); created.set(key, next); return next
   }
-  const localIds = new Set(runs.map((run) => run.id))
+  const localIdsByOwner = new Map<string, Set<string>>()
+  for (const run of runs) {
+    const ids = localIdsByOwner.get(run.ownerId) ?? new Set<string>()
+    ids.add(run.id)
+    localIdsByOwner.set(run.ownerId, ids)
+  }
   const repairRunId = (id: string, ownerId: string): string => {
-    if (localIds.has(id)) return id
+    if (localIdsByOwner.get(ownerId)?.has(id)) return id
     const matches = runs.filter((run) => run.ownerId === ownerId && !run.id.startsWith('coach-local-') && id === `coach-local-${run.eventId}`)
     return matches.length === 1 ? matches[0].id : id
   }

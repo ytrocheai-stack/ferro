@@ -221,4 +221,29 @@ describe('migración v9/v10 a v11 de conversaciones', () => {
       await Dexie.delete(name)
     }
   })
+
+  it('resuelve IDs legacy de runs dentro del owner correcto aunque coincidan entre cuentas', async () => {
+    const name = `coach-owner-run-migration-${crypto.randomUUID()}`
+    const old = new Dexie(name)
+    old.version(10).stores({ coachRuns: 'id, ownerId, eventId', coachMessages: 'id, ownerId, runId' })
+    await old.open()
+    await old.table('coachRuns').bulkPut([
+      { id: 'remote-a', ownerId: 'owner-a', eventId: 'shared-event', request: { event: { accountId: 'owner-a' } }, createdAt: 1, updatedAt: 2 },
+      { id: 'coach-local-shared-event', ownerId: 'owner-b', eventId: 'shared-event', request: { event: { accountId: 'owner-b' } }, createdAt: 1, updatedAt: 2 },
+    ])
+    await old.table('coachMessages').bulkPut([
+      { id: 'message-a', ownerId: 'owner-a', runId: 'coach-local-shared-event', role: 'user', content: 'A', createdAt: 1 },
+      { id: 'message-b', ownerId: 'owner-b', runId: 'coach-local-shared-event', role: 'user', content: 'B', createdAt: 1 },
+    ])
+    old.close()
+    const upgraded = new FerroDB(name)
+    try {
+      await upgraded.open()
+      expect(await upgraded.coachMessages.get('message-a')).toMatchObject({ ownerId: 'owner-a', runId: 'remote-a' })
+      expect(await upgraded.coachMessages.get('message-b')).toMatchObject({ ownerId: 'owner-b', runId: 'coach-local-shared-event' })
+    } finally {
+      upgraded.close()
+      await Dexie.delete(name)
+    }
+  })
 })
