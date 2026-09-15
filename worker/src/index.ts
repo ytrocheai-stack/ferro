@@ -237,7 +237,7 @@ export interface GenerationAttempt {
 }
 
 export class ProviderError extends Error {
-  constructor(message: string, public readonly status?: number, public readonly code?: 'timeout' | 'circuit-open' | 'cancelled' | 'rate-limit' | 'server-error', public readonly retryAfterMs?: number) { super(message) }
+  constructor(message: string, public readonly status?: number, public readonly code?: 'timeout' | 'circuit-open' | 'cancelled' | 'rate-limit' | 'server-error' | 'authentication' | 'prompt-blocked' | 'safety-block' | 'candidate-empty' | 'truncated' | 'invalid-json' | 'invalid-response' | 'invalid-config', public readonly retryAfterMs?: number) { super(message) }
 }
 
 export async function reserveProviderRequest(db: D1Database, now: number, requestsPerMinute: number): Promise<boolean> {
