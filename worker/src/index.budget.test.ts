@@ -70,7 +70,7 @@ describe('presupuesto real del Worker', () => {
     }
   })
 
-  it('el modo solicitudes no interpreta tokens históricos como saldo NVIDIA agotado', async () => {
+  it('no conecta providers ni presupuestos de generación a adaptations/analyze', async () => {
     const { sqlite, database } = sqliteD1()
     const headers = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json' }
     const env: Env = { CLERK_JWT_KEY: 'test-key', ALLOWED_CLERK_IDS: 'user_1', NVIDIA_API_KEY: 'fixture', ENABLE_FLASH: 'true', NVIDIA_ACCOUNTING_MODE: 'requests', DB: database }
@@ -79,7 +79,8 @@ describe('presupuesto real del Worker', () => {
     await handleRequest(new Request('https://worker.test/v1/adaptations/analyze', { method: 'POST', headers: { ...headers, 'Idempotency-Key': 'request-mode-1' }, body: JSON.stringify({ inputs: [analysisInput()] }) }), env, deps)
     sqlite.exec('UPDATE adaptation_budgets SET input_tokens = 1000000, output_tokens = 1000000')
     await handleRequest(new Request('https://worker.test/v1/adaptations/analyze', { method: 'POST', headers: { ...headers, 'Idempotency-Key': 'request-mode-2' }, body: JSON.stringify({ inputs: [{ ...analysisInput(), workoutId: 'next' }] }) }), env, deps)
-    expect(calls).toBe(2)
+    expect(calls).toBe(0)
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM adaptation_budgets').get()).toEqual({ count: 0 })
     sqlite.close()
   })
   it('espacia solicitudes globales de NVIDIA atómicamente entre usuarios e instancias', async () => {
@@ -118,57 +119,57 @@ describe('presupuesto real del Worker', () => {
     expect(changed.status).toBe(409)
   })
 
-  it('devuelve fallback cuando el proveedor supera el límite de salida', async () => {
+  it('devuelve sólo el resultado determinista y no reserva presupuesto de provider', async () => {
     const { sqlite, database } = sqliteD1()
     const input = analysisInput()
     const headers = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json', 'Idempotency-Key': 'budget-test' }
     const env: Env = { CLERK_JWT_KEY: 'test-key', ALLOWED_CLERK_IDS: 'user_1', NVIDIA_API_KEY: 'fake-only', ENABLE_FLASH: 'true', MAX_WEEKLY_OUTPUT_TOKENS: '5000', DB: database }
     const response = await handleRequest(new Request('https://worker.test/v1/adaptations/analyze', { method: 'POST', headers, body: JSON.stringify({ inputs: [input] }) }), env, { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000, generation: { generate: async () => ({ content: '[]', usage: { inputTokens: 100, outputTokens: 6_000 } }) } })
     const body = await response.json() as { provider: string; pendingExplanation: boolean }
-    const budget = sqlite.prepare('SELECT output_tokens, reserved_output_tokens, active_runs FROM adaptation_budgets').get() as { output_tokens: number; reserved_output_tokens: number; active_runs: number }
+    const budget = sqlite.prepare('SELECT output_tokens, reserved_output_tokens, active_runs FROM adaptation_budgets').get()
     sqlite.close()
     expect(response.status).toBe(200)
     expect(body).toMatchObject({ provider: 'deterministic', pendingExplanation: true })
-    expect(budget).toEqual({ output_tokens: 5_000, reserved_output_tokens: 0, active_runs: 0 })
+    expect(budget).toBeUndefined()
   })
 
-  it('cobra la estimación reservada si el proveedor termina sin usage', async () => {
+  it('no cobra usage de provider en adaptations/analyze determinista', async () => {
     const { sqlite, database } = sqliteD1()
     const input = analysisInput()
     const headers = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json', 'Idempotency-Key': 'budget-unknown-usage' }
     const env: Env = { CLERK_JWT_KEY: 'test-key', ALLOWED_CLERK_IDS: 'user_1', NVIDIA_API_KEY: 'fake-only', ENABLE_FLASH: 'true', MAX_WEEKLY_OUTPUT_TOKENS: '5000', DB: database }
     const response = await handleRequest(new Request('https://worker.test/v1/adaptations/analyze', { method: 'POST', headers, body: JSON.stringify({ inputs: [input] }) }), env, { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000, generation: { generate: async () => { throw new Error('timeout') } } })
     const body = await response.json() as { provider: string; pendingExplanation: boolean }
-    const budget = sqlite.prepare('SELECT output_tokens, reserved_output_tokens, active_runs FROM adaptation_budgets').get() as { output_tokens: number; reserved_output_tokens: number; active_runs: number }
+    const budget = sqlite.prepare('SELECT output_tokens, reserved_output_tokens, active_runs FROM adaptation_budgets').get()
     sqlite.close()
     expect(response.status).toBe(200)
     expect(body).toMatchObject({ provider: 'deterministic', pendingExplanation: true })
-    expect(budget).toEqual({ output_tokens: 4_000, reserved_output_tokens: 0, active_runs: 0 })
+    expect(budget).toBeUndefined()
   })
 
-  it('contabiliza ambos intentos sin usage como 8.000 tokens de salida', async () => {
+  it('no contabiliza intentos de provider inexistentes en adaptations/analyze', async () => {
     const { sqlite, database } = sqliteD1()
     const input = analysisInput()
     const headers = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json', 'Idempotency-Key': 'budget-two-unknown' }
     const env: Env = { CLERK_JWT_KEY: 'test-key', ALLOWED_CLERK_IDS: 'user_1', NVIDIA_API_KEY: 'fake-only', ENABLE_FLASH: 'true', ENABLE_PRO: 'true', FLASH_MODEL: 'deepseek-ai/deepseek-v4-flash-0731', MAX_WEEKLY_OUTPUT_TOKENS: '10000', DB: database }
     await handleRequest(new Request('https://worker.test/v1/adaptations/analyze', { method: 'POST', headers, body: JSON.stringify({ inputs: [input] }) }), env, { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000, generation: { generate: async (_prompt, model) => model.includes('flash') ? 'not-json' : (() => { throw new Error('timeout') })() } })
     const budget = sqlite.prepare('SELECT output_tokens, reserved_output_tokens, active_runs FROM adaptation_budgets').get() as { output_tokens: number; reserved_output_tokens: number; active_runs: number }
-    const telemetry = sqlite.prepare('SELECT output_tokens, output_tokens_measured, output_tokens_estimated, usage_incomplete FROM adaptation_telemetry WHERE event_type = \'analysis\'').get() as { output_tokens: number; output_tokens_measured: number | null; output_tokens_estimated: number | null; usage_incomplete: number }
+    const telemetry = sqlite.prepare('SELECT output_tokens, output_tokens_measured, output_tokens_estimated, usage_incomplete FROM adaptation_telemetry WHERE event_type = \'analysis\'').get()
     sqlite.close()
-    expect(budget).toEqual({ output_tokens: 8_000, reserved_output_tokens: 0, active_runs: 0 })
-    expect(telemetry).toMatchObject({ output_tokens: 8_000, output_tokens_measured: null, output_tokens_estimated: 8_000, usage_incomplete: 1 })
+    expect(budget).toBeUndefined()
+    expect(telemetry).toMatchObject({ output_tokens: null, output_tokens_measured: null, output_tokens_estimated: null, usage_incomplete: 0 })
   })
 
-  it('suma el uso Flash medido y estima solo el timeout de Pro', async () => {
+  it('no suma usage de provider en la ruta determinista', async () => {
     const { sqlite, database } = sqliteD1()
     const input = analysisInput()
     const headers = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json', 'Idempotency-Key': 'budget-partial' }
     const env: Env = { CLERK_JWT_KEY: 'test-key', ALLOWED_CLERK_IDS: 'user_1', NVIDIA_API_KEY: 'fake-only', ENABLE_FLASH: 'true', ENABLE_PRO: 'true', FLASH_MODEL: 'deepseek-ai/deepseek-v4-flash-0731', MAX_WEEKLY_OUTPUT_TOKENS: '10000', DB: database }
     await handleRequest(new Request('https://worker.test/v1/adaptations/analyze', { method: 'POST', headers, body: JSON.stringify({ inputs: [input] }) }), env, { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000, generation: { generate: async (_prompt, model) => model.includes('flash') ? { content: 'not-json', usage: { inputTokens: 10, outputTokens: 10 } } : (() => { throw new Error('timeout') })() } })
-    const budget = sqlite.prepare('SELECT output_tokens FROM adaptation_budgets').get() as { output_tokens: number }
-    const telemetry = sqlite.prepare('SELECT output_tokens, output_tokens_measured, output_tokens_estimated, usage_incomplete FROM adaptation_telemetry WHERE event_type = \'analysis\'').get() as { output_tokens: number; output_tokens_measured: number | null; output_tokens_estimated: number | null; usage_incomplete: number }
+    const budget = sqlite.prepare('SELECT output_tokens FROM adaptation_budgets').get()
+    const telemetry = sqlite.prepare('SELECT output_tokens, output_tokens_measured, output_tokens_estimated, usage_incomplete FROM adaptation_telemetry WHERE event_type = \'analysis\'').get()
     sqlite.close()
-    expect(budget.output_tokens).toBe(4_010)
-    expect(telemetry).toMatchObject({ output_tokens: 4_010, output_tokens_measured: 10, output_tokens_estimated: 4_000, usage_incomplete: 1 })
+    expect(budget).toBeUndefined()
+    expect(telemetry).toMatchObject({ output_tokens: null, output_tokens_measured: null, output_tokens_estimated: null, usage_incomplete: 0 })
   })
 })

@@ -61,6 +61,17 @@ describe('adaptation worker', () => {
     expect(body.decisions[0].candidates[0].kind).toBe('maintain')
   })
 
+  it('mantiene adaptations/analyze determinista aunque haya providers configurados', async () => {
+    const previous = [1, 2, 3].map((startedAt) => ({ workoutId: `previous-${startedAt}`, startedAt, exerciseId: 'squat', occurrenceId: 'routine:0:squat', role: 'strength' as const, repRangeMin: 5, repRangeMax: 8, loadIncrementKg: 2.5, plannedSets: 3, sets: [{ type: 'normal' as const, weightKg: 100, reps: 6, completed: true }, { type: 'normal' as const, weightKg: 100, reps: 6, completed: true }, { type: 'normal' as const, weightKg: 100, reps: 6, completed: true }] }))
+    const input = { workoutId: 'current', startedAt: 4, exerciseId: 'squat', occurrenceId: 'routine:0:squat', role: 'strength' as const, repRangeMin: 5, repRangeMax: 8, loadIncrementKg: 2.5, plannedSets: 3, sets: previous[0].sets, previousExposures: previous }
+    let calls = 0
+    const generation = { generate: async () => { calls += 1; throw new Error('adaptations/analyze no debe generar') } }
+    const response = await handleRequest(new Request('https://worker.test/v1/adaptations/analyze', { method: 'POST', headers, body: JSON.stringify({ inputs: [input] }) }), { ...env, NVIDIA_API_KEY: 'configured', ENABLE_FLASH: 'true', ENABLE_PRO: 'true' }, { ...deps, generation })
+    expect(response.status).toBe(200)
+    expect(calls).toBe(0)
+    expect(await response.json()).toMatchObject({ provider: 'deterministic', pendingExplanation: true })
+  })
+
   it('validates embedding dimensions and strict model decisions', () => {
     expect(() => normalizeEmbedding([1, 2])).toThrow(/2048/)
     expect(normalizeEmbedding(new Array(2048).fill(1)).length).toBe(512)

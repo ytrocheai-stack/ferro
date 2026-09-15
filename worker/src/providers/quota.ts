@@ -45,6 +45,18 @@ function pacificDayKey(now: number): string {
 
 export function geminiPacificDayKey(now: number): string { return pacificDayKey(now) }
 
+export function retryAfterMilliseconds(value: string | null, now = Date.now()): number | undefined {
+  const normalized = value?.trim()
+  if (!normalized || !Number.isFinite(now)) return undefined
+  if (/^\d+(?:\.\d+)?$/.test(normalized)) {
+    const milliseconds = Number(normalized) * 1_000
+    return Number.isFinite(milliseconds) && milliseconds >= 0 ? milliseconds : undefined
+  }
+  const date = Date.parse(normalized)
+  if (!Number.isFinite(date)) return undefined
+  return Math.max(0, date - now)
+}
+
 export function estimateGeminiInputTokens(serializedRequest: string): number {
   if (typeof serializedRequest !== 'string') throw new ProviderQuotaError('Request Gemini no serializado', 'invalid-config')
   // La entrada es el JSON completo que se enviará: incluye instrucciones del
@@ -165,6 +177,10 @@ export async function reserveGeminiRequest(db: ProviderDatabase, now: number, es
   return { reserved: true, provider: 'gemini', reservationId, minuteKey, pacificDay, estimatedInputTokens: safeEstimate }
 }
 
+export async function reserveGeminiSerializedRequest(db: ProviderDatabase, now: number, serializedRequest: string, limits: GeminiQuotaLimits, reservationId?: string): Promise<GeminiQuotaReservation> {
+  return reserveGeminiRequest(db, now, estimateGeminiInputTokens(serializedRequest), limits, reservationId)
+}
+
 /** Reconciliación del uso de entrada de una reserva Gemini. */
 export async function reconcileGeminiInputTokens(db: ProviderDatabase, reservation: GeminiQuotaReservation, usageMetadata: unknown, now: number): Promise<{ inputTokens: number; estimated: boolean }> {
   if (!reservation.reserved) throw new ProviderQuotaError('No se puede reconciliar una reserva Gemini no concedida', 'invalid-config')
@@ -193,14 +209,19 @@ export async function reconcileGeminiInputTokens(db: ProviderDatabase, reservati
           updated_at = ?
       WHERE id = 1 AND EXISTS (SELECT 1 FROM gemini_quota_reconciliations WHERE reservation_id = ? AND state_applied = 0)`)
       .bind(reservation.minuteKey, reservation.reservationId, reservation.reservationId, reservation.reservationId, reservation.reservationId, reservation.reservationId, now, reservation.reservationId),
-    db.prepare(`UPDATE gemini_quota_reconciliations SET state_applied = 1, state_applied_at = ? WHERE reservation_id = ? AND state_applied = 0`)
+    db.prepare(`UPDATE gemini_quota_reconciliations
+      SET state_applied = 1, state_applied_at = ?
+      WHERE reservation_id = ? AND state_applied = 0
+        AND EXISTS (SELECT 1 FROM gemini_quota_state WHERE id = 1)`)
       .bind(now, reservation.reservationId),
   ]
   if (typeof db.batch !== 'function') {
     await statements[0].run()
     throw new ProviderQuotaError('D1.batch no está disponible; reconciliación queda pendiente', 'database')
   }
-  await db.batch(statements)
+  const results = await db.batch(statements)
+  if (!changed(results[1])) throw new ProviderQuotaError('Estado de cuota Gemini ausente; reconciliación pendiente de reintento', 'database')
+  if (!changed(results[2])) throw new ProviderQuotaError('Reconciliación Gemini pendiente de aplicar', 'database')
   const completed = await db.prepare('SELECT measured_input_tokens, usage_incomplete, state_applied FROM gemini_quota_reconciliations WHERE reservation_id = ?').bind(reservation.reservationId).first<ReconciliationRow>()
   if (!completed || completed.state_applied !== 1) throw new ProviderQuotaError('Reconciliación Gemini pendiente de aplicar', 'database')
   return { inputTokens: completed.measured_input_tokens ?? reservation.estimatedInputTokens, estimated: completed.usage_incomplete === 1 }

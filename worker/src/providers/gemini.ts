@@ -1,5 +1,6 @@
 import { agentWireJsonSchema, agentWireResponseSchema } from '../../../packages/adaptation-core/src/agent'
 import { ProviderError, type GenerationProvider, type GenerationResult } from '../index'
+import { retryAfterMilliseconds, type GeminiQuotaReservation } from './quota'
 
 export const GEMINI_MODEL = 'gemini-3.6-flash' as const
 export const GEMINI_GENERATE_CONTENT_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
@@ -63,7 +64,10 @@ export interface GeminiCircuitBreaker {
   failure(): void
 }
 
-type RequestGate = (signal: AbortSignal) => Promise<void>
+export interface GeminiRequestGate {
+  (signal: AbortSignal, serializedRequest: string): Promise<GeminiQuotaReservation | undefined>
+  reconcile?: (reservation: GeminiQuotaReservation, usageMetadata: unknown) => Promise<void>
+}
 
 function safeTokenCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
@@ -82,10 +86,7 @@ export function normalizeGeminiUsageMetadata(value: unknown): GeminiUsageMetadat
 }
 
 function retryAfterMs(headers: Headers): number | undefined {
-  const value = headers.get('Retry-After')
-  if (!value) return undefined
-  const seconds = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) * 1_000 : Date.parse(value) - Date.now()
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined
+  return retryAfterMilliseconds(headers.get('Retry-After'))
 }
 
 function httpError(response: Response): ProviderError {
@@ -169,7 +170,7 @@ export class GeminiGenerationProvider implements GenerationProvider {
     private readonly apiKey: string,
     private readonly fetcher: typeof fetch = fetch,
     private readonly breaker?: GeminiCircuitBreaker,
-    private readonly requestGate?: RequestGate,
+    private readonly requestGate?: GeminiRequestGate,
     private readonly systemPrompt = DEFAULT_SYSTEM_PROMPT,
     private readonly timeoutMs = GEMINI_CALL_TIMEOUT_MS,
   ) {}
@@ -181,23 +182,26 @@ export class GeminiGenerationProvider implements GenerationProvider {
 
     this.breaker?.beforeRequest()
     try {
+      let reservation: GeminiQuotaReservation | undefined
       const payload = await withGeminiDeadline(async (innerSignal) => {
-        await this.requestGate?.(innerSignal)
+        const request = {
+          systemInstruction: { parts: [{ text: this.systemPrompt }] },
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            candidateCount: 1,
+            maxOutputTokens: GEMINI_OUTPUT_TOKENS,
+            responseMimeType: 'application/json',
+            responseJsonSchema: geminiResponseJsonSchema,
+          },
+        }
+        const serializedRequest = JSON.stringify(request)
+        reservation = await this.requestGate?.(innerSignal, serializedRequest)
         let response: Response
         try {
           response = await this.fetcher(GEMINI_GENERATE_CONTENT_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
-            body: JSON.stringify({
-              systemInstruction: { parts: [{ text: this.systemPrompt }] },
-              contents: [{ role: 'user', parts: [{ text: prompt }] }],
-              generationConfig: {
-                candidateCount: 1,
-                maxOutputTokens: GEMINI_OUTPUT_TOKENS,
-                responseMimeType: 'application/json',
-                responseJsonSchema: geminiResponseJsonSchema,
-              },
-            }),
+            body: serializedRequest,
             signal: innerSignal,
           })
         } catch (cause) {
@@ -212,6 +216,7 @@ export class GeminiGenerationProvider implements GenerationProvider {
         }
       }, this.timeoutMs, signal)
       const result = parseCandidate(payload)
+      if (reservation && this.requestGate?.reconcile) await this.requestGate.reconcile(reservation, result.usageMetadata)
       this.breaker?.success()
       return result
     } catch (cause) {

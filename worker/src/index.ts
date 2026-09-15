@@ -1,5 +1,5 @@
 import { COACH_MODELS, DEEPSEEK_FLASH_MODEL, generationCapabilities, generationParameters, KIMI_MODEL } from '../../packages/corpus-pipeline/src/generation'
-import { deferNvidiaRequest, reserveNvidiaRequest, waitForNvidiaRequest } from './providers/quota'
+import { deferNvidiaRequest, reconcileGeminiInputTokens, reserveGeminiSerializedRequest, reserveNvidiaRequest, retryAfterMilliseconds, waitForNvidiaRequest, type GeminiQuotaReservation } from './providers/quota'
 import { enrichWithSourceSummaries } from '../../packages/corpus-retrieval/src/summary-context.mjs'
 import { verifyToken } from '@clerk/backend'
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers'
@@ -10,6 +10,9 @@ import { AGENT_INSTRUCTION_VERSION, agentWireResponseSchema, buildAgentInstructi
 import { SafeDecisionExplanationParser } from '../../packages/adaptation-core/src/streaming'
 import { buildVectorizeFilter } from '../../packages/corpus-retrieval/src/index'
 import { corpusMetadataKey, corpusNamespace, vectorPhysicalId } from './rag'
+import { acquireProviderCircuit, recordProviderFailure, recordProviderSuccess } from './providers/circuit'
+import { GeminiGenerationProvider, GEMINI_MODEL } from './providers/gemini'
+import type { ProviderName } from './providers/types'
 
 export interface D1Result { success?: boolean; results?: Record<string, unknown>[]; meta?: { changes?: number } }
 export interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = Record<string, unknown>>(): Promise<T | null>; all<T = Record<string, unknown>>(): Promise<{ results: T[] }>; run(): Promise<D1Result> }
@@ -28,13 +31,22 @@ export interface Env {
   ALLOWED_CLERK_IDS?: string
   ALLOWED_ORIGINS?: string
   NVIDIA_API_KEY?: string
+  NVIDIA_MODEL?: string
   NVIDIA_REQUESTS_PER_MINUTE?: string
   NVIDIA_ACCOUNTING_MODE?: string
+  GEMINI_API_KEY?: string
+  GEMINI_MODEL?: string
+  GEMINI_REQUESTS_PER_MINUTE?: string
+  GEMINI_INPUT_TOKENS_PER_MINUTE?: string
+  GEMINI_REQUESTS_PER_DAY?: string
+  COACH_PROVIDER_ORDER?: string
   FLASH_MODEL?: string
   PRO_MODEL?: string
   EMBEDDING_MODEL?: string
   ENABLE_EMBEDDINGS?: string
   ENABLE_FLASH?: string
+  ENABLE_GEMINI?: string
+  ENABLE_NVIDIA?: string
   ENABLE_COACH_STREAMING?: string
   ENABLE_PRO?: string
   ENABLE_RERANKING?: string
@@ -61,6 +73,7 @@ export interface WorkerDependencies {
   embedding?: EmbeddingProvider
   retriever?: Retriever
   generation?: GenerationProvider
+  generationProviders?: Partial<Record<ProviderName, GenerationProvider>>
   metadata?: Map<string, { source: string; evidenceLevel: number; text: string; sourceId?: string; chunkId?: string; location?: string; citation?: AnalysisSource }>
   workflow?: WorkflowBinding
   onCoachExplanation?: (runId: string, explanation: string) => void | Promise<void>
@@ -157,51 +170,19 @@ function productionConfigError(env: Env): string | undefined {
 }
 
 interface BudgetLimits { inputTokens: number; outputTokens: number; concurrent: number }
-interface BudgetLease { week: string; inputEstimate: number; outputEstimate: number }
-const DEFAULT_BUDGET_LIMITS: BudgetLimits = { inputTokens: 250_000, outputTokens: 50_000, concurrent: 2 }
 const OUTPUT_TOKENS_PER_ATTEMPT = 4_000
 function estimatePromptTokens(prompt: string): number { return Math.max(1, Math.ceil(new TextEncoder().encode(prompt).byteLength / 4)) }
 function positiveLimit(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback
 }
+const DEFAULT_BUDGET_LIMITS: BudgetLimits = { inputTokens: 250_000, outputTokens: 50_000, concurrent: 2 }
 function budgetLimits(env: Env): BudgetLimits {
-  // Optional application caps remain distinct from NVIDIA's request rate.
   const requests = env.NVIDIA_ACCOUNTING_MODE === 'requests'
   return { inputTokens: positiveLimit(env.MAX_WEEKLY_INPUT_TOKENS, requests ? Number.MAX_SAFE_INTEGER : DEFAULT_BUDGET_LIMITS.inputTokens), outputTokens: positiveLimit(env.MAX_WEEKLY_OUTPUT_TOKENS, requests ? Number.MAX_SAFE_INTEGER : DEFAULT_BUDGET_LIMITS.outputTokens), concurrent: positiveLimit(env.MAX_CONCURRENT_ANALYSES, DEFAULT_BUDGET_LIMITS.concurrent) }
 }
-async function reserveBudget(db: D1Database | undefined, userId: string, now: number, inputEstimate: number, outputEstimate: number, limits: BudgetLimits): Promise<BudgetLease | undefined> {
-  if (!db) return undefined
-  const week = isoWeekKey(now)
-  await db.prepare('INSERT OR IGNORE INTO adaptation_budgets (user_hash, iso_week, input_tokens, output_tokens, reserved_input_tokens, reserved_output_tokens, active_runs) VALUES (?, ?, 0, 0, 0, 0, 0)').bind(userId, week).run()
-  const result = await db.prepare('UPDATE adaptation_budgets SET reserved_input_tokens = reserved_input_tokens + ?, reserved_output_tokens = reserved_output_tokens + ?, active_runs = active_runs + 1 WHERE user_hash = ? AND iso_week = ? AND active_runs < ? AND input_tokens + reserved_input_tokens + ? <= ? AND output_tokens + reserved_output_tokens + ? <= ?').bind(inputEstimate, outputEstimate, userId, week, limits.concurrent, inputEstimate, limits.inputTokens, outputEstimate, limits.outputTokens).run()
-  if (result.meta?.changes !== 1) return undefined
-  // Contador heredado únicamente informativo: no limita llamadas y permite
-  // observar migraciones antiguas mientras se adopta el presupuesto de tokens.
-  await db.prepare('INSERT OR IGNORE INTO adaptation_quotas (user_hash, iso_week, analysis_count) VALUES (?, ?, 0)').bind(userId, week).run()
-  await db.prepare('UPDATE adaptation_quotas SET analysis_count = analysis_count + 1 WHERE user_hash = ? AND iso_week = ?').bind(userId, week).run()
-  return { week, inputEstimate, outputEstimate }
-}
-async function expandBudget(db: D1Database | undefined, userId: string, lease: BudgetLease | undefined, inputEstimate: number, outputEstimate: number, limits: BudgetLimits): Promise<boolean> {
-  if (!db || !lease) return true
-  const result = await db.prepare('UPDATE adaptation_budgets SET reserved_input_tokens = reserved_input_tokens + ?, reserved_output_tokens = reserved_output_tokens + ? WHERE user_hash = ? AND iso_week = ? AND input_tokens + reserved_input_tokens + ? <= ? AND output_tokens + reserved_output_tokens + ? <= ?').bind(inputEstimate, outputEstimate, userId, lease.week, inputEstimate, limits.inputTokens, outputEstimate, limits.outputTokens).run()
-  if (result.meta?.changes !== 1) return false
-  lease.inputEstimate += inputEstimate
-  lease.outputEstimate += outputEstimate
-  return true
-}
 export function budgetUsageWithinLimit(inputTokens: number, outputTokens: number, limits: BudgetLimits): boolean {
   return Number.isFinite(inputTokens) && Number.isFinite(outputTokens) && inputTokens >= 0 && outputTokens >= 0 && inputTokens <= limits.inputTokens && outputTokens <= limits.outputTokens
-}
-
-async function settleBudget(db: D1Database | undefined, userId: string, lease: BudgetLease | undefined, inputTokens: number, outputTokens: number, limits: BudgetLimits): Promise<boolean> {
-  if (!db || !lease) return true
-  const settled = await db.prepare('UPDATE adaptation_budgets SET reserved_input_tokens = CASE WHEN reserved_input_tokens >= ? THEN reserved_input_tokens - ? ELSE 0 END, reserved_output_tokens = CASE WHEN reserved_output_tokens >= ? THEN reserved_output_tokens - ? ELSE 0 END, input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, active_runs = CASE WHEN active_runs > 0 THEN active_runs - 1 ELSE 0 END WHERE user_hash = ? AND iso_week = ? AND input_tokens + reserved_input_tokens - ? + ? <= ? AND output_tokens + reserved_output_tokens - ? + ? <= ?').bind(lease.inputEstimate, lease.inputEstimate, lease.outputEstimate, lease.outputEstimate, inputTokens, outputTokens, userId, lease.week, lease.inputEstimate, inputTokens, limits.inputTokens, lease.outputEstimate, outputTokens, limits.outputTokens).run()
-  if (settled.meta?.changes === 1) return true
-  // El proveedor pudo haber consumido más de la reserva. Se carga hasta el
-  // límite y se libera la reserva, pero la respuesta no se acepta como IA.
-  await db.prepare('UPDATE adaptation_budgets SET reserved_input_tokens = CASE WHEN reserved_input_tokens >= ? THEN reserved_input_tokens - ? ELSE 0 END, reserved_output_tokens = CASE WHEN reserved_output_tokens >= ? THEN reserved_output_tokens - ? ELSE 0 END, input_tokens = MIN(?, input_tokens + ?), output_tokens = MIN(?, output_tokens + ?), active_runs = CASE WHEN active_runs > 0 THEN active_runs - 1 ELSE 0 END WHERE user_hash = ? AND iso_week = ?').bind(lease.inputEstimate, lease.inputEstimate, lease.outputEstimate, lease.outputEstimate, limits.inputTokens, inputTokens, limits.outputTokens, outputTokens, userId, lease.week).run()
-  return false
 }
 export async function pruneTelemetry(db: D1Database | undefined, now: number): Promise<void> {
   if (!db) return
@@ -237,7 +218,7 @@ export interface GenerationAttempt {
 }
 
 export class ProviderError extends Error {
-  constructor(message: string, public readonly status?: number, public readonly code?: 'timeout' | 'circuit-open' | 'cancelled' | 'rate-limit' | 'server-error' | 'authentication' | 'prompt-blocked' | 'safety-block' | 'candidate-empty' | 'truncated' | 'invalid-json' | 'invalid-response' | 'invalid-config', public readonly retryAfterMs?: number) { super(message) }
+  constructor(message: string, public readonly status?: number, public readonly code?: 'timeout' | 'circuit-open' | 'cancelled' | 'rate-limit' | 'server-error' | 'authentication' | 'prompt-blocked' | 'safety-block' | 'candidate-empty' | 'truncated' | 'invalid-json' | 'invalid-response' | 'invalid-config' | 'provider-unavailable', public readonly retryAfterMs?: number) { super(message) }
 }
 
 export async function reserveProviderRequest(db: D1Database, now: number, requestsPerMinute: number): Promise<boolean> {
@@ -257,6 +238,36 @@ export function providerRequestGate(env: Env): RequestGate {
   gate.defer = async retryAfterMs => {
     if (!env.DB) throw new ProviderError('D1 requerido para coordinar solicitudes NVIDIA')
     await deferNvidiaRequest(env.DB, Date.now(), retryAfterMs)
+  }
+  return gate
+}
+
+function requiredPositiveLimit(value: string | undefined, name: string): number {
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 1) throw new ProviderError(`Configuración de cuota inválida: ${name}`, undefined, 'invalid-config')
+  return parsed
+}
+
+export interface GeminiRequestGate {
+  (signal: AbortSignal, serializedRequest: string): Promise<GeminiQuotaReservation | undefined>
+  reconcile?: (reservation: GeminiQuotaReservation, usageMetadata: unknown) => Promise<void>
+}
+
+export function geminiRequestGate(env: Env, clock = Date.now): GeminiRequestGate {
+  const gate = (async (signal: AbortSignal, serializedRequest: string) => {
+    if (signal.aborted) throw new ProviderError('Solicitud cancelada', undefined, 'cancelled')
+    if (!env.DB) throw new ProviderError('D1 requerido para coordinar solicitudes Gemini', undefined, 'invalid-config')
+    const reservation = await reserveGeminiSerializedRequest(env.DB, clock(), serializedRequest, {
+      requestsPerMinute: requiredPositiveLimit(env.GEMINI_REQUESTS_PER_MINUTE, 'GEMINI_REQUESTS_PER_MINUTE'),
+      inputTokensPerMinute: requiredPositiveLimit(env.GEMINI_INPUT_TOKENS_PER_MINUTE, 'GEMINI_INPUT_TOKENS_PER_MINUTE'),
+      requestsPerDay: requiredPositiveLimit(env.GEMINI_REQUESTS_PER_DAY, 'GEMINI_REQUESTS_PER_DAY'),
+    })
+    if (!reservation.reserved) throw new ProviderError('Cuota Gemini agotada', 429, 'rate-limit')
+    return reservation
+  }) as GeminiRequestGate
+  gate.reconcile = async (reservation, usageMetadata) => {
+    if (!env.DB) throw new ProviderError('D1 requerido para reconciliar Gemini', undefined, 'invalid-config')
+    await reconcileGeminiInputTokens(env.DB, reservation, usageMetadata, clock())
   }
   return gate
 }
@@ -301,15 +312,8 @@ async function providerFetchJson<T>(fetcher: typeof fetch, url: string, init: Re
   }
 }
 
-function retryAfterMilliseconds(headers: Headers): number | undefined {
-  const value = headers.get('Retry-After')?.trim()
-  if (!value) return undefined
-  const milliseconds = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) * 1_000 : Date.parse(value) - Date.now()
-  return Number.isFinite(milliseconds) && milliseconds >= 0 ? milliseconds : undefined
-}
-
 async function providerHttpError(response: Response, requestGate?: RequestGate): Promise<ProviderError> {
-  const retryAfterMs = retryAfterMilliseconds(response.headers)
+  const retryAfterMs = retryAfterMilliseconds(response.headers.get('Retry-After'))
   if (response.status === 429 && retryAfterMs !== undefined) await requestGate?.defer?.(retryAfterMs)
   return new ProviderError(`Proveedor respondió ${response.status}`, response.status, response.status === 429 ? 'rate-limit' : response.status >= 500 ? 'server-error' : undefined, retryAfterMs)
 }
@@ -376,12 +380,6 @@ export class NvidiaGenerationProvider implements GenerationProvider {
   }
 }
 
-let isolateGeneration: { env: Env; provider: NvidiaGenerationProvider } | undefined
-function defaultGenerationProvider(env: Env): GenerationProvider | undefined {
-  if (!env.NVIDIA_API_KEY) return undefined
-  if (!isolateGeneration || isolateGeneration.env !== env) isolateGeneration = { env, provider: new NvidiaGenerationProvider(env.NVIDIA_API_KEY, fetch, undefined, providerRequestGate(env)) }
-  return isolateGeneration.provider
-}
 let isolateEmbedding: { env: Env; provider: NvidiaEmbeddingProvider } | undefined
 function defaultEmbeddingProvider(env: Env): EmbeddingProvider | undefined {
   if (!env.NVIDIA_API_KEY) return undefined
@@ -441,7 +439,11 @@ export function normalizeGenerationUsage(value: unknown): GenerationUsage {
     ...(validTokenCount(usage.outputTokens) ? { outputTokens: usage.outputTokens } : {}),
   }
 }
-function generationResult(value: GenerationResult | string): GenerationResult { return typeof value === 'string' ? { content: value, usage: {} } : { content: value.content, usage: normalizeGenerationUsage(value.usage) } }
+function generationResult(value: GenerationResult | string): GenerationResult {
+  if (typeof value === 'string') return { content: value, usage: {} }
+  if (!value || typeof value !== 'object' || typeof value.content !== 'string') throw new ProviderError('Respuesta del proveedor fuera del contrato', undefined, 'invalid-response')
+  return { content: value.content, usage: normalizeGenerationUsage(value.usage) }
+}
 function providerFailure(cause: unknown): { code?: string; status?: number } { return { code: cause instanceof ProviderError ? (cause.code ?? (cause.status && cause.status >= 500 ? 'server-error' : cause.status === 429 ? 'rate-limit' : 'provider-error')) : 'provider-error', status: cause instanceof ProviderError ? cause.status : undefined } }
 function classifyCoachGenerationFailure(cause: unknown, now: number, deadlineAt: number): { runCode: string; attemptStatus: CoachAttemptRow['status']; retryAfterMs?: number } {
   const provider = providerFailure(cause)
@@ -618,11 +620,6 @@ export async function reserveIdempotency(db: D1Database | undefined, userHash: s
   return current ? { ...current, owner: inserted.meta?.changes === 1 } : null
 }
 
-async function releaseIdempotency(db: D1Database | undefined, userHash: string, key: string, analysisId: string): Promise<void> {
-  if (!db || !key) return
-  await db.prepare('DELETE FROM adaptation_idempotency WHERE user_hash = ? AND idem_key = ? AND analysis_id = ?').bind(userHash, key, analysisId).run()
-}
-
 function configuredExpectedCount(value: string | undefined): number | undefined {
   if (value === undefined) return undefined
   const count = Number(value)
@@ -699,6 +696,25 @@ interface CoachAttemptRow {
   retry_after_ms?: number | null
 }
 
+export interface CoachGenerationRouterOptions {
+  db: D1Database
+  runId: string
+  order: ProviderName[]
+  providers: Partial<Record<ProviderName, GenerationProvider>>
+  models: Record<ProviderName, string>
+  enabled: Record<ProviderName, boolean>
+  now?: () => number
+  fingerprintKey?: string
+  allowStreaming?: boolean
+  onStreamExplanation?: (text: string) => void
+}
+
+export interface CoachGenerationResponse extends GenerationResult {
+  provider: ProviderName
+  model: string
+  cached?: boolean
+}
+
 interface CoachSnapshotRow {
   run_id: string
   sequence: number
@@ -714,26 +730,160 @@ function parseCoachRowJson<T>(value: string | null | undefined): T | undefined {
   try { return JSON.parse(value) as T } catch { return undefined }
 }
 
-function coachUnavailable(reason: string): AgentDecision {
-  return { kind: 'unavailable', explanation: 'El coach no está disponible para esta ejecución.', observations: [{ text: reason, kind: 'limitation', source: 'orchestrator' }], evidence: [], reason }
+interface CoachAttemptReservation {
+  row: CoachAttemptRow
+  action: 'send' | 'succeeded' | 'skip' | 'uncertain'
 }
 
-async function reserveCoachAttempt(db: D1Database, runId: string, attemptNo: number, fingerprint: string, model: string, now: number): Promise<CoachAttemptRow> {
-  const existing = await db.prepare('SELECT * FROM coach_run_attempts WHERE run_id = ? AND attempt_no = ?').bind(runId, attemptNo).first<CoachAttemptRow>()
+function providerErrorFrom(cause: unknown): ProviderError {
+  if (cause instanceof ProviderError) return cause
+  return new ProviderError('Fallo de proveedor', undefined, 'server-error')
+}
+
+function providerAttemptStatus(cause: ProviderError): CoachAttemptRow['status'] {
+  if (cause.code === 'cancelled' || cause.code === 'circuit-open' || cause.code === 'rate-limit' || cause.code === 'authentication' || cause.code === 'invalid-config') return 'failed'
+  if (cause.code === 'timeout' || (cause.code === 'server-error' && cause.status === undefined)) return 'uncertain'
+  return 'failed'
+}
+
+async function reserveCoachAttempt(db: D1Database, runId: string, logicalCallNo: number, provider: ProviderName, providerPosition: number, fingerprint: string, model: string, now: number): Promise<CoachAttemptReservation> {
+  const attemptNo = (logicalCallNo - 1) * 2 + providerPosition + 1
+  let existing = await db.prepare('SELECT * FROM coach_run_attempts WHERE run_id = ? AND attempt_no = ?').bind(runId, attemptNo).first<CoachAttemptRow>()
   if (existing) {
-    if (existing.fingerprint !== fingerprint || existing.model !== model) throw new Error('attempt-fingerprint-mismatch')
-    if (existing.status === 'succeeded' && existing.response_json) return existing
-    throw new Error('uncertain-outcome')
+    if (existing.fingerprint !== fingerprint || existing.model !== model || (existing.provider && existing.provider !== provider) || (existing.logical_call_no && existing.logical_call_no !== logicalCallNo)) throw new Error('attempt-fingerprint-mismatch')
+    if (existing.status === 'succeeded' && existing.response_json) return { row: existing, action: 'succeeded' }
+    if (existing.status === 'failed') return { row: existing, action: 'skip' }
+    return { row: existing, action: 'uncertain' }
   }
   const id = `${runId}:attempt:${attemptNo}`
-  await db.prepare('INSERT INTO coach_run_attempts (id, run_id, attempt_no, fingerprint, model, provider, logical_call_no, dispatch_status, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, \'nvidia\', ?, \'reserved\', \'reserved\', ?, ?)').bind(id, runId, attemptNo, fingerprint, model, attemptNo, now, now).run()
+  try {
+    await db.prepare('INSERT INTO coach_run_attempts (id, run_id, attempt_no, fingerprint, model, provider, logical_call_no, dispatch_status, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(id, runId, attemptNo, fingerprint, model, provider, logicalCallNo, 'reserved', 'reserved', now, now).run()
+  } catch (cause) {
+    if (!String(cause).toLowerCase().includes('unique')) throw cause
+    existing = await db.prepare('SELECT * FROM coach_run_attempts WHERE run_id = ? AND attempt_no = ?').bind(runId, attemptNo).first<CoachAttemptRow>()
+    if (!existing) throw cause
+    if (existing.fingerprint !== fingerprint || existing.model !== model || (existing.provider && existing.provider !== provider)) throw new Error('attempt-fingerprint-mismatch', { cause })
+    if (existing.status === 'succeeded' && existing.response_json) return { row: existing, action: 'succeeded' }
+    if (existing.status === 'failed') return { row: existing, action: 'skip' }
+    return { row: existing, action: 'uncertain' }
+  }
   await db.prepare("UPDATE coach_run_attempts SET status = 'sent', dispatch_status = 'sent', updated_at = ? WHERE id = ? AND status = 'reserved'").bind(now, id).run()
-  await db.prepare('UPDATE coach_runs SET attempt_count = ?, updated_at = ? WHERE id = ?').bind(attemptNo, now, runId).run()
-  return { id, run_id: runId, attempt_no: attemptNo, fingerprint, model, status: 'sent' }
+  await db.prepare('UPDATE coach_runs SET attempt_count = MAX(attempt_count, ?), updated_at = ? WHERE id = ?').bind(attemptNo, now, runId).run()
+  return { row: { id, run_id: runId, attempt_no: attemptNo, fingerprint, model, provider, logical_call_no: logicalCallNo, dispatch_status: 'sent', status: 'sent' }, action: 'send' }
 }
 
 async function finishCoachAttempt(db: D1Database, attemptId: string, update: { status: CoachAttemptRow['status']; responseJson?: string; usageJson?: string; errorCode?: string; retryAfterMs?: number }, now: number): Promise<void> {
   await db.prepare('UPDATE coach_run_attempts SET status = ?, dispatch_status = ?, response_json = ?, usage_json = ?, error_code = ?, retry_after_ms = ?, updated_at = ? WHERE id = ?').bind(update.status, update.status, update.responseJson ?? null, update.usageJson ?? null, update.errorCode ?? null, update.retryAfterMs ?? null, now, attemptId).run()
+}
+
+export function parseCoachProviderOrder(value: string | undefined): ProviderName[] {
+  return [...new Set(configuredList(value ?? 'gemini,nvidia').filter((item): item is ProviderName => item === 'gemini' || item === 'nvidia'))]
+}
+
+export class CoachGenerationRouter {
+  private readonly clock: () => number
+  private readonly fingerprintKey: string
+
+  constructor(private readonly options: CoachGenerationRouterOptions) {
+    this.clock = options.now ?? Date.now
+    this.fingerprintKey = options.fingerprintKey ?? 'coach-router'
+  }
+
+  private async fingerprint(prompt: string, logicalCallNo: number, provider: ProviderName, model: string): Promise<string> {
+    return hmac(canonicalJson({ runId: this.options.runId, logicalCallNo, provider, model, prompt }), this.fingerprintKey)
+  }
+
+  private async recordSkipped(provider: ProviderName, position: number, logicalCallNo: number, prompt: string, error: ProviderError): Promise<void> {
+    const model = this.options.models[provider]
+    const reservation = await reserveCoachAttempt(this.options.db, this.options.runId, logicalCallNo, provider, position, await this.fingerprint(prompt, logicalCallNo, provider, model), model, this.clock())
+    if (reservation.action === 'send') await finishCoachAttempt(this.options.db, reservation.row.id, { status: 'failed', errorCode: error.code ?? 'provider-error', retryAfterMs: error.retryAfterMs }, this.clock())
+    else if (reservation.action === 'uncertain') throw new Error('uncertain-outcome')
+  }
+
+  private async tryProvider(provider: ProviderName, position: number, logicalCallNo: number, prompt: string, signal: AbortSignal | undefined, validate: (content: string) => unknown, requireHalfOpen: boolean): Promise<CoachGenerationResponse | undefined> {
+    if (signal?.aborted) throw new ProviderError('Solicitud cancelada', undefined, 'cancelled')
+    const model = this.options.models[provider]
+    const circuit = await acquireProviderCircuit(this.options.db, provider, this.clock())
+    if (circuit.permission === 'open' || (requireHalfOpen && circuit.permission !== 'half-open')) {
+      await this.recordSkipped(provider, position, logicalCallNo, prompt, new ProviderError('Circuito del proveedor abierto', undefined, 'circuit-open', circuit.retryAt === undefined ? undefined : Math.max(0, circuit.retryAt - this.clock())))
+      return undefined
+    }
+    if (!this.options.enabled[provider] || !this.options.providers[provider]) {
+      await this.recordSkipped(provider, position, logicalCallNo, prompt, new ProviderError('Proveedor no configurado', undefined, 'invalid-config'))
+      return undefined
+    }
+    const fingerprint = await this.fingerprint(prompt, logicalCallNo, provider, model)
+    const reservation = await reserveCoachAttempt(this.options.db, this.options.runId, logicalCallNo, provider, position, fingerprint, model, this.clock())
+    if (reservation.action === 'succeeded') {
+      const cached = parseCoachRowJson<GenerationResult>(reservation.row.response_json)
+      if (!cached?.content) throw new Error('uncertain-outcome')
+      validate(cached.content)
+      return { ...cached, provider, model, cached: true }
+    }
+    if (reservation.action === 'uncertain') throw new Error('uncertain-outcome')
+    if (reservation.action === 'skip') return undefined
+    const leaseId = circuit.leaseId
+    try {
+      if (signal?.aborted) throw new ProviderError('Solicitud cancelada', undefined, 'cancelled')
+      const stream = this.options.allowStreaming && typeof this.options.providers[provider]!.generateStream === 'function'
+      const result = generationResult(await (stream
+        ? this.options.providers[provider]!.generateStream!(prompt, model, signal, text => this.options.onStreamExplanation?.(text))
+        : this.options.providers[provider]!.generate(prompt, model, signal)))
+      if (signal?.aborted) throw new ProviderError('Solicitud cancelada', undefined, 'cancelled')
+      if (!result.content.trim()) throw new ProviderError('Respuesta del generador vacía', undefined, 'candidate-empty')
+      try { validate(result.content) } catch (cause) {
+        if (cause instanceof ProviderError) throw cause
+        throw new ProviderError('Respuesta del proveedor fuera del contrato del Coach', undefined, 'invalid-response')
+      }
+      await recordProviderSuccess(this.options.db, provider, this.clock(), leaseId)
+      await finishCoachAttempt(this.options.db, reservation.row.id, { status: 'succeeded', responseJson: JSON.stringify(result), usageJson: JSON.stringify(result.usage ?? {}) }, this.clock())
+      return { ...result, provider, model }
+    } catch (cause) {
+      const error = signal?.aborted ? new ProviderError('Solicitud cancelada', undefined, 'cancelled') : providerErrorFrom(cause)
+      await finishCoachAttempt(this.options.db, reservation.row.id, { status: providerAttemptStatus(error), errorCode: error.code ?? 'provider-error', retryAfterMs: error.retryAfterMs }, this.clock())
+      if (error.code !== 'cancelled') await recordProviderFailure(this.options.db, provider, this.clock(), error.retryAfterMs ?? 0, undefined, leaseId)
+      throw error
+    }
+  }
+
+  async generate(prompt: string, logicalCallNo: number, signal: AbortSignal | undefined, validate: (content: string) => unknown): Promise<CoachGenerationResponse> {
+    if (signal?.aborted) throw new ProviderError('Solicitud cancelada', undefined, 'cancelled')
+    const order = this.options.order.length ? this.options.order : parseCoachProviderOrder(undefined)
+    const attempted = new Set<ProviderName>()
+    let firstFailure: ProviderError | undefined
+    let nvidiaFailed = false
+    let geminiNeedsHalfOpen = false
+    for (const [position, provider] of order.entries()) {
+      if (attempted.has(provider)) continue
+      if (signal?.aborted) throw new ProviderError('Solicitud cancelada', undefined, 'cancelled')
+      const requireHalfOpen = provider === 'gemini' && nvidiaFailed
+      try {
+        const result = await this.tryProvider(provider, position, logicalCallNo, prompt, signal, validate, requireHalfOpen)
+        attempted.add(provider)
+        if (result) return result
+        if (provider === 'gemini') geminiNeedsHalfOpen = true
+      } catch (cause) {
+        if (cause instanceof Error && (cause.message === 'uncertain-outcome' || cause.message === 'attempt-fingerprint-mismatch')) throw cause
+        attempted.add(provider)
+        const error = signal?.aborted ? new ProviderError('Solicitud cancelada', undefined, 'cancelled') : providerErrorFrom(cause)
+        firstFailure ??= error
+        if (error.code === 'cancelled') throw error
+        if (provider === 'nvidia') nvidiaFailed = true
+      }
+    }
+    if (nvidiaFailed && geminiNeedsHalfOpen && !attempted.has('gemini')) {
+      const position = Math.max(0, order.indexOf('gemini'))
+      try {
+        const result = await this.tryProvider('gemini', position, logicalCallNo, prompt, signal, validate, true)
+        if (result) return result
+      } catch (cause) {
+        const error = providerErrorFrom(cause)
+        if (error.code === 'cancelled') throw error
+        firstFailure ??= error
+      }
+    }
+    throw firstFailure ?? new ProviderError('Ningún proveedor del Coach está disponible', undefined, 'provider-unavailable')
+  }
 }
 
 function coachRunResponse(row: CoachRunRow, accountId: string): unknown {
@@ -849,7 +999,7 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
   let decision: AgentDecision | undefined
   let streamedExplanation: string | undefined
   let failure: string | undefined
-  let snapshotWrites = Promise.resolve()
+  const snapshotWrites = Promise.resolve()
   const assertActive = async () => {
     const current = await db.prepare('SELECT status, deadline_at FROM coach_runs WHERE id = ?').bind(runId).first<{ status: string; deadline_at: number }>()
     if (!current || current.status !== 'running') throw new Error('cancelled')
@@ -857,9 +1007,22 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
   }
   try {
     const request = coachRunRequestSchema.parse(JSON.parse(row.request_json))
-    const generation = deps.generation ?? (env.NVIDIA_API_KEY ? new NvidiaGenerationProvider(env.NVIDIA_API_KEY, fetch, undefined, providerRequestGate(env), buildAgentInstructions('private-real', { includeContract: false })) : undefined)
-    const model = env.FLASH_MODEL ?? KIMI_MODEL
-    if (!enabled(env.ENABLE_FLASH) || !COACH_MODELS.includes(model) || !generation) decision = coachUnavailable('El modelo del coach no está habilitado o configurado para esta cuenta privada')
+    const instructions = buildAgentInstructions('private-real', { includeContract: false })
+    const providers: Partial<Record<ProviderName, GenerationProvider>> = { ...deps.generationProviders }
+    if (deps.generation && !providers.nvidia) providers.nvidia = deps.generation
+    if (!providers.gemini && env.GEMINI_API_KEY) providers.gemini = new GeminiGenerationProvider(env.GEMINI_API_KEY, fetch, undefined, geminiRequestGate(env), instructions)
+    if (!providers.nvidia && env.NVIDIA_API_KEY) providers.nvidia = new NvidiaGenerationProvider(env.NVIDIA_API_KEY, fetch, undefined, providerRequestGate(env), instructions)
+    const models: Record<ProviderName, string> = {
+      gemini: env.GEMINI_MODEL ?? GEMINI_MODEL,
+      nvidia: env.NVIDIA_MODEL ?? env.FLASH_MODEL ?? DEEPSEEK_FLASH_MODEL,
+    }
+    const enabledProviders: Record<ProviderName, boolean> = {
+      gemini: enabled(env.ENABLE_GEMINI, Boolean(deps.generationProviders?.gemini)),
+      nvidia: enabled(env.ENABLE_NVIDIA, Boolean(deps.generation || deps.generationProviders?.nvidia || env.NVIDIA_API_KEY) && (env.ENABLE_FLASH === undefined || enabled(env.ENABLE_FLASH))),
+    }
+    const providerOrder = parseCoachProviderOrder(env.COACH_PROVIDER_ORDER)
+    const router = new CoachGenerationRouter({ db, runId, order: providerOrder, providers, models, enabled: enabledProviders, now: clock, fingerprintKey: env.PSEUDONYMIZATION_KEY ?? env.CLERK_JWT_KEY, allowStreaming: env.ENVIRONMENT !== 'production' && enabled(env.ENABLE_COACH_STREAMING), onStreamExplanation: text => { streamedExplanation = text } })
+    if (!providerOrder.some(provider => enabledProviders[provider] && providers[provider])) failure = 'coach-provider-unavailable'
     else {
       const population = request.context.snapshot.profile.populationConfirmed ? request.context.snapshot.profile.population : []
       const initial = await step('coach-run-tools-initial', async () => {
@@ -896,34 +1059,25 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
           })
           budgetReady = true
           const response = await step(`coach-run-generation-${number}`, async () => {
-            const fingerprint = await hmac(canonicalJson({ runId, call: number, model, prompt }), env.PSEUDONYMIZATION_KEY ?? env.CLERK_JWT_KEY)
-            const attempt = await reserveCoachAttempt(db, runId, number, fingerprint, model, clock())
-            if (attempt.status === 'succeeded' && attempt.response_json) {
-              const cached = parseCoachRowJson<GenerationResult>(attempt.response_json)
-              if (!cached?.content) throw new Error('uncertain-outcome')
-              return cached
-            }
-            await assertActive()
-            const lease = await db.prepare('SELECT settled FROM coach_budget_leases WHERE run_id = ?').bind(runId).first<{ settled: number }>()
-            if (!lease || lease.settled) throw new Error('coach-budget-exhausted')
-            let response: GenerationResult
-            try {
-              const stream = shouldStreamGeneration(env, model, generation)
-              streamedExplanation = undefined
-              response = generationResult(await withDeadline(inner => stream
-                ? generation.generateStream!(prompt, model, inner, text => {
-                  streamedExplanation = text
-                  snapshotWrites = snapshotWrites.then(() => persistCoachSnapshot(db, runId, text, 'running', clock()).then(() => undefined).catch(() => undefined))
-                })
-                : generation.generate(prompt, model, inner), Math.min(COACH_CALL_TIMEOUT_MS, row.deadline_at - clock()), signal))
+            const cachedAttempt = await db.prepare("SELECT id FROM coach_run_attempts WHERE run_id = ? AND logical_call_no = ? AND status = 'succeeded' LIMIT 1").bind(runId, number).first<{ id: string }>()
+            if (!cachedAttempt) {
               await assertActive()
-            } catch (cause) {
-              const classified = classifyCoachGenerationFailure(cause, clock(), row.deadline_at)
-              await finishCoachAttempt(db, attempt.id, { status: classified.attemptStatus, errorCode: classified.runCode, retryAfterMs: classified.retryAfterMs }, clock())
-              throw new Error(classified.runCode, { cause })
+              const lease = await db.prepare('SELECT settled FROM coach_budget_leases WHERE run_id = ?').bind(runId).first<{ settled: number }>()
+              if (!lease || lease.settled) throw new Error('coach-budget-exhausted')
             }
-            // No se reenvía si falla esta escritura: la reserva queda sent, con resultado desconocido.
-            await finishCoachAttempt(db, attempt.id, { status: 'succeeded', responseJson: JSON.stringify(response), usageJson: JSON.stringify(response.usage ?? {}) }, clock())
+            streamedExplanation = undefined
+            const generate = (inner?: AbortSignal) => router.generate(prompt, number, inner, content => {
+              const wire = agentWireResponseSchema.parse(JSON.parse(content))
+              if (wire.type === 'decision') validateCoachDecision(wire.decision, request, evidence)
+              return wire
+            })
+            // Una respuesta durable ya confirmada sólo necesita rehidratarse:
+            // no debe quedar bloqueada por el deadline original ni abrir otra
+            // ventana de red durante una repetición de persistencia.
+            const response = cachedAttempt
+              ? await generate(signal)
+              : await withDeadline(generate, Math.min(COACH_CALL_TIMEOUT_MS, row.deadline_at - clock()), signal)
+            if (!response.cached) await assertActive()
             return response
           }, true)
           const measured = normalizeGenerationUsage(response.usage)
@@ -1006,7 +1160,8 @@ async function persistActualTerminalSnapshot(db: D1Database, runId: string, now:
   const run = await db.prepare('SELECT status, decision_json, error_code FROM coach_runs WHERE id = ?').bind(runId).first<Pick<CoachRunRow, 'status' | 'decision_json' | 'error_code'>>()
   if (!run || !['completed', 'failed', 'cancelled'].includes(run.status)) return
   const latest = await db.prepare('SELECT text FROM coach_run_snapshots WHERE run_id = ? ORDER BY sequence DESC LIMIT 1').bind(runId).first<{ text?: string }>()
-  await persistCoachSnapshot(db, runId, latest?.text ?? '', run.status, now, true, parseCoachRowJson<AgentDecision>(run.decision_json), run.error_code ?? undefined)
+  const text = run.status === 'completed' ? (latest?.text ?? '') : ''
+  await persistCoachSnapshot(db, runId, text, run.status, now, true, run.status === 'completed' ? parseCoachRowJson<AgentDecision>(run.decision_json) : undefined, run.error_code ?? undefined)
 }
 
 /** Repara ejecuciones interrumpidas sin reenviar solicitudes al proveedor. */
@@ -1223,105 +1378,21 @@ export async function handleRequest(request: Request, env: Env, deps: WorkerDepe
       } catch { /* registros antiguos o dañados: usar el replay determinista compatible */ }
     }
     const replay = analyzeAdaptation(parsed.data.inputs as ExerciseAnalysisInput[])
-    return json(request, { analysisId: previous.analysisId, policyVersion: replay.policyVersion, decisions: replay.decisions, provider: 'deterministic', pendingExplanation: true, idempotent: true }, 200, env)
+    const pendingExplanation = replay.decisions.some((decision) => decision.candidates.some((candidate) => candidate.kind !== 'maintain'))
+    return json(request, { analysisId: previous.analysisId, policyVersion: replay.policyVersion, decisions: replay.decisions, provider: 'deterministic', pendingExplanation, idempotent: true }, 200, env)
   }
-  const limits = budgetLimits(env)
-  let budgetLease: BudgetLease | undefined
-  let promptInputEstimate = Math.max(1, Math.ceil(new TextEncoder().encode(raw).byteLength / 4))
-  let budgetSettled = false
-  let generationAttempts: GenerationAttempt[] = []
   try {
-  const startedAt = Date.now()
-  const analysis = analyzeAdaptation(parsed.data.inputs as ExerciseAnalysisInput[])
-  let decisions = analysis.decisions
-  let provider = 'deterministic'
-  let pendingExplanation = false
-  let responseSources: AnalysisSource[] = []
-  let providerError: { code?: string; status?: number } | undefined
-  const generation = deps.generation ?? defaultGenerationProvider(env)
-  if (generation && enabled(env.ENABLE_FLASH) && env.NVIDIA_API_KEY && analysis.decisions.some((decision) => decision.candidates.some((candidate) => candidate.kind !== 'maintain'))) {
-    const actionable = analysis.decisions.filter((decision) => decision.candidates.some((candidate) => candidate.kind !== 'maintain'))
-    const contexts = await Promise.all(actionable.map(async (decision) => {
-      const input = parsed.data.inputs.find((item) => decision.occurrenceId ? item.occurrenceId === decision.occurrenceId : item.exerciseId === decision.exerciseId)
-      const query = input ? `exercise ${input.exerciseId}; role ${input.role}; range ${input.repRangeMin}-${input.repRangeMax}; candidates ${decision.candidates.map((candidate) => candidate.candidateId).join(',')}` : decision.exerciseId
-      try {
-        const embedding = deps.embedding ?? (enabled(env.ENABLE_EMBEDDINGS) ? defaultEmbeddingProvider(env) : undefined)
-        const retriever = deps.retriever ?? (env.VECTORIZE && env.RAG_INDEX_VERSION ? new VectorizeRetriever(env.VECTORIZE, env.RAG_INDEX_VERSION, env.DB) : undefined)
-        if (!embedding || !retriever) return { decision, chunks: [] as RetrievedChunk[] }
-        const vector = normalizeEmbedding(await embedding.embed(query, 'query'), 512)
-        const matches = await retriever.retrieve(vector, 20, { mode: 'recommendation', population: ['adult-general'] })
-        const metadata = deps.metadata ?? new Map(matches.flatMap((match) => match.metadata ? [{ id: match.id, value: { source: match.metadata.source ?? 'unknown', sourceId: match.metadata.sourceId, chunkId: match.metadata.chunkId ?? match.id, location: match.metadata.location ?? match.metadata.section, evidenceLevel: Number(match.metadata.evidenceLevel ?? 0), text: match.metadata.text ?? '', citation: match.metadata.author && match.metadata.title && match.metadata.url ? { id: match.metadata.chunkId ?? match.id, author: match.metadata.author, title: match.metadata.title, url: match.metadata.url, location: match.metadata.location ?? match.metadata.section, license: match.metadata.license ?? 'desconocida', evidenceLevel: Number(match.metadata.evidenceLevel ?? 0), language: match.metadata.language } : undefined } }] : []).map((item) => [item.id, item.value] as const))
-        return { decision, chunks: selectEvidence(matches, metadata) }
-      } catch { return { decision, chunks: [] as RetrievedChunk[] } }
-    }))
-    const chunks = contexts.flatMap((context) => context.chunks)
-    responseSources = [...new Map(chunks.flatMap((chunk) => chunk.citation ? [[chunk.citation.id, chunk.citation] as const] : [])).values()]
-    const candidates = contexts.flatMap((context) => context.decision.candidates)
-    const prompt = buildRagPrompt(candidates, chunks, 'Devuelve un JSON array, una decisión por ejercicio. Explica únicamente candidatos cerrados y exige evidencia científica para salud o seguridad.')
-    const deterministic = JSON.stringify(actionable.map((decision) => ({ exerciseId: decision.exerciseId, candidateId: decision.fallbackCandidateId, explanation: decision.candidates[0]?.explanation ?? 'Mantén.', citationIds: [], warnings: decision.warnings, confidence: decision.candidates[0]?.confidence ?? 'low', requiresEscalation: false })))
-    const allowedCandidates = new Set(candidates.map((candidate) => candidate.candidateId))
-    const citationChunks = new Set(chunks.map((chunk) => chunk.id))
-    const expectedModelDecisions = actionable.map((decision) => ({
-      exerciseId: decision.exerciseId,
-      occurrenceId: decision.occurrenceId,
-      candidateIds: new Set(decision.candidates.map((candidate) => candidate.candidateId)),
-    }))
-    const validateGenerated = (content: string) => {
-      try {
-        const generated = validateModelDecisionList(JSON.parse(content), allowedCandidates, citationChunks, expectedModelDecisions)
-        return { valid: true, requiresEscalation: generated.some((item) => item.requiresEscalation) }
-      } catch { return { valid: false, requiresEscalation: false } }
-    }
-    promptInputEstimate = estimatePromptTokens(prompt)
-    const reserveAttempt = async (model: 'flash' | 'pro'): Promise<boolean> => {
-      if (model === 'flash') {
-        budgetLease = await reserveBudget(env.DB, userHash, now, promptInputEstimate, OUTPUT_TOKENS_PER_ATTEMPT, limits)
-        return !env.DB || Boolean(budgetLease)
-      }
-      return expandBudget(env.DB, userHash, budgetLease, promptInputEstimate, OUTPUT_TOKENS_PER_ATTEMPT, limits)
-    }
-    const routed = await routeGeneration({ prompt, deterministic, retrievalBelowThreshold: chunks.length === 0, flashConflict: actionable.some((decision) => decision.warnings.length > 0), flashCitationSources: new Set(chunks.map((chunk) => chunk.sourceId ?? chunk.source)).size, escalationEnabled: enabled(env.ENABLE_PRO), validateFlash: validateGenerated, beforeAttempt: reserveAttempt }, generation, { flash: env.FLASH_MODEL ?? KIMI_MODEL, pro: env.PRO_MODEL ?? 'deepseek-ai/deepseek-v4-pro-0813' }, { flash: enabled(env.ENABLE_FLASH), pro: enabled(env.ENABLE_PRO) })
-    generationAttempts = routed.attempts
-    providerError = routed.error
-    if (routed.model === 'deterministic') {
-      pendingExplanation = true
-      decisions = analysis.decisions.map((decision) => decision.candidates.some((candidate) => candidate.kind !== 'maintain') ? { ...decision, selectedCandidateId: decision.fallbackCandidateId } : decision)
-    } else {
-      try {
-        const modelDecisions = validateModelDecisionList(JSON.parse(routed.content), allowedCandidates, citationChunks, expectedModelDecisions)
-        decisions = mergeModelDecisions(analysis.decisions, modelDecisions)
-        provider = routed.model
-      } catch {
-        pendingExplanation = true
-        decisions = analysis.decisions.map((decision) => decision.candidates.some((candidate) => candidate.kind !== 'maintain') ? { ...decision, selectedCandidateId: decision.fallbackCandidateId } : decision)
-      }
-    }
-  }
-  const analysisId = requestedAnalysisId
-  if (env.DB && generationAttempts.some((attempt) => !attempt.sent && attempt.error?.code === 'quota-exhausted') && !budgetLease) {
-    await releaseIdempotency(env.DB, userHash, idemKey, requestedAnalysisId)
-    return error(request, 429, 'Presupuesto de consumo o concurrencia agotado', env)
-  }
-  const accounted = accountGenerationAttempts(generationAttempts, promptInputEstimate, OUTPUT_TOKENS_PER_ATTEMPT)
-  budgetSettled = true
-  const budgetAccepted = await settleBudget(env.DB, userHash, budgetLease, accounted.inputTokens, accounted.outputTokens, limits)
-  if (!budgetAccepted) {
-    provider = 'deterministic'
-    pendingExplanation = true
-    responseSources = []
-    decisions = analysis.decisions.map((decision) => decision.candidates.some((candidate) => candidate.kind !== 'maintain') ? { ...decision, selectedCandidateId: decision.fallbackCandidateId } : decision)
-    providerError = { code: 'quota-exhausted' }
-  }
-  const responseBody = analysisResponseSchema.parse({ analysisId, policyVersion: analysis.policyVersion, corpusVersion: env.RAG_INDEX_VERSION ?? 'none', decisions, sources: responseSources, provider, pendingExplanation })
+    const startedAt = Date.now()
+    const analysis = analyzeAdaptation(parsed.data.inputs as ExerciseAnalysisInput[])
+    const pendingExplanation = analysis.decisions.some((decision) => decision.candidates.some((candidate) => candidate.kind !== 'maintain'))
+    const responseBody = analysisResponseSchema.parse({ analysisId: requestedAnalysisId, policyVersion: analysis.policyVersion, corpusVersion: env.RAG_INDEX_VERSION ?? 'none', decisions: analysis.decisions, sources: [], provider: 'deterministic', pendingExplanation })
+    const analysisId = requestedAnalysisId
   await rememberIdempotency(env.DB, userHash, idemKey, requestHash, analysisId, now, JSON.stringify(responseBody))
   await pruneTelemetry(env.DB, now)
-  await saveTelemetry(env.DB, { userHash, analysisId, type: 'analysis', now, model: provider === 'deterministic' ? 'deterministic' : provider === 'flash' ? (env.FLASH_MODEL ?? KIMI_MODEL) : (env.PRO_MODEL ?? 'deepseek-ai/deepseek-v4-pro-0813'), policy: 'v1', indexVersion: env.RAG_INDEX_VERSION ?? 'none', latencyMs: Date.now() - startedAt, inputTokens: accounted.inputTokens || undefined, outputTokens: accounted.outputTokens || undefined, inputMeasuredTokens: accounted.inputMeasuredTokens || undefined, outputMeasuredTokens: accounted.outputMeasuredTokens || undefined, inputEstimatedTokens: accounted.inputEstimatedTokens || undefined, outputEstimatedTokens: accounted.outputEstimatedTokens || undefined, usageIncomplete: accounted.usageIncomplete, error: providerError ? `${providerError.code ?? 'provider-error'}${providerError.status ? `:${providerError.status}` : ''}` : undefined })
+    await saveTelemetry(env.DB, { userHash, analysisId, type: 'analysis', now, model: 'deterministic', policy: 'v1', indexVersion: env.RAG_INDEX_VERSION ?? 'none', latencyMs: Date.now() - startedAt })
   return json(request, responseBody, 200, env)
   } catch (cause) {
-    if (!budgetSettled) {
-      const accounted = accountGenerationAttempts(generationAttempts, promptInputEstimate, OUTPUT_TOKENS_PER_ATTEMPT)
-      await settleBudget(env.DB, userHash, budgetLease, accounted.inputTokens, accounted.outputTokens, limits)
-    }
+    void cause
     throw cause
   }
 }

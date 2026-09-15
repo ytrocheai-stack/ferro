@@ -3,13 +3,13 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath, URL as NodeURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { D1Database, D1Statement } from '../index'
-import { deferNvidiaRequest, estimateGeminiInputTokens, geminiPacificDayKey, parseGeminiPromptTokenCount, reconcileGeminiInputTokens, reserveGeminiRequest, reserveNvidiaRequest, waitForNvidiaRequest } from './quota'
+import { deferNvidiaRequest, estimateGeminiInputTokens, geminiPacificDayKey, parseGeminiPromptTokenCount, reconcileGeminiInputTokens, reserveGeminiRequest, reserveGeminiSerializedRequest, reserveNvidiaRequest, retryAfterMilliseconds, waitForNvidiaRequest } from './quota'
 import { acquireProviderCircuit, openProviderCircuitUntil, recordProviderFailure, recordProviderSuccess } from './circuit'
 
-function fixture(): { sqlite: DatabaseSync; db: D1Database } {
+function fixture(untilMigration?: string): { sqlite: DatabaseSync; db: D1Database } {
   const sqlite = new DatabaseSync(':memory:')
   const migrations = fileURLToPath(new NodeURL('../../migrations/', import.meta.url))
-  for (const name of readdirSync(migrations).filter((name) => name.endsWith('.sql')).sort()) sqlite.exec(readFileSync(`${migrations}/${name}`, 'utf8'))
+  for (const name of readdirSync(migrations).filter((name) => name.endsWith('.sql') && (!untilMigration || name <= untilMigration)).sort()) sqlite.exec(readFileSync(`${migrations}/${name}`, 'utf8'))
   const db: D1Database = {
     prepare(query) {
       let args: SQLInputValue[] = []
@@ -21,7 +21,18 @@ function fixture(): { sqlite: DatabaseSync; db: D1Database } {
       }
       return statement
     },
-    async batch(statements) { return Promise.all(statements.map((statement) => statement.run())) },
+    async batch(statements) {
+      sqlite.exec('BEGIN')
+      try {
+        const results = []
+        for (const statement of statements) results.push(await statement.run())
+        sqlite.exec('COMMIT')
+        return results
+      } catch (error) {
+        sqlite.exec('ROLLBACK')
+        throw error
+      }
+    },
   }
   return { sqlite, db }
 }
@@ -34,6 +45,20 @@ describe('cuotas durables de proveedores', () => {
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM gemini_quota_state').get()).toEqual({ count: 1 })
     expect(sqlite.prepare("SELECT provider FROM provider_circuit_state ORDER BY provider").all()).toEqual([{ provider: 'gemini' }, { provider: 'nvidia' }])
     expect(sqlite.prepare("SELECT provider, next_allowed_at, used_requests, max_requests FROM provider_request_limits WHERE provider='nvidia'").get()).toEqual({ provider: 'nvidia', next_allowed_at: 0, used_requests: 0, max_requests: 0 })
+    sqlite.close()
+  })
+
+  it('preserva una reconciliación histórica al reiniciar después del update de contadores', async () => {
+    const { sqlite, db } = fixture('0017_coach_provider_failover.sql')
+    sqlite.exec("INSERT INTO gemini_quota_reconciliations (reservation_id, minute_key, estimated_input_tokens, measured_input_tokens, usage_incomplete, reconciled_at) VALUES ('legacy-restart', 0, 20, 15, 0, 10)")
+    sqlite.exec("UPDATE gemini_quota_state SET minute_key = 0, minute_input_tokens = 15, input_tokens_estimated = 20, input_tokens_measured = 15, updated_at = 10 WHERE id = 1")
+    const migrations = fileURLToPath(new NodeURL('../../migrations/', import.meta.url))
+    sqlite.exec(readFileSync(`${migrations}/0018_gemini_reconciliation_state.sql`, 'utf8'))
+
+    expect(sqlite.prepare("SELECT state_applied FROM gemini_quota_reconciliations WHERE reservation_id = 'legacy-restart'").get()).toEqual({ state_applied: 1 })
+    const reservation = { reserved: true, provider: 'gemini' as const, reservationId: 'legacy-restart', minuteKey: 0, pacificDay: '2026-01-01', estimatedInputTokens: 20 }
+    await expect(reconcileGeminiInputTokens(db, reservation, { promptTokenCount: 15 }, 20)).resolves.toEqual({ inputTokens: 15, estimated: false })
+    expect(sqlite.prepare('SELECT minute_input_tokens, input_tokens_estimated, input_tokens_measured FROM gemini_quota_state').get()).toEqual({ minute_input_tokens: 15, input_tokens_estimated: 20, input_tokens_measured: 15 })
     sqlite.close()
   })
 
@@ -58,6 +83,13 @@ describe('cuotas durables de proveedores', () => {
     expect((await reserveNvidiaRequest(db, 19_999, 40)).reserved).toBe(false)
     expect((await reserveNvidiaRequest(db, 20_000, 40)).reserved).toBe(true)
     sqlite.close()
+  })
+
+  it('normaliza Retry-After HTTP-date vencido a cero y fechas futuras a milisegundos', () => {
+    const now = Date.parse('2026-09-15T12:00:00.000Z')
+    expect(retryAfterMilliseconds('Tue, 15 Sep 2026 11:59:59 GMT', now)).toBe(0)
+    expect(retryAfterMilliseconds('Tue, 15 Sep 2026 12:00:07 GMT', now)).toBe(7_000)
+    expect(retryAfterMilliseconds('3', now)).toBe(3_000)
   })
 
   it('cancela una espera NVIDIA antes del despacho', async () => {
@@ -118,23 +150,55 @@ describe('cuotas durables de proveedores', () => {
     sqlite.close()
   })
 
-  it('deja la reconciliación pendiente si falla el batch y la completa sin doble contabilizar al reintentar', async () => {
+  it('reserva usando la estimación del JSON serializado que se enviará', async () => {
+    const { sqlite, db } = fixture()
+    const serialized = JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'fuerza 💪' }] }] })
+    const reservation = await reserveGeminiSerializedRequest(db, 10_000, serialized, { requestsPerMinute: 10, inputTokensPerMinute: 1_000, requestsPerDay: 10 }, 'serialized-request')
+    expect(reservation.reserved).toBe(true)
+    expect(reservation.estimatedInputTokens).toBe(estimateGeminiInputTokens(serialized))
+    expect(sqlite.prepare('SELECT minute_input_tokens FROM gemini_quota_state').get()).toEqual({ minute_input_tokens: estimateGeminiInputTokens(serialized) })
+    sqlite.close()
+  })
+
+  it('mantiene atomicidad D1 ante fallo de batch y reintenta sin doble contabilizar', async () => {
     const { sqlite, db } = fixture()
     const reservation = await reserveGeminiRequest(db, 10_000, 20, { requestsPerMinute: 10, inputTokensPerMinute: 100, requestsPerDay: 10 }, 'batch-failure')
     const failingDb = {
       ...db,
       async batch(statements: D1Statement[]) {
-        await statements[0].run()
-        throw new Error('fallo entre pasos')
+        sqlite.exec('BEGIN')
+        try {
+          await statements[0].run()
+          throw new Error('fallo entre pasos')
+        } catch (error) {
+          sqlite.exec('ROLLBACK')
+          throw error
+        }
       },
     } as D1Database
 
     await expect(reconcileGeminiInputTokens(failingDb, reservation, { promptTokenCount: 25 }, 10_001)).rejects.toThrow('fallo entre pasos')
-    expect(sqlite.prepare('SELECT state_applied, measured_input_tokens FROM gemini_quota_reconciliations WHERE reservation_id = ?').get('batch-failure')).toEqual({ state_applied: 0, measured_input_tokens: 25 })
+    // El stub simula la transacción all-or-nothing que ofrece D1; no sustituye una prueba contra D1 remoto.
+    expect(sqlite.prepare('SELECT state_applied, measured_input_tokens FROM gemini_quota_reconciliations WHERE reservation_id = ?').get('batch-failure')).toBeUndefined()
     expect(sqlite.prepare('SELECT input_tokens_measured, input_tokens_estimated FROM gemini_quota_state').get()).toEqual({ input_tokens_measured: 0, input_tokens_estimated: 0 })
 
     await expect(reconcileGeminiInputTokens(db, reservation, { promptTokenCount: 25 }, 10_002)).resolves.toEqual({ inputTokens: 25, estimated: false })
     expect(sqlite.prepare('SELECT state_applied, state_applied_at FROM gemini_quota_reconciliations WHERE reservation_id = ?').get('batch-failure')).toMatchObject({ state_applied: 1, state_applied_at: 10_002 })
+    expect(sqlite.prepare('SELECT input_tokens_measured, input_tokens_estimated FROM gemini_quota_state').get()).toEqual({ input_tokens_measured: 25, input_tokens_estimated: 20 })
+    sqlite.close()
+  })
+
+  it('no marca aplicada una reconciliación si falta la fila de estado y permite reintentarla', async () => {
+    const { sqlite, db } = fixture()
+    const reservation = await reserveGeminiRequest(db, 10_000, 20, { requestsPerMinute: 10, inputTokensPerMinute: 100, requestsPerDay: 10 }, 'missing-state')
+    sqlite.exec('DELETE FROM gemini_quota_state')
+
+    await expect(reconcileGeminiInputTokens(db, reservation, { promptTokenCount: 25 }, 10_001)).rejects.toMatchObject({ code: 'database' })
+    expect(sqlite.prepare('SELECT state_applied, measured_input_tokens FROM gemini_quota_reconciliations WHERE reservation_id = ?').get('missing-state')).toEqual({ state_applied: 0, measured_input_tokens: 25 })
+
+    sqlite.exec('INSERT INTO gemini_quota_state (id) VALUES (1)')
+    await expect(reconcileGeminiInputTokens(db, reservation, { promptTokenCount: 25 }, 10_002)).resolves.toEqual({ inputTokens: 25, estimated: false })
+    expect(sqlite.prepare('SELECT state_applied, state_applied_at FROM gemini_quota_reconciliations WHERE reservation_id = ?').get('missing-state')).toEqual({ state_applied: 1, state_applied_at: 10_002 })
     expect(sqlite.prepare('SELECT input_tokens_measured, input_tokens_estimated FROM gemini_quota_state').get()).toEqual({ input_tokens_measured: 25, input_tokens_estimated: 20 })
     sqlite.close()
   })

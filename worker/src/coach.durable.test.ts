@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath, URL as NodeURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runAgentProtocol } from '../../packages/adaptation-core/src/agent'
-import { COACH_CALL_TIMEOUT_MS, COACH_GENERATION_STEP_TIMEOUT, executeCoachRun, persistCoachSnapshot, reconcileCoachRuns, type D1Database, type D1Statement, type Env } from './index'
+import { COACH_CALL_TIMEOUT_MS, COACH_GENERATION_STEP_TIMEOUT, executeCoachRun, persistCoachSnapshot, reconcileCoachRuns, ProviderError, type D1Database, type D1Statement, type Env } from './index'
 import { coachRunRequestSchema } from '../../packages/adaptation-core/src/contract'
 
 const request = coachRunRequestSchema.parse({ event: { id: 'event', accountId: 'user', deviceId: 'device', type: 'message-sent', occurredAt: 1, contextVersion: 'ctx', payload: { message: 'Revisa' } }, context: { version: 'ctx', capturedAt: 1, timezone: 'UTC', isCurrent: true, snapshot: {} } })
@@ -89,6 +89,31 @@ describe('coach durable execution on SQLite', () => {
     const f = fixture()
     f.env.FLASH_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
     await executeCoachRun(f.env, 'run', { now: () => 100, generation: { generate: async (_prompt, model) => { expect(model).toBe(f.env.FLASH_MODEL); return content } } }, f.steps)
+    expect(f.sql.prepare('SELECT status FROM coach_runs').get()?.status).toBe('completed')
+  })
+  it('termina failed sin decisión ni snapshot textual cuando ambos providers fallan', async () => {
+    const f = fixture()
+    await executeCoachRun(f.env, 'run', {
+      now: () => 100,
+      generationProviders: { gemini: { generate: async () => { throw new ProviderError('Gemini caído', 503, 'server-error') } } },
+      generation: { generate: async () => { throw new ProviderError('NVIDIA caído', 503, 'server-error') } },
+    }, f.steps)
+    expect(f.sql.prepare('SELECT status, decision_json FROM coach_runs').get()).toEqual({ status: 'failed', decision_json: null })
+    expect(f.sql.prepare("SELECT status, text, decision_json FROM coach_run_snapshots WHERE run_id = 'run' ORDER BY sequence DESC LIMIT 1").get()).toMatchObject({ status: 'failed', text: '', decision_json: null })
+  })
+  it('desactiva streaming de providers en producción aunque la bandera esté activa', async () => {
+    const f = fixture()
+    f.env.ENVIRONMENT = 'production'
+    f.env.ENABLE_COACH_STREAMING = 'true'
+    let streamCalls = 0
+    await executeCoachRun(f.env, 'run', {
+      now: () => 100,
+      generation: {
+        generate: async () => content,
+        generateStream: async () => { streamCalls += 1; return content },
+      },
+    }, f.steps)
+    expect(streamCalls).toBe(0)
     expect(f.sql.prepare('SELECT status FROM coach_runs').get()?.status).toBe('completed')
   })
   it('uses the opt-in stream for a tool turn, continues, and publishes explanation only after completion', async () => {
