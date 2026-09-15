@@ -1,29 +1,31 @@
 # Despliegue de NextRep
 
-## T0 — restricción de proveedor y modelo
+## Beta privada — Gemini preferido y NVIDIA fallback
 
-T0 no implementa una migración de modelo. El coach usa el proveedor actualmente
-configurado en cada entorno: NVIDIA en el Worker; desarrollo declara Kimi y
-producción declara DeepSeek Flash. `gpt-5.6-luna` está documentado para la API de
-Codex, pero no está verificado un acceso desde esta PWA usando la suscripción del
-usuario sin nuevas credenciales ni facturación de API. Por tanto, la aplicación no
-afirma usar Luna y no se cambia ningún modelo activo, secreto, flag ni credencial.
+La configuración declarativa fija `gemini-3.6-flash` como proveedor preferido y
+`deepseek-ai/deepseek-v4-flash-0731` como fallback NVIDIA. El orden es `gemini,nvidia`,
+NVIDIA se coordina a 40 RPM, `ENABLE_COACH_STREAMING=false` y el consentimiento requerido
+es `coach-context-v3-gemini-nvidia`. Desarrollo conserva los proveedores apagados.
+
+No se usa Luna desde la PWA. Esta guía no autoriza despliegues ni llamadas reales por sí sola;
+las claves y cuotas efectivas de Gemini siguen siendo requisitos remotos que deben verificarse
+fuera del repositorio antes de activar el Worker.
 
 La ejecución de este paso puede usar Luna como agente dentro de Codex; eso no es
 evidencia de que la PWA tenga acceso a Luna. Las comprobaciones de T0 son locales y
 documentales: no implican acceso remoto, despliegue, Clerk real ni teclado Android
 real. Ver el informe [T0](MIGRACION-NEXTREP-T0-2026-09-09.md).
 
-> Actualización 2026-09-10: por petición del usuario, se prepara el coach privado sin
-> ejecutar benchmarks ni evaluar la calidad del modelo. Producción usa DeepSeek Flash,
-> consentimiento `coach-context-v2` y beta/embeddings/Flash habilitados únicamente para
-> la cuenta permitida existente. Pro, reranking y probes siguen apagados. Las instrucciones
+> Actualización Task 7: se prepara el coach privado sin ejecutar benchmarks ni evaluar la calidad
+> del modelo. Producción declara Gemini/NVIDIA y la allowlist exacta de dos cuentas; Pro, reranking
+> y probes siguen apagados. Las instrucciones
 > anteriores sobre esperar benchmarks para esa activación quedan supersedidas por esta petición.
 > El system prompt compartido vive en `packages/adaptation-core/src/agent.ts`
 > (`coach-agent-instructions-v3`) y el Worker lo envía con rol `system`.
 > Verificaciones locales: tipos, build, lint, pruebas de contrato/cliente/Worker y dos
 > recorridos móviles simulados. No se hicieron llamadas al modelo en esta entrega.
-> D1 remoto: migraciones 0014/0015 ya aplicadas; presupuesto global disponible verificado.
+> D1 remoto: las migraciones 0014–0018 y las cuotas de proveedores requieren verificación remota;
+> su existencia local no demuestra que estén aplicadas.
 > La evaluación de recomendaciones queda pendiente; no se afirma calidad clínica o deportiva.
 
 > Release verificado 2026-09-14: `main` está en `668189b37f42792a115fc074f270fd0a4c9c5bac`.
@@ -89,21 +91,21 @@ del smoke desde Pages.
 ### Secretos y configuración privada
 
 Mantener fuera del repositorio y del bundle los valores de `CLERK_JWT_KEY`,
-`PSEUDONYMIZATION_KEY` y `NVIDIA_API_KEY`. Verificar además `ALLOWED_CLERK_IDS`,
+`PSEUDONYMIZATION_KEY`, `GEMINI_API_KEY` y `NVIDIA_API_KEY`. Verificar además `ALLOWED_CLERK_IDS`,
 `CLERK_AUTHORIZED_PARTIES` y `ALLOWED_ORIGINS` en la configuración de producción sin imprimir
 sus valores en logs o artefactos. No usar variables `VITE_*` para datos privados.
 
 Origen de Pages: `https://ytrocheai-stack.github.io`; `/ferro/` no forma parte del origen.
-El contrato local requiere consentimiento `coach-context-v2` en payload/cabecera, dispositivo
+El contrato local requiere consentimiento `coach-context-v3-gemini-nvidia` en payload/cabecera, dispositivo
 coincidente e `Idempotency-Key`. El preflight ya permite `X-NextRep-Consent-Version` y
 `X-NextRep-Device-Id`, además de las cabeceras anteriores; el Worker responde 401 desde el origen
 permitido sin JWT y 403 desde un origen no autorizado. Falta verificarlo desde Pages con sesión y
 un segundo origen autorizado antes del release.
 
-Las migraciones locales son `0001`–`0013`; `0004` añade metadata de fuentes, `0005`
+Las migraciones locales son `0001`–`0018`; `0004` añade metadata de fuentes, `0005`
 añade presupuesto/reservas de tokens y concurrencia, y `0006` persiste la respuesta de una
 solicitud idempotente para replay exacto, `0009` añade procedencia/filtros del corpus, `0011` añade ejecuciones durables del coach, `0012` añade el ledger de intentos y `0013` vincula cada ejecución a una conversación privada. Dexie v7 añade el propietario `ownerId` para jobs,
-eventos y propuestas locales; Dexie v8 añade runs y mensajes del agente y Dexie v9 añade perfil/consentimiento y programación. Su existencia en disco no
+eventos y propuestas locales; Dexie v8 añade runs y mensajes del agente y Dexie v9 añade perfil/consentimiento y programación. `0014`–`0016` añaden cuotas/presupuesto, leases y snapshots; `0017` añade failover/circuitos de Gemini/NVIDIA y `0018` reconcilia el uso de cuota Gemini. Su existencia en disco no
 sustituye el historial remoto; en la versión actual `0010` y `0011` ya están aplicadas. No omitir
 ese paso ni volver a aplicar ALTERs manualmente sin comprobar el historial.
 
@@ -117,8 +119,9 @@ ese paso ni volver a aplicar ALTERs manualmente sin comprobar el historial.
 3. Publicar **primero la PWA compatible**. Revisar los archivos que se incluirán en el commit;
    no añadir indiscriminadamente secretos, diagnósticos temporales ni otros cambios locales.
    El push a `main` desencadena Pages.
-4. Comprobar las migraciones D1 pendientes sin aplicar cambios no solicitados y publicar **después el Worker**
-   con la configuración explícita de producción, conservando la cuenta permitida y las flags del release.
+4. Comprobar las migraciones D1 `0014`–`0018` pendientes sin aplicar cambios no solicitados y publicar
+   **después el Worker** con la configuración explícita de producción, conservando las dos cuentas de la
+   allowlist, el orden Gemini→NVIDIA y el streaming apagado.
 5. Verificar PWA, manifest, SW, datos públicos, `/health`, CORS y JWT/allowlist con datos
    ficticios. Completar un smoke autenticado y E2E del coach en un entorno de prueba controlado;
    abrir solo la cuenta canaria cuando se hayan aprobado los gates.
@@ -127,9 +130,9 @@ ese paso ni volver a aplicar ALTERs manualmente sin comprobar el historial.
    por lotes con `corpus:upload`, backup D1, comprobación de capacidad y rollback por versión.
 7. Ejecutar `corpus:benchmark -- --run` con recuperación local y luego comparar 512/1024; registrar
    Recall@5, precisión de citas, revisión independiente y diferencias local/remoto.
-8. Tras los gates, activar temporalmente beta, embeddings y Flash únicamente para la cuenta canaria;
-   completar y aprobar el smoke, apagar la activación temporal y solo entonces consolidar esas tres
-   flags para la misma cuenta. Pro, reranking y provider probe permanecen apagados en esta entrega.
+8. Tras los gates, activar temporalmente beta, embeddings y los proveedores únicamente para las dos
+   cuentas autorizadas; completar y aprobar el smoke, apagar la activación temporal y solo entonces
+   consolidar las flags. Pro, reranking, provider probe y streaming permanecen apagados en esta entrega.
    Si no se puede garantizar ausencia de gasto adicional, detener llamadas y mantener todas las flags apagadas.
 9. Probar backup/actualización de la PWA instalada en teléfonos y todo el recorrido. Abrir primero
    una cuenta y ampliar hasta cinco adultos únicamente tras autorización del responsable.
@@ -143,15 +146,18 @@ No pedir contraseñas ni JWT.
 `GET /health` no autentica ni llama a modelos. Confirma disponibilidad básica y versión de
 política. `GET /readiness` (también `/v1/readiness`) exige origen, JWT y allowlist; se mantiene sin
 llamadas a modelos y prueba consultas D1, disponibilidad de Vectorize y coherencia del corpus
-activo. Un resultado positivo local no sustituye el canario sobre recursos remotos.
+activo. También devuelve orden, nombres de modelos, flags, versión de consentimiento, estado
+booleano de credenciales y cuotas configuradas, nunca claves ni valores secretos. Un resultado
+positivo local no sustituye el canario sobre recursos remotos.
 
 `POST /v1/providers/probe` exige autenticación, beta y su propio flag; solo informa flags/modelos.
 No constituye un smoke de proveedores. El Cron depura telemetría tras 30 días, reservas caducadas
 y presupuestos antiguos; su ejecución real sigue pendiente de verificación.
 
 Para un rollback de código, revertir el commit de la PWA y publicar de nuevo; restaurar una versión
-compatible del Worker y apagar proveedores/beta. Conservar los artefactos e identificadores de
-ambos despliegues. No borrar IndexedDB ni revertir destructivamente migraciones.
+compatible del Worker y apagar `ENABLE_GEMINI`, `ENABLE_NVIDIA` y `ENABLE_BETA` (o cambiar el orden
+de proveedores) sin borrar migraciones. Conservar los artefactos e identificadores de ambos despliegues.
+No borrar IndexedDB ni revertir destructivamente migraciones.
 
 El rollback del corpus exige conservar versiones/namespaces y poder seleccionar la anterior.
 El importador coloca el namespace y un ID físico versionado en cada vector, guarda claves D1 versionadas y expone

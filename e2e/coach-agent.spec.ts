@@ -10,7 +10,7 @@ test('el flujo del agente crea y continúa ejecuciones sin proveedor real', asyn
 
   await page.addInitScript(({ accountId: seededAccountId }) => {
     localStorage.setItem('ferro-coach-device-id', 'e2e-device')
-    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: seededAccountId, deviceId: 'e2e-device', version: 'coach-context-v2', acceptedAt: Date.now(), enabled: true }]))
+    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: seededAccountId, deviceId: 'e2e-device', version: 'coach-context-v3-gemini-nvidia', acceptedAt: Date.now(), enabled: true }]))
   }, { accountId })
 
   await page.route('**/mock-worker/v1/coach/runs', async (route) => {

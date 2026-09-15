@@ -37,12 +37,12 @@ const base = {
 
 const coachRequest = {
   event: { id: 'event-1', accountId: 'owner-a', deviceId: 'device-a', conversationId: 'conversation-1', type: 'message-sent', occurredAt: 1, contextVersion: 'ctx-1', payload: { message: 'Hola' } },
-  context: { version: 'ctx-1', capturedAt: 1, timezone: 'America/Mexico_City', isCurrent: true, snapshot: { message: 'Hola', profileRevision: 1, consentVersion: 'coach-context-v2', consentRevision: 1, profile: { population: [], populationConfirmed: false, goals: [] }, goals: [], restrictions: { injuriesOrPain: [], unavailableEquipment: [], excludedExercises: [], nutritionConstraints: [] }, catalog: [], metrics: { captured: false, bestE1rmByExercise: {} }, plan: [], history: [], conversation: [{ id: 'message-1', role: 'user', content: 'Hola', runId: 'run-1', createdAt: 1, contextVersion: 'ctx-1' }], conversationVersion: 'conversation-1:1' } },
+  context: { version: 'ctx-1', capturedAt: 1, timezone: 'America/Mexico_City', isCurrent: true, snapshot: { message: 'Hola', profileRevision: 1, consentVersion: 'coach-context-v3-gemini-nvidia', consentRevision: 1, profile: { population: [], populationConfirmed: false, goals: [] }, goals: [], restrictions: { injuriesOrPain: [], unavailableEquipment: [], excludedExercises: [], nutritionConstraints: [] }, catalog: [], metrics: { captured: false, bestE1rmByExercise: {} }, plan: [], history: [], conversation: [{ id: 'message-1', role: 'user', content: 'Hola', runId: 'run-1', createdAt: 1, contextVersion: 'ctx-1' }], conversationVersion: 'conversation-1:1' } },
 }
 
 const coachRecords = {
   coachProfiles: [{ id: 'owner-a', ownerId: 'owner-a', population: ['general'], populationConfirmed: true, goals: ['fuerza'], injuriesOrPain: [], unavailableEquipment: [], excludedExercises: [], nutritionConstraints: [], revision: 1, updatedAt: 1 }],
-  coachConsents: [{ id: 'owner-a:device-a', ownerId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', enabled: true, revision: 1, acceptedAt: 1, updatedAt: 1 }],
+  coachConsents: [{ id: 'owner-a:device-a', ownerId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v3-gemini-nvidia', enabled: true, revision: 1, acceptedAt: 1, updatedAt: 1 }],
   coachConversations: [{ id: 'conversation-1', ownerId: 'owner-a', title: 'Primera', createdAt: 1, updatedAt: 2, nextSequence: 2 }],
   coachDrafts: [{ id: 'owner-a:conversation-1', ownerId: 'owner-a', conversationId: 'conversation-1', content: 'Borrador', updatedAt: 2 }],
   coachMessages: [{ id: 'message-1', ownerId: 'owner-a', runId: 'run-1', conversationId: 'conversation-1', sequence: 1, role: 'user', content: 'Hola', createdAt: 1, contextVersion: 'ctx-1', deliveryState: 'delivered' }],
@@ -137,15 +137,15 @@ describe('validación de respaldos', () => {
 
   it('preserva el consentimiento operativo actual en IndexedDB y localStorage', async () => {
     setCoachAccountId('owner-a')
-    const currentConsent = { id: 'owner-a:device-a', ownerId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', enabled: true, revision: 99, acceptedAt: 90, updatedAt: 99 }
+    const currentConsent = { id: 'owner-a:device-a', ownerId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v3-gemini-nvidia', enabled: true, revision: 99, acceptedAt: 90, updatedAt: 99 }
     await db.coachConsents.put(currentConsent)
-    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', acceptedAt: 90, enabled: true }]))
+    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v3-gemini-nvidia', acceptedAt: 90, enabled: true }]))
     const backup = { ...base, version: 10 as const, ...coachRecords, coachConsents: [{ ...coachRecords.coachConsents[0], revision: 1, acceptedAt: 1, updatedAt: 1 }] }
 
     await importBackup(new File([JSON.stringify(backup)], 'consent.json'))
 
     await expect(db.coachConsents.get(currentConsent.id)).resolves.toEqual(currentConsent)
-    expect(JSON.parse(localStorage.getItem('ferro-coach-consent')!)).toEqual([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', acceptedAt: 90, enabled: true }])
+    expect(JSON.parse(localStorage.getItem('ferro-coach-consent')!)).toEqual([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v3-gemini-nvidia', acceptedAt: 90, enabled: true }])
   })
 
   it('rechaza cualquier backup Coach si no hay owner activo', async () => {
@@ -158,7 +158,7 @@ describe('validación de respaldos', () => {
 
   it('importa runs activos como legacy y no los despacha al despertar la sincronización', async () => {
     setCoachAccountId('owner-a')
-    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', acceptedAt: 1, enabled: true }]))
+    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v3-gemini-nvidia', acceptedAt: 1, enabled: true }]))
     vi.stubEnv('VITE_ADAPTATION_WORKER_URL', 'https://coach.example')
     vi.stubGlobal('navigator', { onLine: true })
     const fetchSpy = vi.fn()
@@ -208,7 +208,7 @@ describe('validación de respaldos', () => {
 
   it('exporta datos Coach reales y permite reimportarlos conservando las entidades', async () => {
     setCoachAccountId('owner-a')
-    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', acceptedAt: 1, enabled: true }]))
+    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v3-gemini-nvidia', acceptedAt: 1, enabled: true }]))
     await db.coachConversations.put(coachRecords.coachConversations[0] as unknown as CoachConversation)
     await db.coachDrafts.put(coachRecords.coachDrafts[0] as unknown as CoachDraft)
     await db.coachMessages.put(coachRecords.coachMessages[0] as unknown as CoachMessage)
@@ -316,7 +316,7 @@ describe('validación de respaldos', () => {
     const originalConsent = { ...coachRecords.coachConsents[0], enabled: false, revision: 7, updatedAt: 7 }
     await db.workouts.put(original)
     await db.coachConsents.put(originalConsent)
-    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', acceptedAt: 7, enabled: false }]))
+    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v3-gemini-nvidia', acceptedAt: 7, enabled: false }]))
     const settingsBefore = useSettings.getState()
     const nutritionBefore = useNutrition.getState()
     const settingsStorage = useSettings.persist.getOptions().storage
@@ -332,7 +332,7 @@ describe('validación de respaldos', () => {
       expect(await db.coachConsents.toArray()).toEqual([originalConsent])
       expect(useSettings.getState()).toEqual(settingsBefore)
       expect(useNutrition.getState()).toEqual(nutritionBefore)
-      expect(localStorage.getItem('ferro-coach-consent')).toBe(JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', acceptedAt: 7, enabled: false }]))
+    expect(localStorage.getItem('ferro-coach-consent')).toBe(JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v3-gemini-nvidia', acceptedAt: 7, enabled: false }]))
     } finally {
       useSettings.persist.setOptions({ storage: settingsStorage })
       useNutrition.persist.setOptions({ storage: nutritionStorage })
@@ -383,13 +383,13 @@ describe('validación de respaldos', () => {
     setCoachAccountId('owner-a')
     const current = { ...coachRecords.coachConsents[0], enabled: false, revision: 9, updatedAt: 9 }
     await db.coachConsents.put(current)
-    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', acceptedAt: 9, enabled: true }]))
+    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v3-gemini-nvidia', acceptedAt: 9, enabled: true }]))
     const imported = { ...coachRecords.coachConsents[0], enabled: true, revision: 999, updatedAt: 999 }
 
     await importBackup(new File([JSON.stringify({ ...base, version: 11, ...coachRecords, coachConsents: [imported] })], 'consent-authority.json'))
 
     expect(await db.coachConsents.get(current.id)).toEqual({ ...current, enabled: true })
-    expect(localStorage.getItem('ferro-coach-consent')).toBe(JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v2', acceptedAt: 9, enabled: true }]))
+    expect(localStorage.getItem('ferro-coach-consent')).toBe(JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v3-gemini-nvidia', acceptedAt: 9, enabled: true }]))
   })
 
   it.each([9, 10] as const)('reimporta el contenido de una base v%s migrada, incluidos los IDs de mensajes históricos', async (version) => {

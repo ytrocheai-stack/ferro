@@ -3,7 +3,11 @@ import { ProviderError, type GenerationProvider, type GenerationResult } from '.
 import { retryAfterMilliseconds, type GeminiQuotaReservation } from './quota'
 
 export const GEMINI_MODEL = 'gemini-3.6-flash' as const
-export const GEMINI_GENERATE_CONTENT_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
+export function geminiGenerateContentUrl(model: string): string {
+  if (!/^gemini-[a-z0-9][a-z0-9.-]*$/i.test(model)) throw new ProviderError('Modelo Gemini inválido', undefined, 'invalid-config')
+  return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+}
+export const GEMINI_GENERATE_CONTENT_URL = geminiGenerateContentUrl(GEMINI_MODEL)
 export const GEMINI_OUTPUT_TOKENS = 4_000
 export const GEMINI_CALL_TIMEOUT_MS = 240_000
 
@@ -176,7 +180,7 @@ export class GeminiGenerationProvider implements GenerationProvider {
   ) {}
 
   async generate(prompt: string, model: string, signal?: AbortSignal): Promise<GeminiGenerationResult> {
-    if (model !== GEMINI_MODEL) throw new ProviderError('Modelo Gemini no permitido', undefined, 'invalid-config')
+    const endpoint = geminiGenerateContentUrl(model)
     if (!this.apiKey.trim()) throw new ProviderError('Gemini no está autenticado', undefined, 'authentication')
     if (signal?.aborted) throw new ProviderError('Solicitud cancelada', undefined, 'cancelled')
 
@@ -198,7 +202,7 @@ export class GeminiGenerationProvider implements GenerationProvider {
         reservation = await this.requestGate?.(innerSignal, serializedRequest)
         let response: Response
         try {
-          response = await this.fetcher(GEMINI_GENERATE_CONTENT_URL, {
+          response = await this.fetcher(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
             body: serializedRequest,

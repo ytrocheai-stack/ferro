@@ -105,6 +105,83 @@ const eventSchema = z.object({ analysisId: z.string().min(1).max(120), exerciseI
 
 function enabled(value: string | undefined, fallback = false): boolean { return value === undefined ? fallback : value === '1' || value.toLowerCase() === 'true' }
 function betaEnabled(env: Env): boolean { return enabled(env.ENABLE_BETA, env.ENVIRONMENT !== 'production') }
+export const COACH_CONSENT_VERSION = 'coach-context-v3-gemini-nvidia'
+const PRIVATE_PROVIDER_ORDER: ProviderName[] = ['gemini', 'nvidia']
+const PRIVATE_NVIDIA_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
+const PRIVATE_NVIDIA_RPM = 40
+const PRIVATE_ALLOWLIST = ['user_3ITDXf8hPt81kAjzS3Dw8U77qfE', 'user_3JLkakQ34GXgGQhWGAWSfrLW3TB']
+
+function configuredPositiveInteger(value: string | undefined): number | null {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+export interface ReadinessConfiguration {
+  environment: string
+  providerOrder: ProviderName[]
+  models: { gemini: string; nvidia: string; embedding: string; flash: string; pro: string }
+  flags: { beta: boolean; embeddings: boolean; flash: boolean; gemini: boolean; nvidia: boolean; coachStreaming: boolean; pro: boolean; reranking: boolean; providerProbe: boolean }
+  consent: { requiredVersion: string }
+  allowlist: { count: number; userIds: string[] }
+  credentialsConfigured: { gemini: boolean; nvidia: boolean }
+  quotas: { gemini: { requestsPerMinute: number | null; inputTokensPerMinute: number | null; requestsPerDay: number | null }; nvidia: { requestsPerMinute: number } }
+  complete: boolean
+}
+
+export function coachReadinessConfiguration(env: Env): ReadinessConfiguration {
+  const providerOrder = parseCoachProviderOrder(env.COACH_PROVIDER_ORDER)
+  const flags = {
+    beta: enabled(env.ENABLE_BETA, env.ENVIRONMENT !== 'production'),
+    embeddings: enabled(env.ENABLE_EMBEDDINGS),
+    flash: enabled(env.ENABLE_FLASH),
+    gemini: enabled(env.ENABLE_GEMINI),
+    nvidia: enabled(env.ENABLE_NVIDIA),
+    coachStreaming: enabled(env.ENABLE_COACH_STREAMING),
+    pro: enabled(env.ENABLE_PRO),
+    reranking: enabled(env.ENABLE_RERANKING),
+    providerProbe: enabled(env.ENABLE_PROVIDER_PROBE),
+  }
+  const quotas = {
+    gemini: {
+      requestsPerMinute: configuredPositiveInteger(env.GEMINI_REQUESTS_PER_MINUTE),
+      inputTokensPerMinute: configuredPositiveInteger(env.GEMINI_INPUT_TOKENS_PER_MINUTE),
+      requestsPerDay: configuredPositiveInteger(env.GEMINI_REQUESTS_PER_DAY),
+    },
+    nvidia: { requestsPerMinute: configuredPositiveInteger(env.NVIDIA_REQUESTS_PER_MINUTE) ?? PRIVATE_NVIDIA_RPM },
+  }
+  const models = {
+    gemini: env.GEMINI_MODEL ?? GEMINI_MODEL,
+    nvidia: env.NVIDIA_MODEL ?? env.FLASH_MODEL ?? PRIVATE_NVIDIA_MODEL,
+    embedding: env.EMBEDDING_MODEL ?? 'nvidia/nemotron-3-embed-1b',
+    flash: env.FLASH_MODEL ?? KIMI_MODEL,
+    pro: env.PRO_MODEL ?? 'deepseek-ai/deepseek-v4-pro-0813',
+  }
+  const consentVersion = env.REQUIRED_CONSENT_VERSION ?? COACH_CONSENT_VERSION
+  const allowlistIds = configuredList(env.ALLOWED_CLERK_IDS)
+  const productionShape = env.ENVIRONMENT !== 'production' || (
+    providerOrder.join(',') === PRIVATE_PROVIDER_ORDER.join(',') &&
+    models.gemini === GEMINI_MODEL &&
+    models.nvidia === PRIVATE_NVIDIA_MODEL &&
+    quotas.nvidia.requestsPerMinute === PRIVATE_NVIDIA_RPM &&
+    flags.gemini && flags.nvidia && !flags.coachStreaming &&
+    consentVersion === COACH_CONSENT_VERSION &&
+    allowlistIds.join(',') === PRIVATE_ALLOWLIST.join(',')
+  )
+  const geminiComplete = !flags.gemini || (Boolean(env.GEMINI_API_KEY) && quotas.gemini.requestsPerMinute !== null && quotas.gemini.inputTokensPerMinute !== null && quotas.gemini.requestsPerDay !== null)
+  const nvidiaComplete = !flags.nvidia || Boolean(env.NVIDIA_API_KEY)
+  return {
+    environment: env.ENVIRONMENT ?? 'development',
+    providerOrder,
+    models,
+    flags,
+    consent: { requiredVersion: consentVersion },
+    allowlist: { count: allowlistIds.length, userIds: allowlistIds },
+    credentialsConfigured: { gemini: Boolean(env.GEMINI_API_KEY), nvidia: Boolean(env.NVIDIA_API_KEY) },
+    quotas,
+    complete: productionShape && geminiComplete && nvidiaComplete,
+  }
+}
+
 function replayContextIdentity(env: Env): Record<string, unknown> {
   return {
     policyVersion: 'v1',
@@ -166,6 +243,15 @@ function productionConfigError(env: Env): string | undefined {
   if (!env.CLERK_JWT_KEY || !env.CLERK_AUTHORIZED_PARTIES || !env.ALLOWED_CLERK_IDS) return 'Auth/allowlist incompletos'
   if (configuredExpectedCount(env.RAG_EXPECTED_SOURCE_COUNT) !== 88 || configuredExpectedCount(env.RAG_EXPECTED_CHUNK_COUNT) !== 2708) return 'Conteos esperados del corpus no configurados'
   if (enabled(env.ENABLE_BETA) && !env.COACH_WORKFLOW) return 'Workflow del coach no configurado'
+  const configuration = coachReadinessConfiguration(env)
+  if (configuration.providerOrder.join(',') !== PRIVATE_PROVIDER_ORDER.join(',')) return 'Orden de proveedores privado incompleto'
+  if (configuration.models.gemini !== GEMINI_MODEL || configuration.models.nvidia !== PRIVATE_NVIDIA_MODEL) return 'Modelos privados incompletos'
+  if (configuration.quotas.nvidia.requestsPerMinute !== PRIVATE_NVIDIA_RPM) return 'Cuota NVIDIA no configurada a 40 RPM'
+  if (configuration.consent.requiredVersion !== COACH_CONSENT_VERSION) return 'Consentimiento privado desactualizado'
+  if (!configuration.flags.gemini || !configuration.flags.nvidia || configuration.flags.coachStreaming) return 'Flags privadas incompletas o streaming activo'
+  if (configuration.allowlist.userIds.join(',') !== PRIVATE_ALLOWLIST.join(',')) return 'Allowlist privada incompleta'
+  if (!configuration.credentialsConfigured.gemini || !configuration.credentialsConfigured.nvidia) return 'Credenciales de proveedores no configuradas'
+  if (configuration.quotas.gemini.requestsPerMinute === null || configuration.quotas.gemini.inputTokensPerMinute === null || configuration.quotas.gemini.requestsPerDay === null) return 'Cuotas efectivas de Gemini no configuradas'
   return undefined
 }
 
@@ -625,8 +711,8 @@ function configuredExpectedCount(value: string | undefined): number | undefined 
   const count = Number(value)
   return Number.isSafeInteger(count) && count > 0 ? count : undefined
 }
-async function readiness(db: D1Database | undefined, index: VectorizeIndex | undefined, corpusVersion?: string, expectedSourceCountValue?: string, expectedChunkCountValue?: string): Promise<{ config: boolean; d1: boolean; index: boolean; corpus: boolean }> {
-  const config = Boolean(corpusVersion)
+async function readiness(env: Env, db: D1Database | undefined, index: VectorizeIndex | undefined, corpusVersion?: string, expectedSourceCountValue?: string, expectedChunkCountValue?: string): Promise<{ config: boolean; d1: boolean; index: boolean; corpus: boolean }> {
+  const config = Boolean(corpusVersion) && coachReadinessConfiguration(env).complete
   const expectedSourceCount = configuredExpectedCount(expectedSourceCountValue)
   const expectedChunkCount = configuredExpectedCount(expectedChunkCountValue)
   let d1 = false
@@ -803,6 +889,22 @@ export class CoachGenerationRouter {
   private async tryProvider(provider: ProviderName, position: number, logicalCallNo: number, prompt: string, signal: AbortSignal | undefined, validate: (content: string) => unknown, requireHalfOpen: boolean): Promise<CoachGenerationResponse | undefined> {
     if (signal?.aborted) throw new ProviderError('Solicitud cancelada', undefined, 'cancelled')
     const model = this.options.models[provider]
+    // Rehidratar un éxito durable precede a cualquier circuito, cuota o
+    // configuración actual: un Workflow reanudado nunca debe reenviar una
+    // llamada ya confirmada ni perder su respuesta por un flag cambiado.
+    const fingerprint = await this.fingerprint(prompt, logicalCallNo, provider, model)
+    const existing = await this.options.db.prepare('SELECT * FROM coach_run_attempts WHERE run_id = ? AND attempt_no = ?').bind(this.options.runId, (logicalCallNo - 1) * 2 + position + 1).first<CoachAttemptRow>()
+    if (existing) {
+      if (existing.fingerprint !== fingerprint || existing.model !== model || (existing.provider && existing.provider !== provider) || (existing.logical_call_no && existing.logical_call_no !== logicalCallNo)) throw new Error('attempt-fingerprint-mismatch')
+      if (existing.status === 'succeeded' && existing.response_json) {
+        const cached = parseCoachRowJson<GenerationResult>(existing.response_json)
+        if (!cached?.content) throw new Error('uncertain-outcome')
+        validate(cached.content)
+        return { ...cached, provider, model, cached: true }
+      }
+      if (existing.status === 'failed') return undefined
+      throw new Error('uncertain-outcome')
+    }
     const circuit = await acquireProviderCircuit(this.options.db, provider, this.clock())
     if (circuit.permission === 'open' || (requireHalfOpen && circuit.permission !== 'half-open')) {
       await this.recordSkipped(provider, position, logicalCallNo, prompt, new ProviderError('Circuito del proveedor abierto', undefined, 'circuit-open', circuit.retryAt === undefined ? undefined : Math.max(0, circuit.retryAt - this.clock())))
@@ -812,14 +914,8 @@ export class CoachGenerationRouter {
       await this.recordSkipped(provider, position, logicalCallNo, prompt, new ProviderError('Proveedor no configurado', undefined, 'invalid-config'))
       return undefined
     }
-    const fingerprint = await this.fingerprint(prompt, logicalCallNo, provider, model)
     const reservation = await reserveCoachAttempt(this.options.db, this.options.runId, logicalCallNo, provider, position, fingerprint, model, this.clock())
-    if (reservation.action === 'succeeded') {
-      const cached = parseCoachRowJson<GenerationResult>(reservation.row.response_json)
-      if (!cached?.content) throw new Error('uncertain-outcome')
-      validate(cached.content)
-      return { ...cached, provider, model, cached: true }
-    }
+    if (reservation.action === 'succeeded') throw new Error('uncertain-outcome')
     if (reservation.action === 'uncertain') throw new Error('uncertain-outcome')
     if (reservation.action === 'skip') return undefined
     const leaseId = circuit.leaseId
@@ -1332,19 +1428,23 @@ export async function handleRequest(request: Request, env: Env, deps: WorkerDepe
   if (request.method === 'GET' && !['/readiness', '/v1/readiness'].includes(url.pathname) && !coachRunMatch && !coachEventMatch && !coachEventsMatch) return error(request, 404, 'Ruta no encontrada', env)
   if (request.method === 'POST' && !['/v1/adaptations/analyze', '/v1/adaptations/events', '/v1/providers/probe'].includes(url.pathname) && !coachCollection && !coachRunMatch && !coachCancelMatch) return error(request, 404, 'Ruta no encontrada', env)
   const configurationError = productionConfigError(env)
-  if (configurationError) return error(request, 503, configurationError, env)
+  const isReadiness = request.method === 'GET' && ['/readiness', '/v1/readiness'].includes(url.pathname)
   const auth = await authenticate(request, env, deps); if (auth instanceof Response) return auth
+  // La configuración se evalúa después de autenticar: readiness y errores de
+  // producción no deben convertirse en un bypass de Auth/allowlist.
+  if (configurationError && !isReadiness) return error(request, 503, configurationError, env)
   const pseudonymKey = env.PSEUDONYMIZATION_KEY ?? env.CLERK_JWT_KEY
   const userHash = await hmac(auth.sub, pseudonymKey)
   if (coachEventsMatch && request.method === 'GET') return getCoachRunEvents(request, env, userHash, decodeURIComponent(coachEventsMatch[1]), deps)
   if (coachEventMatch && request.method === 'GET') return getCoachRunByEvent(request, env, auth.sub, userHash, decodeURIComponent(coachEventMatch[1]), now)
   if (coachRunMatch && request.method === 'GET') return getCoachRun(request, env, auth.sub, userHash, decodeURIComponent(coachRunMatch[1]), now)
   if (request.method === 'GET') {
-    const checks = await readiness(env.DB, env.VECTORIZE, env.RAG_INDEX_VERSION, env.RAG_EXPECTED_SOURCE_COUNT, env.RAG_EXPECTED_CHUNK_COUNT)
-    return json(request, { ok: Object.values(checks).every(Boolean), checks, policyVersion: 'v1', corpusVersion: env.RAG_INDEX_VERSION ?? 'none' }, Object.values(checks).every(Boolean) ? 200 : 503, env)
+    const checks = await readiness(env, env.DB, env.VECTORIZE, env.RAG_INDEX_VERSION, env.RAG_EXPECTED_SOURCE_COUNT, env.RAG_EXPECTED_CHUNK_COUNT)
+    const configuration = coachReadinessConfiguration(env)
+    return json(request, { ok: Object.values(checks).every(Boolean), checks, policyVersion: 'v1', corpusVersion: env.RAG_INDEX_VERSION ?? 'none', configuration }, Object.values(checks).every(Boolean) ? 200 : 503, env)
   }
   if (!betaEnabled(env)) return error(request, 403, 'La beta del coach está cerrada', env)
-  const requiredConsent = env.REQUIRED_CONSENT_VERSION ?? 'coach-beta-v1'
+  const requiredConsent = env.REQUIRED_CONSENT_VERSION ?? COACH_CONSENT_VERSION
   const headerConsent = request.headers.get('X-NextRep-Consent-Version')
   const headerDevice = request.headers.get('X-NextRep-Device-Id')
   if (env.ENABLE_BETA !== undefined && (headerConsent !== requiredConsent || !headerDevice?.trim())) return error(request, 403, 'Consentimiento y dispositivo vigentes requeridos', env)

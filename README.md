@@ -30,6 +30,12 @@ Consulta el [estado y criterios de apertura](docs/ADAPTACION-ENTRENAMIENTO.md) y
 Worker se verifican localmente; aún no cubren el recorrido remoto completo ni aprueban la apertura.
 El canario `.cache` es solo una referencia local fuera de Git.
 
+La configuración declarativa de la beta privada fija `gemini-3.6-flash` como preferido y
+`deepseek-ai/deepseek-v4-flash-0731` como fallback NVIDIA, con streaming apagado y consentimiento
+`coach-context-v3-gemini-nvidia`. La PWA explica que el contexto puede llegar a Google Gemini o NVIDIA
+y que Google puede usar datos del nivel gratuito para mejorar sus productos. Las claves y las cuotas
+efectivas de Gemini son requisitos remotos pendientes; no se guardan en el repositorio ni en el bundle.
+
 ### Laboratorio reproducible del agente
 
 La primera entrega del agente original vive en `packages/agent-lab` y trabaja exclusivamente con

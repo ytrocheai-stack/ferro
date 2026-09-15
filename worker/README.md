@@ -2,16 +2,16 @@
 
 ## T0 — proveedor y modelos fijados
 
-Este paso es documental y no migra el modelo. El Worker usa el proveedor NVIDIA
-configurado actualmente. La configuración por entorno es explícita: `worker/wrangler.toml`
-declara Kimi para desarrollo con las flags apagadas, mientras
-`worker/wrangler.production.toml` declara DeepSeek Flash para producción; Pro,
+La configuración por entorno es explícita: `worker/wrangler.toml` declara Gemini/NVIDIA
+con las flags apagadas para desarrollo, mientras `worker/wrangler.production.toml` fija
+`gemini-3.6-flash` como preferido y `deepseek-ai/deepseek-v4-flash-0731` como fallback,
+con 40 RPM NVIDIA, `coach-context-v3-gemini-nvidia` y streaming apagado. Pro,
 reranking y provider probe permanecen apagados. `gpt-5.6-luna` está documentado
 para la API de Codex, pero no está verificado que esta PWA pueda acceder a él con la
 suscripción del usuario sin nuevas credenciales ni facturación de API. No se debe
 interpretar el uso de Luna como agente dentro de Codex como modelo del Worker.
 
-No se modifican secretos, modelos activos, flags ni endpoints. Las comprobaciones
+No se modifican secretos ni se incluyen en TOML, bundle, readiness o logs. Las comprobaciones
 de este bloqueo son locales y documentales; no acreditan acceso remoto, despliegue,
 Clerk real ni teclado Android real. El detalle y las comprobaciones pendientes están
 en [el informe T0](../docs/MIGRACION-NEXTREP-T0-2026-09-09.md).
@@ -35,7 +35,7 @@ incluyen consentimiento versionado y dispositivo.
 | Ruta | Comportamiento actual |
 |---|---|
 | `GET /health` | Pública, económica, sin proveedores; informa disponibilidad y política |
-| `GET /readiness`, `GET /v1/readiness` | Autenticadas; prueban consultas D1, disponibilidad de Vectorize y corpus activo, sin modelos |
+| `GET /readiness`, `GET /v1/readiness` | Autenticadas; prueban consultas D1, disponibilidad de Vectorize y corpus activo, y muestran configuración de proveedores sin claves |
 | `POST /v1/adaptations/analyze` | Auth, beta, consentimiento, presupuesto/reserva, candidatos y explicación opcional |
 | `POST /v1/adaptations/events` | Auth/beta y eventos operativos de aceptación; no persiste el payload del entrenamiento |
 | `POST /v1/coach/runs` | Auth, beta, consentimiento e idempotencia; crea una ejecución durable de DeepSeek Flash mediante Workflow |
@@ -73,8 +73,10 @@ rechazo de payload diferente y UPSERT condicional para reclamar filas expiradas 
 generación. La recuperación operativa de una reserva abandonada y la prueba sobre D1 remoto siguen
 siendo gates.
 
-Las migraciones `0001`–`0013` están en disco. La auditoría las ejercitó en SQLite local; no
-verificó su aplicación a D1 remoto.
+Las migraciones `0001`–`0018` están en disco. `0014`–`0016` añaden presupuesto global,
+leases y snapshots; `0017` añade failover/circuitos por proveedor y `0018` reconcilia el
+estado de cuota Gemini. Son aditivas: no revertirlas destructivamente ni darlas por aplicadas
+en D1 remoto sin verificación.
 
 ## RAG y generación
 
@@ -150,8 +152,9 @@ antes de habilitar llamadas; un error no selecciona automáticamente Pro.
 
 ## Configuración y publicación
 
-Los TOML conservan nombre del Worker, D1 y los dos índices existentes, y todos los flags apagados.
-`wrangler.toml` usa desarrollo; `wrangler.production.toml` usa producción. **Ambos apuntan al
+Los TOML conservan nombre del Worker, D1 y los dos índices existentes. `wrangler.toml` usa
+desarrollo con proveedores apagados; `wrangler.production.toml` declara el orden y modelos de la
+beta privada, pero falla cerrado si faltan claves o cuotas efectivas. **Ambos apuntan al
 mismo Worker**: no publicar producción con el comando genérico `deploy`.
 
 Tras corregir los bloqueos y verificar migraciones/configuración privada:

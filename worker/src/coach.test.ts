@@ -73,13 +73,13 @@ function fakeDb() {
   return { db, rows, snapshots }
 }
 
-const authHeaders = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json', 'Idempotency-Key': 'event-1', 'X-NextRep-Consent-Version': 'coach-context-v2', 'X-NextRep-Device-Id': 'device-1' }
+const authHeaders = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json', 'Idempotency-Key': 'event-1', 'X-NextRep-Consent-Version': 'coach-context-v3-gemini-nvidia', 'X-NextRep-Device-Id': 'device-1' }
 
 describe('private coach runs', () => {
   it('requires the strict transport projection and enforces conversation limits', async () => {
     const { db, rows } = fakeDb()
     const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
-    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v3-gemini-nvidia', DB: db, COACH_WORKFLOW: workflow }
     const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
     const message = { id: 'message-1', role: 'user' as const, content: 'Hola', runId: 'run-1', createdAt: 1_700_000_000_000, contextVersion: 'ctx-1' }
     const withOwnerId = { ...requestBody(), context: { ...requestBody().context, snapshot: { ...requestBody().context.snapshot, conversation: [{ ...message, ownerId: 'user_1' }] } } }
@@ -98,7 +98,7 @@ describe('private coach runs', () => {
     let created = ''
     let terminated = 0
     const workflow: WorkflowBinding = { create: async ({ id }) => { created = id; return { id } }, get: () => ({ terminate: async () => { terminated++ } }) }
-    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v3-gemini-nvidia', DB: db, COACH_WORKFLOW: workflow }
     const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
     const first = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
     expect(first.status).toBe(202)
@@ -123,7 +123,7 @@ describe('private coach runs', () => {
   it('reads a run by event only inside the authenticated account', async () => {
     const { db, rows } = fakeDb()
     const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
-    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v3-gemini-nvidia', DB: db, COACH_WORKFLOW: workflow }
     const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
     const created = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
     expect(created.status).toBe(202)
@@ -138,7 +138,7 @@ describe('private coach runs', () => {
   it('streams only owned snapshots and resumes strictly after Last-Event-ID', async () => {
     const { db, rows, snapshots } = fakeDb()
     const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
-    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v3-gemini-nvidia', DB: db, COACH_WORKFLOW: workflow }
     const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
     const created = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
     const id = (await created.json() as { run: { id: string } }).run.id
@@ -157,7 +157,7 @@ describe('private coach runs', () => {
   it('closes a quiet SSE connection after the bounded window and emits heartbeat', async () => {
     const { db } = fakeDb()
     const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
-    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v3-gemini-nvidia', DB: db, COACH_WORKFLOW: workflow }
     let now = 0
     const deps = { verify: async () => ({ sub: 'user_1' }), now: () => now, sleep: async () => { now += 500 } }
     const created = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
@@ -171,7 +171,7 @@ describe('private coach runs', () => {
   it('reconciles an expired run before events and replays its failed terminal snapshot', async () => {
     const { db, rows, snapshots } = fakeDb()
     const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
-    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v3-gemini-nvidia', DB: db, COACH_WORKFLOW: workflow }
     let now = 1_700_000_000_000
     const deps = { verify: async () => ({ sub: 'user_1' }), now: () => now }
     const created = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
@@ -188,7 +188,7 @@ describe('private coach runs', () => {
   it('cancels durably with a cancelled terminal snapshot and does not rewrite it as failed', async () => {
     const { db, rows, snapshots } = fakeDb()
     const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
-    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v3-gemini-nvidia', DB: db, COACH_WORKFLOW: workflow }
     const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
     const created = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
     const id = (await created.json() as { run: { id: string } }).run.id
@@ -202,7 +202,7 @@ describe('private coach runs', () => {
   it('does not continue a completed turn from another conversation', async () => {
     const { db, rows } = fakeDb()
     const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
-    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v3-gemini-nvidia', DB: db, COACH_WORKFLOW: workflow }
     const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
     const first = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
     expect(first.status).toBe(202)
@@ -217,7 +217,7 @@ describe('private coach runs', () => {
   it('continues a completed turn only inside the same conversation', async () => {
     const { db, rows } = fakeDb()
     const workflow: WorkflowBinding = { create: async ({ id }) => ({ id }), get: () => ({ terminate: async () => undefined }) }
-    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v2', DB: db, COACH_WORKFLOW: workflow }
+    const env: Env = { CLERK_JWT_KEY: 'jwt', PSEUDONYMIZATION_KEY: 'pseudo', ALLOWED_CLERK_IDS: 'user_1', ENABLE_BETA: 'true', REQUIRED_CONSENT_VERSION: 'coach-context-v3-gemini-nvidia', DB: db, COACH_WORKFLOW: workflow }
     const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000_000 }
     const first = await handleRequest(new Request('https://worker.test/v1/coach/runs', { method: 'POST', headers: authHeaders, body: JSON.stringify(requestBody()) }), env, deps)
     expect(first.status).toBe(202)

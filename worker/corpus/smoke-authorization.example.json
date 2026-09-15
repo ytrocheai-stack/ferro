@@ -7,7 +7,7 @@
   "evidence": "Registrar cuota/coste cero, allowlist y consentimiento; no incluir secretos.",
   "canaryAccountId": "",
   "expectedCorpusVersion": "",
-  "expectedConsentVersion": "coach-context-v2",
+  "expectedConsentVersion": "coach-context-v3-gemini-nvidia",
   "maxRequests": 4,
   "maxInputTokens": 0,
   "maxOutputTokens": 0,
@@ -17,6 +17,9 @@
     "ENABLE_BETA": true,
     "ENABLE_EMBEDDINGS": true,
     "ENABLE_FLASH": true,
+    "ENABLE_GEMINI": true,
+    "ENABLE_NVIDIA": true,
+    "ENABLE_COACH_STREAMING": false,
     "ENABLE_PRO": false,
     "ENABLE_RERANKING": false,
     "ENABLE_PROVIDER_PROBE": false

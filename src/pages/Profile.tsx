@@ -122,7 +122,7 @@ export function CoachProfileCard() {
 function CoachPrivacyCard() {
   const { isSignedIn } = useAuth()
   if (!isSignedIn || !import.meta.env.VITE_ADAPTATION_WORKER_URL) return null
-  return <div className="card mt-4 px-4 py-3 text-xs leading-relaxed text-muted"><div className="pb-1 text-sm font-bold text-text">Privacidad del coach adaptativo</div>Tus datos se guardan primero en este dispositivo. Con tu consentimiento, enviamos perfil, objetivos, restricciones, rutinas, conversación y hasta seis entrenamientos terminados al backend privado en Cloudflare y al modelo servido por NVIDIA. Para ejecutar y recuperar solicitudes, el backend guarda temporalmente la solicitud validada completa (request_json) y su respuesta. Las ejecuciones terminadas se depuran después de siete días y la telemetría operativa después de 30 días. No guardamos JWT ni credenciales; evita incluir información personal innecesaria en los mensajes.</div>
+  return <div className="card mt-4 px-4 py-3 text-xs leading-relaxed text-muted"><div className="pb-1 text-sm font-bold text-text">Privacidad del coach adaptativo</div>Tus datos se guardan primero en este dispositivo. Con tu consentimiento, el contexto seleccionado (perfil, objetivos, restricciones, rutinas, conversación y hasta seis entrenamientos terminados) puede enviarse al backend privado en Cloudflare y a Google Gemini o NVIDIA para generar la respuesta. Google indica que el contenido del nivel gratuito puede utilizarse para mejorar sus productos. Para ejecutar y recuperar solicitudes, el backend guarda temporalmente la solicitud validada completa (request_json) y su respuesta. Las ejecuciones terminadas se depuran después de siete días y la telemetría operativa después de 30 días. No guardamos JWT ni credenciales; evita incluir información personal innecesaria en los mensajes.</div>
 }
 
 function CoachBetaCard() {
@@ -152,7 +152,7 @@ function CoachBetaCard() {
       </div>
       {isSignedIn && userId && !consent && (
         <div className="mt-3 rounded-xl bg-surface-2 px-3 py-2.5 text-xs leading-relaxed text-muted">
-          Al activar, autorizas enviar tu perfil editable, objetivos, restricciones, rutinas, conversación y hasta seis entrenamientos recientes terminados al backend privado de NextRep en Cloudflare y al modelo de IA servido por NVIDIA para generar la respuesta. Los datos no se comparten con otras cuentas; puedes desactivar el coach cuando quieras. Versión de consentimiento: {COACH_CONSENT_VERSION}. Si cambia esta versión tendrás que aceptar de nuevo.
+          Al activar, autorizas enviar tu perfil editable, objetivos, restricciones, rutinas, conversación y hasta seis entrenamientos recientes terminados al backend privado de NextRep en Cloudflare y a Google Gemini o NVIDIA para generar la respuesta. Google puede usar datos enviados mediante su nivel gratuito para mejorar sus productos. Los datos no se comparten con otras cuentas; puedes desactivar el coach cuando quieras. Versión de consentimiento: {COACH_CONSENT_VERSION}. Si cambia esta versión tendrás que aceptar de nuevo en este dispositivo.
           <button className="btn btn-primary mt-2 w-full py-2" type="button" onClick={async () => setConsent(await grantCoachConsent(userId))}>Aceptar y activar coach</button>
         </div>
       )}

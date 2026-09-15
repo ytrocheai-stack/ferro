@@ -127,6 +127,11 @@ describe('adaptation worker', () => {
     expect(await response.json()).toMatchObject({ ok: false, checks: { d1: false, index: false, corpus: false } })
   })
 
+  it('does not expose readiness configuration without authentication', async () => {
+    const response = await handleRequest(new Request('https://worker.test/readiness', { headers: { Origin: headers.Origin } }), env, deps)
+    expect(response.status).toBe(401)
+  })
+
   it('marca D1 y Vectorize no disponibles cuando las consultas reales fallan', async () => {
     const broken = { prepare: () => ({ first: async () => { throw new Error('D1 unavailable') } }) }
     const response = await handleRequest(new Request('https://worker.test/readiness', { headers }), { ...env, DB: broken as never, VECTORIZE: { query: async () => { throw new Error('index unavailable') } } }, deps)

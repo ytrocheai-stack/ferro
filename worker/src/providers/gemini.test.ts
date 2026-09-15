@@ -172,9 +172,15 @@ describe('Gemini 3.6 Flash generation transport', () => {
     expect(aborted).toBe(true)
   })
 
-  it('does not accept a different model', async () => {
-    const provider = new GeminiGenerationProvider(apiKey, async () => response())
+  it('accepts a configured Gemini model on the fixed API host', async () => {
+    const requested: string[] = []
+    const provider = new GeminiGenerationProvider(apiKey, async (input) => { requested.push(String(input)); return response() })
+    await expect(provider.generate('prompt', 'gemini-3.7-flash')).resolves.toMatchObject({ content: wire })
+    expect(requested[0]).toContain('/models/gemini-3.7-flash:generateContent')
+  })
 
-    await expect(provider.generate('prompt', 'another-model')).rejects.toMatchObject({ code: 'invalid-config' })
+  it('rejects an invalid model identifier', async () => {
+    const provider = new GeminiGenerationProvider(apiKey, async () => response())
+    await expect(provider.generate('prompt', 'another model')).rejects.toMatchObject({ code: 'invalid-config' })
   })
 })

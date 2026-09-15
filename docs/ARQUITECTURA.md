@@ -78,12 +78,12 @@ El contrato compartido también expone `CoachEvent`, `AgentRun`, `ChangeSet`, `E
 se limitan a planificación futura, sustitución de ejercicios y objetivos nutricionales; no existe
 una operación para alterar silenciosamente un entrenamiento terminado.
 
-El consentimiento `coach-context-v2` se refleja en localStorage y en `coachConsents` por cuenta/dispositivo; el payload de
+El consentimiento `coach-context-v3-gemini-nvidia` se refleja en localStorage y en `coachConsents` por cuenta/dispositivo; el payload de
 análisis se guarda en `adaptationJobs` congelado por identidad y con `ownerId`. La cola cancela el
 contexto activo al cambiar sesión o revocar consentimiento, despierta el procesador al encolar o
 reintentar y programa un temporizador para `nextRetryAt`. Jobs sin propietario heredados no se
 procesan. Las ejecuciones conversacionales usan `coachRuns`/Workflow, un ledger de intentos y una
-revisión de consentimiento dentro de la transacción de aplicación. D1 conserva temporalmente `request_json`
+revisión de consentimiento dentro de la transacción de aplicación. El cambio de versión obliga a aceptar de nuevo en cada dispositivo; cambiar de cuenta o revocar deshabilita nuevos envíos y cancela los runs locales activos. D1 conserva temporalmente `request_json`
 con el contexto validado realmente enviado y la decisión del coach, con eliminación de ejecuciones terminales
 después de siete días; el `ownerId` no se envía en los mensajes de transporte. La sincronización remota del
 historial personal y los gates operativos de apertura siguen pendientes.
@@ -93,7 +93,9 @@ tokens estimados y ejecuciones concurrentes por cuenta/semana, liquida tokens re
 rechaza una respuesta que supere el límite; si no hay `usage`, cobra la estimación conservadora.
 
 Hay infraestructura declarada y el Worker remoto responde. `worker/wrangler.production.toml` configura
-producción explícita y `worker/wrangler.toml` desarrollo; ambos apuntan al mismo Worker. Desarrollo
+la beta privada con Gemini preferido y NVIDIA como fallback; `worker/wrangler.toml` mantiene desarrollo
+apagado. Ambos apuntan al mismo Worker. El readiness autenticado expone modelos, orden, flags, consentimiento,
+allowlist por conteo y cuotas sin exponer claves ni valores secretos. Desarrollo
 mantiene flags apagadas y producción conserva Flash/embeddings/beta habilitados solo para la cuenta
 permitida, con Pro/reranking/probe apagados.
 El corpus sigue como propuesta, sin evaluación representativa; cada vector lleva su namespace y
