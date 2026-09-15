@@ -22,12 +22,13 @@
 
 - La implementación anterior reemplazaba `runs` con únicamente los resultados de la conversación seleccionada. Ahora fusiona por `id`, conserva las conversaciones y propietarios ajenos, y elimina solo los registros obsoletos del propietario y conversación seleccionados.
 - La implementación anterior hacía `loadMessages(selectedId, 'refresh')` en cada ciclo porque encontraba cualquier run terminal. Ahora compara `runsRef` con el resultado del ciclo y recarga mensajes solo cuando un run seleccionado pasa de `queued`/`running` a `completed`/`failed`/`cancelled` (o aparece ya terminal por primera vez). También evita polls superpuestos y conserva la pausa por visibilidad.
+- La corrección final añade un `AbortController` por ciclo: ocultar la página, cambiar de conversación o desmontar el componente aborta el refresh remoto en vuelo; `AbortError` no se persiste como error de negocio ni se anuncia al usuario.
 - La prueba `fusiona solo la conversación consultada y recarga mensajes una vez por transición terminal` cubre simultáneamente la preservación de otra conversación y la ausencia de refresh repetido.
-- `npm run lint` — FAIL por el hallazgo preexistente en `src/lib/coachClient.ts:476` (`no-useless-assignment`); no se modificó ese archivo. El lint dirigido de T11 terminó sin errores y con los 3 warnings preexistentes de cleanup de refs en `CoachPage.tsx`.
+- `npm run lint` — FAIL por el hallazgo preexistente en la rama de reconexión de `src/lib/coachClient.ts` (`no-useless-assignment`); la corrección de abort no modifica esa lógica. El lint dirigido de T11 terminó sin errores en los archivos nuevos, con los 3 warnings preexistentes de cleanup de refs en `CoachPage.tsx`.
 - `npm run typecheck` — OK.
 - `git diff --check` — OK; solo informa conversiones LF/CRLF de archivos ya modificados en el working tree.
 - `npm run test:e2e:coach` — OK, 2/2 (Chromium Android y WebKit iPhone). La corrección solo actualizó expectativas obsoletas; los hunks preexistentes del usuario (import y validación de schema) no se incluyeron en el commit.
 
 ## Límites
 
-No se tocaron proveedores, modelos, secretos, deploy ni contratos/índices de datos. No se ejecutó `npm run check` completo porque el lint global sigue fallando por un error fuera de T11 en `src/lib/coachClient.ts:476` (`no-useless-assignment`). Las pruebas unitarias usan jsdom; la E2E usa worker simulado y no demuestra backend/proveedor real, Axe, zoom al 200% ni todos los viewports; tampoco prueba teclado Android físico.
+No se tocaron proveedores, modelos, secretos, deploy ni contratos/índices de datos. No se ejecutó `npm run check` completo porque el lint global sigue fallando por el hallazgo preexistente de `no-useless-assignment` en la rama de reconexión de `src/lib/coachClient.ts`; la corrección de abort no modifica esa lógica. Las pruebas unitarias usan jsdom; la E2E usa worker simulado y no demuestra backend/proveedor real, Axe, zoom al 200% ni todos los viewports; tampoco prueba teclado Android físico.
