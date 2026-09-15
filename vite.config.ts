@@ -7,6 +7,7 @@ import { resolve as resolvePath } from 'node:path'
 // Base '/ferro/' en producción (GitHub Pages) y en `vite preview`; '/' en dev
 export default defineConfig(({ command, isPreview, mode }) => ({
   base: command === 'build' || isPreview ? '/ferro/' : '/',
+  build: { outDir: process.env.NEXTREP_BUILD_DIR || 'dist' },
   resolve: mode === 'e2e' || process.env.VITE_E2E_AGENT === 'true' ? { alias: { '@clerk/react': resolvePath('e2e/clerk-mock.tsx') } } : undefined,
   plugins: [
     react(),

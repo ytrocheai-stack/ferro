@@ -82,7 +82,7 @@ function DataDisclosure({ workoutsCount }: { workoutsCount: number }) {
   )
 }
 
-function CoachProfileCard() {
+export function CoachProfileCard() {
   const { isSignedIn, userId } = useAuth()
   const stored = useLiveQuery(async () => userId ? await db.coachProfiles.get(userId) : undefined, [userId], undefined)
   const [population, setPopulation] = useState('')
@@ -90,6 +90,10 @@ function CoachProfileCard() {
   const [pain, setPain] = useState('')
   const [equipment, setEquipment] = useState('')
   const [confirmed, setConfirmed] = useState(false)
+  const savingRef = useRef(false)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [saved, setSaved] = useState(false)
   useEffect(() => {
     if (!stored) return
     setPopulation(stored.population.join(', ')); setGoals(stored.goals.join(', ')); setPain(stored.injuriesOrPain.join(', ')); setEquipment(stored.unavailableEquipment.join(', ')); setConfirmed(stored.populationConfirmed)
@@ -97,15 +101,28 @@ function CoachProfileCard() {
   if (!isSignedIn || !userId || !import.meta.env.VITE_ADAPTATION_WORKER_URL) return null
   const split = (value: string) => value.split(',').map((item) => item.trim()).filter(Boolean)
   const save = async () => {
-    await saveCoachProfile({ id: userId, ownerId: userId, population: split(population), populationConfirmed: confirmed, goals: split(goals), injuriesOrPain: split(pain), unavailableEquipment: split(equipment), excludedExercises: stored?.excludedExercises ?? [], nutritionConstraints: stored?.nutritionConstraints ?? [] })
+    if (savingRef.current) return
+    savingRef.current = true
+    setSaving(true)
+    setSaveError('')
+    setSaved(false)
+    try {
+      await saveCoachProfile({ id: userId, ownerId: userId, population: split(population), populationConfirmed: confirmed, goals: split(goals), injuriesOrPain: split(pain), unavailableEquipment: split(equipment), excludedExercises: stored?.excludedExercises ?? [], nutritionConstraints: stored?.nutritionConstraints ?? [] })
+      setSaved(true)
+    } catch {
+      setSaveError('No se pudo guardar el contexto. Tus cambios siguen en el formulario; vuelve a intentarlo.')
+    } finally {
+      savingRef.current = false
+      setSaving(false)
+    }
   }
-  return <section className="card mt-4 px-4 py-3" aria-labelledby="coach-profile-title"><h2 id="coach-profile-title" className="text-sm font-bold">Contexto mínimo del coach</h2><p className="mt-1 text-xs leading-relaxed text-muted">Solo se usará si lo confirmas. Escribe población aplicable (por ejemplo, adulto general), objetivos, dolor/restricciones y equipo no disponible. “No informado” no significa “sin restricciones”.</p><label className="mt-3 block text-xs font-semibold" htmlFor="coach-population">Población confirmada</label><input id="coach-population" className="input mt-1 w-full" value={population} onChange={(event) => setPopulation(event.target.value)} placeholder="adult-general" /><label className="mt-2 flex items-center gap-2 text-xs"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> Confirmo que la población escrita es aplicable</label><label className="mt-3 block text-xs font-semibold" htmlFor="coach-goals">Objetivos</label><input id="coach-goals" className="input mt-1 w-full" value={goals} onChange={(event) => setGoals(event.target.value)} placeholder="fuerza, adherencia" /><label className="mt-2 block text-xs font-semibold" htmlFor="coach-pain">Dolor o restricciones</label><input id="coach-pain" className="input mt-1 w-full" value={pain} onChange={(event) => setPain(event.target.value)} placeholder="dejar vacío si no informado" /><label className="mt-2 block text-xs font-semibold" htmlFor="coach-equipment">Equipo no disponible</label><input id="coach-equipment" className="input mt-1 w-full" value={equipment} onChange={(event) => setEquipment(event.target.value)} placeholder="barra, discos" /><button className="btn btn-surface mt-3 w-full py-2 text-xs" type="button" onClick={() => void save()}>Guardar contexto del coach</button></section>
+  return <section className="card mt-4 px-4 py-3" aria-labelledby="coach-profile-title"><h2 id="coach-profile-title" className="text-sm font-bold">Contexto mínimo del coach</h2><p className="mt-1 text-xs leading-relaxed text-muted">Solo se usará si lo confirmas. Escribe población aplicable (por ejemplo, adulto general), objetivos, dolor/restricciones y equipo no disponible. “No informado” no significa “sin restricciones”.</p><label className="mt-3 block text-xs font-semibold" htmlFor="coach-population">Población confirmada</label><input id="coach-population" className="input mt-1 w-full" value={population} onChange={(event) => setPopulation(event.target.value)} placeholder="adult-general" /><label className="mt-2 flex items-center gap-2 text-xs"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> Confirmo que la población escrita es aplicable</label><label className="mt-3 block text-xs font-semibold" htmlFor="coach-goals">Objetivos</label><input id="coach-goals" className="input mt-1 w-full" value={goals} onChange={(event) => setGoals(event.target.value)} placeholder="fuerza, adherencia" /><label className="mt-2 block text-xs font-semibold" htmlFor="coach-pain">Dolor o restricciones</label><input id="coach-pain" className="input mt-1 w-full" value={pain} onChange={(event) => setPain(event.target.value)} placeholder="dejar vacío si no informado" /><label className="mt-2 block text-xs font-semibold" htmlFor="coach-equipment">Equipo no disponible</label><input id="coach-equipment" className="input mt-1 w-full" value={equipment} onChange={(event) => setEquipment(event.target.value)} placeholder="barra, discos" /><button className="btn btn-surface mt-3 w-full py-2 text-xs" type="button" disabled={saving} onClick={() => void save()}>{saving ? 'Guardando…' : 'Guardar contexto del coach'}</button>{saveError && <p role="alert" className="mt-2 text-sm text-danger">{saveError}</p>}{saved && <p role="status" className="mt-2 text-sm text-success">Contexto guardado.</p>}</section>
 }
 
 function CoachPrivacyCard() {
   const { isSignedIn } = useAuth()
   if (!isSignedIn || !import.meta.env.VITE_ADAPTATION_WORKER_URL) return null
-  return <div className="card mt-4 px-4 py-3 text-xs leading-relaxed text-muted"><div className="pb-1 text-sm font-bold text-text">Privacidad del coach adaptativo</div>Las rutinas, entrenos y feedback se guardan primero en este dispositivo. Para generar propuestas se envía al Worker únicamente la rutina mínima y las exposiciones necesarias. El Worker usa un identificador derivado de tu cuenta y conserva durante un máximo de siete días la respuesta canónica del análisis —incluye ejercicio, carga, repeticiones, decisiones, citas e identificadores de exposiciones comparables— para repetir de forma idempotente una solicitud equivalente sin regenerarla. La telemetría operativa se conserva hasta 30 días. NVIDIA puede procesar la solicitud de forma transitoria; no guardamos JWT, correo, nombre, prompt bruto ni el payload original completo.</div>
+  return <div className="card mt-4 px-4 py-3 text-xs leading-relaxed text-muted"><div className="pb-1 text-sm font-bold text-text">Privacidad del coach adaptativo</div>Tus datos se guardan primero en este dispositivo. Con tu consentimiento, enviamos perfil, objetivos, restricciones, rutinas, conversación y hasta seis entrenamientos terminados al backend privado en Cloudflare y al modelo servido por NVIDIA. Para ejecutar y recuperar solicitudes, el backend guarda temporalmente la solicitud validada completa (request_json) y su respuesta. Las ejecuciones terminadas se depuran después de siete días y la telemetría operativa después de 30 días. No guardamos JWT ni credenciales; evita incluir información personal innecesaria en los mensajes.</div>
 }
 
 function CoachBetaCard() {

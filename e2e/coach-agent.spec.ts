@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { coachRunRequestSchema } from '../packages/adaptation-core/src/contract'
 
 const accountId = 'user_e2e_coach'
 
@@ -14,7 +15,7 @@ test('el flujo del agente crea y continúa ejecuciones sin proveedor real', asyn
 
   await page.route('**/mock-worker/v1/coach/runs', async (route) => {
     if (route.request().method() !== 'POST') return route.fallback()
-    const request = route.request().postDataJSON() as { event: { id: string; causedByEventId?: string; accountId: string }; context: { version: string } }
+    const request = coachRunRequestSchema.parse(route.request().postDataJSON())
     expect(request.event.accountId).toBe(accountId)
     expect(request.context.version).toMatch(/^coach-context-/)
     contextVersion = request.context.version

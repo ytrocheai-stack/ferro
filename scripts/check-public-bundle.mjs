@@ -12,7 +12,7 @@ async function files(dir) {
   }
   return result
 }
-for (const path of await files('dist')) {
+for (const path of await files(process.env.NEXTREP_BUILD_DIR || 'dist')) {
   const content = await readFile(path, 'utf8')
   const found = forbidden.find((name) => content.includes(name))
   if (found) throw new Error(`Secreto detectado en el bundle público: ${found}`)
