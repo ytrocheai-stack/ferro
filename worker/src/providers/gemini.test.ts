@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { agentWireJsonSchema } from '../../../packages/adaptation-core/src/agent'
 import {
   GEMINI_GENERATE_CONTENT_URL,
   GEMINI_MODEL,
   GeminiGenerationProvider,
+  geminiResponseJsonSchema,
   type GeminiResponse,
 } from './gemini'
 
@@ -40,10 +40,19 @@ describe('Gemini 3.6 Flash generation transport', () => {
         candidateCount: 1,
         maxOutputTokens: 4_000,
         responseMimeType: 'application/json',
-        responseJsonSchema: agentWireJsonSchema,
+        responseJsonSchema: geminiResponseJsonSchema,
       },
     })
     expect(JSON.stringify(body)).not.toContain(apiKey)
+    const schema = body.generationConfig && typeof body.generationConfig === 'object' ? (body.generationConfig as Record<string, unknown>).responseJsonSchema : undefined
+    const schemaText = JSON.stringify(schema)
+    expect(schemaText).not.toContain('"$schema"')
+    expect(schemaText).not.toContain('minLength')
+    expect(schemaText).not.toContain('maxLength')
+    expect(schemaText).not.toContain('exclusiveMinimum')
+    expect(schemaText).not.toContain('"const"')
+    expect(schemaText).toContain('"enum":["tool"]')
+    expect(schemaText).toContain('"enum":["decision"]')
     expect(result.content).toBe(wire)
     expect(result.usage).toEqual({ inputTokens: 12, outputTokens: 34 })
     expect(result.usageMetadata).toEqual({ promptTokenCount: 12, candidatesTokenCount: 34, thoughtsTokenCount: 5, totalTokenCount: 51 })
@@ -73,6 +82,7 @@ describe('Gemini 3.6 Flash generation transport', () => {
     const cases = [
       { payload: { candidates: [{ content: { parts: [] }, finishReason: 'STOP' }] }, code: 'candidate-empty' },
       { payload: { candidates: [{ content: { parts: [] }, finishReason: 'SAFETY' }] }, code: 'safety-block' },
+      { payload: { candidates: [{ content: { parts: [] }, finishReason: 'IMAGE_SAFETY' }] }, code: 'safety-block' },
       { payload: { candidates: [{ content: { parts: [{ text: wire }] }, finishReason: 'MAX_TOKENS' }] }, code: 'truncated' },
     ] as const
 
@@ -80,6 +90,18 @@ describe('Gemini 3.6 Flash generation transport', () => {
       const provider = new GeminiGenerationProvider(apiKey, async () => Response.json(item.payload))
       await expect(provider.generate('prompt', GEMINI_MODEL)).rejects.toMatchObject({ code: item.code })
     }
+  })
+
+  it('classifies IMAGE_SAFETY prompt refusals as safety blocks', async () => {
+    const provider = new GeminiGenerationProvider(apiKey, async () => Response.json({ promptFeedback: { blockReason: 'IMAGE_SAFETY' } }))
+
+    await expect(provider.generate('prompt', GEMINI_MODEL)).rejects.toMatchObject({ code: 'safety-block' })
+  })
+
+  it.each([null, 'not-an-object', 42, []])('classifies a non-object Gemini payload as invalid-response: %s', async (payload) => {
+    const provider = new GeminiGenerationProvider(apiKey, async () => Response.json(payload))
+
+    await expect(provider.generate('prompt', GEMINI_MODEL)).rejects.toMatchObject({ code: 'invalid-response' })
   })
 
   it('validates the candidate JSON against the shared wire contract', async () => {
@@ -109,6 +131,24 @@ describe('Gemini 3.6 Flash generation transport', () => {
 
     await expect(provider.generate('prompt', GEMINI_MODEL)).rejects.toMatchObject({ code: 'invalid-json' })
     await expect(provider.generate('prompt', GEMINI_MODEL)).rejects.not.toThrow(apiKey)
+  })
+
+  it('sanitizes arbitrary network and JSON errors without exposing body, URL, or secret', async () => {
+    const networkError = `network ${GEMINI_GENERATE_CONTENT_URL} ${apiKey} remote-body`
+    const networkProvider = new GeminiGenerationProvider(apiKey, async () => { throw new Error(networkError) })
+    await expect(networkProvider.generate('prompt', GEMINI_MODEL)).rejects.toMatchObject({ code: 'server-error' })
+    await expect(networkProvider.generate('prompt', GEMINI_MODEL)).rejects.not.toThrow(apiKey)
+    await expect(networkProvider.generate('prompt', GEMINI_MODEL)).rejects.not.toThrow(GEMINI_GENERATE_CONTENT_URL)
+    await expect(networkProvider.generate('prompt', GEMINI_MODEL)).rejects.not.toThrow('remote-body')
+
+    const jsonProvider = new GeminiGenerationProvider(apiKey, async () => {
+      const response = new Response('remote-body')
+      Object.defineProperty(response, 'json', { value: async () => { throw new Error(`${GEMINI_GENERATE_CONTENT_URL} ${apiKey} ${response}`) } })
+      return response
+    })
+    await expect(jsonProvider.generate('prompt', GEMINI_MODEL)).rejects.toMatchObject({ code: 'invalid-json' })
+    await expect(jsonProvider.generate('prompt', GEMINI_MODEL)).rejects.not.toThrow(apiKey)
+    await expect(jsonProvider.generate('prompt', GEMINI_MODEL)).rejects.not.toThrow(GEMINI_GENERATE_CONTENT_URL)
   })
 
   it('honours an external abort before dispatch and does not stream', async () => {
