@@ -484,7 +484,7 @@ export async function streamCoachRun(getToken: () => Promise<string | null>, run
     if (latest) current = latest
     if (!activeRun(current)) return current
     const cursor = current.snapshotSequence ?? 0
-    let shouldReconnect = false
+    let shouldReconnect: boolean
     try {
       const response = await fetch(`${url}/v1/coach/runs/${encodeURIComponent(remoteRunId)}/events`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream', 'Last-Event-ID': String(cursor) }, signal,
