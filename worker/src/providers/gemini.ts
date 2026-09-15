@@ -202,7 +202,9 @@ export class GeminiGenerationProvider implements GenerationProvider {
         reservation = await this.requestGate?.(innerSignal, serializedRequest)
         let response: Response
         try {
-          response = await this.fetcher(endpoint, {
+          // workerd exige invocar fetch sin la instancia del adaptador como this.
+          const fetcher = this.fetcher
+          response = await fetcher(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
             body: serializedRequest,

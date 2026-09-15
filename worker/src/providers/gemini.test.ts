@@ -19,6 +19,15 @@ function response(overrides: Partial<GeminiResponse> = {}): Response {
 }
 
 describe('Gemini 3.5 Flash Lite generation transport', () => {
+  it('invoca fetch sin enlazar la instancia del proveedor como receptor de workerd', async () => {
+    const runtimeFetch = function (this: unknown) {
+      if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation')
+      return Promise.resolve(response())
+    } as typeof fetch
+    const provider = new GeminiGenerationProvider(apiKey, runtimeFetch)
+    await expect(provider.generate('canario ficticio', GEMINI_MODEL)).resolves.toMatchObject({ content: wire })
+  })
+
   it('sends the exact structured JSON request with the API key only in x-goog-api-key', async () => {
     let url = ''
     let init: RequestInit | undefined
