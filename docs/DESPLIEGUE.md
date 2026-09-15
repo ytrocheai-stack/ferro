@@ -28,6 +28,10 @@ real. Ver el informe [T0](MIGRACION-NEXTREP-T0-2026-09-09.md).
 > su existencia local no demuestra que estén aplicadas.
 > La evaluación de recomendaciones queda pendiente; no se afirma calidad clínica o deportiva.
 
+Las pruebas E2E del Coach usan un Worker simulado y una sesión local: demuestran contratos,
+persistencia y accesibilidad de la PWA, pero no prueban Clerk real, llamadas a Gemini/NVIDIA,
+CORS/JWT remotos ni el comportamiento de un teclado físico Android.
+
 > Release verificado 2026-09-14: `main` está en `668189b37f42792a115fc074f270fd0a4c9c5bac`.
 > Pages terminó correctamente el workflow [34814589701](https://github.com/ytrocheai-stack/ferro/actions/runs/34814589701)
 > y `https://ytrocheai-stack.github.io/ferro/version.json` confirma ese commit. Después se desplegó

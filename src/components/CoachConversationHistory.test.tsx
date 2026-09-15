@@ -14,4 +14,11 @@ describe('CoachConversationHistory', () => {
     expect(onLoadMore).toHaveBeenCalledOnce()
     expect(screen.getByRole('button', { name: 'Fuerza' })).toBeInTheDocument()
   })
+
+  it('mantiene 100 conversaciones fuera del DOM cuando sólo se carga una página de 50', () => {
+    const page = Array.from({ length: 50 }, (_, index) => ({ ...conversation, id: `conversation-${index}`, title: `Chat ${index}` }))
+    render(<CoachConversationHistory conversations={page} selectedId={page[0].id} onSelect={vi.fn()} onNew={vi.fn()} onRename={vi.fn()} onDelete={vi.fn()} hasMore />)
+    expect(screen.getAllByRole('listitem')).toHaveLength(50)
+    expect(screen.queryByRole('button', { name: 'Chat 50' })).not.toBeInTheDocument()
+  })
 })

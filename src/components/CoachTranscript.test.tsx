@@ -54,4 +54,13 @@ describe('CoachTranscript', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cargar mensajes anteriores' }))
     expect(onLoadOlder).toHaveBeenCalledTimes(1)
   })
+
+  it('renderiza sólo la página cargada de una conversación de 1.000 mensajes', () => {
+    const allMessages = Array.from({ length: 1_000 }, (_, index) => ({ ...message, id: `message-${index}`, sequence: index + 1, content: `Mensaje ${index}` }))
+    const loadedPage = allMessages.slice(-50)
+    render(<CoachTranscript conversationId="conversation-1" messages={loadedPage} runs={[]} onLoadOlder={vi.fn()} hasOlder loadingOlder={false} />)
+    expect(screen.getAllByRole('article')).toHaveLength(50)
+    expect(screen.queryByText('Mensaje 0')).not.toBeInTheDocument()
+    expect(screen.getByText('Mensaje 999')).toBeInTheDocument()
+  })
 })

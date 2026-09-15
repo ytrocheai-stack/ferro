@@ -42,6 +42,20 @@ test('la pantalla inicial no tiene violaciones axe críticas', async ({ page }, 
   expect(result.violations.filter((violation) => violation.impact === 'critical')).toEqual([])
 })
 
+test('el gate local del coach conserva accesibilidad en viewports extremos y zoom 200%', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === 'webkit-iphone', 'axe-core no termina de forma determinista en WebKit')
+  for (const width of [320, 375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 800 })
+    await page.goto('./coach')
+    await expect(page.getByRole('heading', { name: 'Coach' })).toBeVisible()
+    await expect(page.getByText('Inicia sesión para usar el coach privado.')).toBeVisible()
+    const result = await new AxeBuilder({ page }).analyze()
+    expect(result.violations.filter((violation) => violation.impact === 'critical')).toEqual([])
+  }
+  await page.evaluate(() => { document.body.style.zoom = '200%' })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth * 2)).toBe(true)
+})
+
 test('Análisis permite cambiar el periodo sin perder el contexto', async ({ page }) => {
   await page.goto('./analisis')
   await expect(page.getByRole('heading', { name: 'Progreso' })).toBeVisible()
