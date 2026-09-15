@@ -257,6 +257,8 @@ export interface CoachRunRecord {
   reconciliationState?: 'pending' | 'reconciled' | 'uncertain'
   /** Importado desde un backup; requiere reintento local explícito antes de enviar. */
   legacy?: boolean
+  /** Transporte durable de una ejecución activa; el fallback SSE no se reintenta tras navegar o recargar. */
+  transport?: 'sse' | 'polling'
   contextVersion: string
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
   request: CoachRunRequest

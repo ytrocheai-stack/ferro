@@ -89,6 +89,20 @@ export default function CoachPage() {
     setStreamPollingIds(next)
   }, [])
 
+  const syncStreamPolling = useCallback((candidateRuns: CoachRunRecord[]) => {
+    const next = new Set(streamPollingIdsRef.current)
+    for (const run of candidateRuns) {
+      if (run.status === 'queued' || run.status === 'running') {
+        if (run.transport === 'polling') next.add(run.id)
+        else next.delete(run.id)
+      } else {
+        next.delete(run.id)
+      }
+    }
+    streamPollingIdsRef.current = next
+    setStreamPollingIds(next)
+  }, [])
+
   selectedIdRef.current = selectedId
   runsRef.current = runs
   getTokenRef.current = getToken
@@ -141,6 +155,7 @@ export default function CoachPage() {
 
   const streamRun = useCallback(async (run: CoachRunRecord) => {
     if (!isCoachStreamingEnabled() || !ownerId || run.ownerId !== ownerId || streamControllers.current.has(run.id) || streamTimers.current.has(run.id)) return
+    if (run.transport === 'polling') { updateStreamPolling(run.id, true); return }
     const controller = new AbortController()
     streamControllers.current.set(run.id, controller)
     const update = (next: CoachRunRecord) => {
@@ -196,6 +211,7 @@ export default function CoachPage() {
       if (!current || generation !== conversationGeneration.current || selectedIdRef.current !== selectedId || getCoachAccountId() !== ownerId) return
       const ownedRuns = nextRuns.filter((run) => run.ownerId === ownerId)
       setRuns(ownedRuns)
+      syncStreamPolling(ownedRuns)
       if (revision.current === hydrationRevision) {
         draftRef.current = savedDraft
         setDraft(savedDraft)
@@ -203,10 +219,10 @@ export default function CoachPage() {
         setCoachDraft(ownerId, selectedId, draftRef.current)
         void flushCoachDraft(ownerId, selectedId)
       }
-      if (isCoachStreamingEnabled()) ownedRuns.filter((run) => run.status === 'queued' || run.status === 'running').forEach((run) => { void streamRun(run) })
+      if (isCoachStreamingEnabled()) ownedRuns.filter((run) => (run.status === 'queued' || run.status === 'running') && run.transport !== 'polling').forEach((run) => { void streamRun(run) })
     })
     return () => { current = false }
-  }, [loadMessages, ownerId, selectedId, streamRun])
+  }, [loadMessages, ownerId, selectedId, streamRun, syncStreamPolling])
 
   useEffect(() => {
     if (!ownerId || !selectedId) return
@@ -225,7 +241,7 @@ export default function CoachPage() {
         const previousSelectedRuns = new Map(runsRef.current.filter((run) => run.ownerId === ownerId && run.conversationId === selectedId).map((run) => [run.id, run]))
         const ownedRuns = nextRuns.filter((run) => run.ownerId === ownerId)
         const refreshedRuns = await Promise.all(ownedRuns.map(async (run) => {
-          if (run.remoteRunId && isActiveRun(run) && (!streaming || streamPollingIds.has(run.id))) {
+          if (run.remoteRunId && isActiveRun(run) && (!streaming || run.transport === 'polling' || streamPollingIds.has(run.id))) {
             try { return await refreshCoachRun(getTokenRef.current, run.id, controller.signal) ?? run } catch (cause) {
               if (isAbortError(cause)) throw cause
               /* El siguiente ciclo reintentará la consulta. */
@@ -267,7 +283,7 @@ export default function CoachPage() {
     if (!isCoachStreamingEnabled() || !ownerId) return
     const reconnect = () => {
       if (document.visibilityState !== 'visible') return
-      runsRef.current.filter((run) => run.ownerId === ownerId && (run.status === 'queued' || run.status === 'running') && !streamPollingIdsRef.current.has(run.id)).forEach((run) => { void streamRun(run) })
+      runsRef.current.filter((run) => run.ownerId === ownerId && (run.status === 'queued' || run.status === 'running') && run.transport !== 'polling' && !streamPollingIdsRef.current.has(run.id)).forEach((run) => { void streamRun(run) })
     }
     const pauseOrReconnect = () => {
       if (document.visibilityState === 'visible') { reconnect(); return }
