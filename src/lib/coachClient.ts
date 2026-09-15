@@ -195,16 +195,22 @@ function waitForStreamRetry(milliseconds: number, signal?: AbortSignal): Promise
   })
 }
 
-export async function fetchCoach(url: string, init: RequestInit = {}, timeoutMs = COACH_CLIENT_TIMEOUT_MS): Promise<Response> {
+export async function fetchCoach(url: string, init: RequestInit = {}, timeoutMs = COACH_CLIENT_TIMEOUT_MS, signal?: AbortSignal): Promise<Response> {
   const controller = new AbortController()
+  const callerSignal = signal ?? init.signal ?? undefined
+  const abortFromCaller = () => controller.abort()
+  if (callerSignal?.aborted) controller.abort()
+  else callerSignal?.addEventListener('abort', abortFromCaller, { once: true })
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     return await fetch(url, { ...init, signal: controller.signal })
   } catch (cause) {
+    if (callerSignal?.aborted) throw cause
     if (controller.signal.aborted) throw messageError('coach-call-timeout')
     throw cause
   } finally {
     clearTimeout(timer)
+    callerSignal?.removeEventListener('abort', abortFromCaller)
   }
 }
 
@@ -349,6 +355,10 @@ function coachStatusError(response: Response, text: string): string {
   return coachHttpError(response, text).message
 }
 
+function isAbortError(cause: unknown): boolean {
+  return typeof cause === 'object' && cause !== null && 'name' in cause && (cause as { name?: unknown }).name === 'AbortError'
+}
+
 async function dispatchRun(getToken: () => Promise<string | null>, localId: string): Promise<CoachRunRecord> {
   const initial = (await db.coachRuns.get(localId))!
   const url = workerUrl()
@@ -418,15 +428,16 @@ export async function queueCoachSessionFinished(workoutId: string): Promise<void
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('nextrep:coach-wake'))
 }
 
-export async function refreshCoachRun(getToken: () => Promise<string | null>, runId: string): Promise<CoachRunRecord | undefined> {
+export async function refreshCoachRun(getToken: () => Promise<string | null>, runId: string, signal?: AbortSignal): Promise<CoachRunRecord | undefined> {
   const local = await db.coachRuns.get(runId)
   if (!local || !remoteId(local) || !workerUrl() || !navigator.onLine) return local
   const token = await getToken()
   if (!token) return local
   let response: Response
   try {
-    response = await fetchCoach(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(remoteId(local)!)}`, { headers: { Authorization: `Bearer ${token}` } })
+    response = await fetchCoach(`${workerUrl()}/v1/coach/runs/${encodeURIComponent(remoteId(local)!)}`, { headers: { Authorization: `Bearer ${token}` } }, COACH_CLIENT_TIMEOUT_MS, signal)
   } catch (cause) {
+    if (signal?.aborted || isAbortError(cause)) throw cause
     const error = cause instanceof Error ? cause.message : 'unknown-outcome'
     if (isRecoverableCoachError(error)) return persistTransportError(runId, error)
     throw cause

@@ -22,6 +22,7 @@ const defaultTitle = 'Nueva conversación'
 const pendingCancellation = (run: CoachRunRecord) => Boolean(run.cancelRequestedAt || run.error === 'cancellation-pending')
 const isTerminalRun = (run: CoachRunRecord) => run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'
 const isActiveRun = (run: CoachRunRecord) => run.status === 'queued' || run.status === 'running'
+const isAbortError = (cause: unknown) => typeof cause === 'object' && cause !== null && 'name' in cause && (cause as { name?: unknown }).name === 'AbortError'
 const errorLabel = (error?: string) => error === 'provider-rate-limited' ? 'El proveedor limitó temporalmente la consulta.' : error === 'coach-call-timeout' ? 'La respuesta tardó demasiado. Puedes solicitar otro intento.' : error ?? 'No se pudo completar la respuesta.'
 
 function sortRuns(left: CoachRunRecord, right: CoachRunRecord): number {
@@ -147,7 +148,7 @@ export default function CoachPage() {
       }
     } catch (cause) {
       latest = await db.coachRuns.get(run.id) ?? run
-      if (!(cause instanceof DOMException && cause.name === 'AbortError') && !(cause instanceof Error && cause.name === 'AbortError')) setActionError(errorLabel(cause instanceof Error ? cause.message : undefined))
+      if (!isAbortError(cause)) setActionError(errorLabel(cause instanceof Error ? cause.message : undefined))
     } finally {
       streamControllers.current.delete(run.id)
     }
@@ -188,19 +189,25 @@ export default function CoachPage() {
     let timer: number | undefined
     let disposed = false
     let pollInFlight = false
+    let activePollController: AbortController | undefined
     const poll = () => {
       if (disposed || pollInFlight || document.visibilityState !== 'visible' || selectedIdRef.current !== selectedId) return
       pollInFlight = true
+      const controller = new AbortController()
+      activePollController = controller
       void db.coachRuns.where('conversationId').equals(selectedId).toArray().then(async (nextRuns) => {
         const previousSelectedRuns = new Map(runsRef.current.filter((run) => run.ownerId === ownerId && run.conversationId === selectedId).map((run) => [run.id, run]))
         const ownedRuns = nextRuns.filter((run) => run.ownerId === ownerId)
         const refreshedRuns = await Promise.all(ownedRuns.map(async (run) => {
           if (run.remoteRunId && isActiveRun(run)) {
-            try { return await refreshCoachRun(getTokenRef.current, run.id) ?? run } catch { /* El siguiente ciclo reintentará la consulta. */ }
+            try { return await refreshCoachRun(getTokenRef.current, run.id, controller.signal) ?? run } catch (cause) {
+              if (isAbortError(cause)) throw cause
+              /* El siguiente ciclo reintentará la consulta. */
+            }
           }
           return run
         }))
-        if (selectedIdRef.current === selectedId && getCoachAccountId() === ownerId && document.visibilityState === 'visible') {
+        if (!controller.signal.aborted && selectedIdRef.current === selectedId && getCoachAccountId() === ownerId && document.visibilityState === 'visible') {
           const terminalTransition = refreshedRuns.some((run) => isTerminalRun(run) && (!previousSelectedRuns.has(run.id) || isActiveRun(previousSelectedRuns.get(run.id)!)))
           setRuns((current) => {
             const merged = new Map(current.filter((run) => !(run.ownerId === ownerId && run.conversationId === selectedId)).map((run) => [run.id, run]))
@@ -209,9 +216,18 @@ export default function CoachPage() {
           })
           if (terminalTransition) await loadMessages(selectedId, 'refresh')
         }
-      }).finally(() => { pollInFlight = false })
+      }).catch((cause) => {
+        if (!isAbortError(cause)) { /* El siguiente ciclo reintentará la consulta. */ }
+      }).finally(() => {
+        if (activePollController === controller) activePollController = undefined
+        pollInFlight = false
+      })
     }
-    const stop = () => { if (timer !== undefined) { window.clearInterval(timer); timer = undefined } }
+    const stop = () => {
+      if (timer !== undefined) { window.clearInterval(timer); timer = undefined }
+      activePollController?.abort()
+      activePollController = undefined
+    }
     const start = () => { if (document.visibilityState === 'visible' && timer === undefined) timer = window.setInterval(poll, 2_000) }
     const onVisibilityChange = () => { if (document.visibilityState === 'visible') { poll(); start() } else stop() }
     start()

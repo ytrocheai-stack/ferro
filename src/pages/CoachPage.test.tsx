@@ -133,7 +133,7 @@ describe('CoachPage T6', () => {
     const runPoll = () => document.dispatchEvent(new Event('visibilitychange'))
     runPoll()
     await waitFor(() => expect(vi.mocked(db.coachRuns.where)).toHaveBeenCalledWith('conversationId'))
-    await waitFor(() => expect(refreshCoachRun).toHaveBeenCalledWith(expect.any(Function), 'run-selected'))
+    await waitFor(() => expect(refreshCoachRun).toHaveBeenCalledWith(expect.any(Function), 'run-selected', expect.any(AbortSignal)))
     await waitFor(() => expect(messageQuery.mock.calls.length).toBeGreaterThan(beforeFirstPoll))
     const afterTerminalTransition = messageQuery.mock.calls.length
     const beforeSecondPoll = runQuery.mock.calls.length

@@ -124,6 +124,30 @@ describe('coach submission failures', () => {
     vi.useRealTimers()
   })
 
+  it('propaga la cancelación externa de un refresh sin persistir un error', async () => {
+    const local = await startCoachRun(async () => null, 'Hola')
+    await db.coachRuns.update(local.id, { remoteRunId: `remote-${local.eventId}`, status: 'running' })
+    const entered = deferred<void>()
+    let signal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal
+      entered.resolve()
+      return new Promise<Response>((_, reject) => signal?.addEventListener('abort', () => {
+        const error = new Error('The operation was aborted')
+        error.name = 'AbortError'
+        reject(error)
+      }, { once: true }))
+    }))
+    const controller = new AbortController()
+    const refreshing = refreshCoachRun(async () => 'test-token', local.id, controller.signal)
+    await entered.promise
+    controller.abort()
+    await expect(refreshing).rejects.toMatchObject({ name: 'AbortError' })
+    expect(signal?.aborted).toBe(true)
+    expect(await db.coachRuns.get(local.id)).toMatchObject({ status: 'running' })
+    expect(await db.coachRuns.get(local.id)).not.toHaveProperty('error')
+  })
+
   it('reconecta snapshots sin POST y reemplaza el parcial con la secuencia nueva', async () => {
     vi.stubEnv('VITE_ENABLE_COACH_STREAMING', 'true')
     const local = await startCoachRun(async () => null, 'Hola')

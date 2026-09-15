@@ -8,7 +8,7 @@
 - El transcript mantiene carga progresiva y añade `content-visibility: auto` limitado a sus mensajes.
 - Corrección posterior de revisión: el landmark principal usa `aria-label="Coach"` directamente; el estado expone `aria-label={status}` para que Playwright y lectores de pantalla lo identifiquen como `status` “Procesando respuesta”.
 - El polling refresca solo runs activos con `remoteRunId` de la conversación seleccionada, permitiendo materializar respuestas y continuar el flujo sin reintroducir consultas completas.
-- La E2E conserva el import y la validación con `coachRunRequestSchema` preexistentes del usuario; ahora se llama “crea y continúa ejecuciones”, usa `getByRole('status', { name: 'Procesando respuesta' })` y ya no intenta cancelar desde una UI que no ofrece ese control.
+- La E2E conserva el import y la validación con `coachRunRequestSchema` preexistentes del usuario; sus expectativas fueron corregidas para llamarse “crea y continúa ejecuciones”, usar `getByRole('status', { name: 'Procesando respuesta' })` y no intentar cancelar desde una UI que no ofrece ese control.
 
 ## Verificación
 
@@ -26,7 +26,7 @@
 - `npm run lint` — FAIL por el hallazgo preexistente en `src/lib/coachClient.ts:476` (`no-useless-assignment`); no se modificó ese archivo. El lint dirigido de T11 terminó sin errores y con los 3 warnings preexistentes de cleanup de refs en `CoachPage.tsx`.
 - `npm run typecheck` — OK.
 - `git diff --check` — OK; solo informa conversiones LF/CRLF de archivos ya modificados en el working tree.
-- `npm run test:e2e:coach` — OK, 2/2 (Chromium Android y WebKit iPhone). `e2e/coach-agent.spec.ts` no se modificó ni se incluyeron sus hunks preexistentes en este commit.
+- `npm run test:e2e:coach` — OK, 2/2 (Chromium Android y WebKit iPhone). La corrección solo actualizó expectativas obsoletas; los hunks preexistentes del usuario (import y validación de schema) no se incluyeron en el commit.
 
 ## Límites
 
