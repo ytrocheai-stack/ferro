@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { CoachMessage, CoachRunRecord } from '../db/types'
 import { CoachTranscript } from './CoachTranscript'
@@ -25,5 +25,18 @@ describe('CoachTranscript', () => {
     expect(screen.queryByText('Propuesta validada')).not.toBeInTheDocument()
     rerender(<CoachTranscript conversationId="conversation-1" messages={[message]} runs={[{ ...baseRun, status: 'completed', reconciliationState: 'reconciled' }]} onLoadOlder={() => undefined} hasOlder={false} loadingOlder={false} />)
     expect(screen.getByText('Propuesta validada')).toBeInTheDocument()
+  })
+
+  it('follows snapshot and partial changes only while the user remains away from the end', () => {
+    const { rerender } = render(<CoachTranscript conversationId="conversation-1" messages={[]} runs={[{ ...baseRun, status: 'running', snapshotSequence: 1, partialExplanation: 'Primera parte' }]} onLoadOlder={() => undefined} hasOlder={false} loadingOlder={false} />)
+    const viewport = screen.getByRole('log', { name: 'Conversación con Coach' })
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 200 })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 50 })
+    rerender(<CoachTranscript conversationId="conversation-1" messages={[]} runs={[{ ...baseRun, status: 'running', snapshotSequence: 2, partialExplanation: 'Primera parte' }]} onLoadOlder={() => undefined} hasOlder={false} loadingOlder={false} />)
+    viewport.scrollTop = 50
+    fireEvent.scroll(viewport)
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 240 })
+    rerender(<CoachTranscript conversationId="conversation-1" messages={[]} runs={[{ ...baseRun, status: 'running', snapshotSequence: 3, partialExplanation: 'Segunda parte' }]} onLoadOlder={() => undefined} hasOlder={false} loadingOlder={false} />)
+    expect(viewport.scrollTop).toBe(90)
   })
 })

@@ -124,6 +124,28 @@ describe('coach submission failures', () => {
     vi.useRealTimers()
   })
 
+  it('keeps the timeout alive until a response body that never ends is consumed', async () => {
+    vi.useFakeTimers()
+    let signal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal
+      const body = new Promise<string>((_, reject) => signal?.addEventListener('abort', () => {
+        const error = new Error('The operation was aborted'); error.name = 'AbortError'; reject(error)
+      }, { once: true }))
+      return Promise.resolve({ ok: false, status: 500, text: () => body } as unknown as Response)
+    }))
+    try {
+      const refreshing = fetchCoach('https://coach.example/hanging-body', {}, 30_000)
+      const result = expect(refreshing).rejects.toThrow('coach-call-timeout')
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(30_000)
+      await result
+      expect(signal?.aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('propaga la cancelación externa de un refresh sin persistir un error', async () => {
     const local = await startCoachRun(async () => null, 'Hola')
     await db.coachRuns.update(local.id, { remoteRunId: `remote-${local.eventId}`, status: 'running' })
@@ -159,7 +181,7 @@ describe('coach submission failures', () => {
     ))
     vi.stubGlobal('fetch', fetchMock)
     const result = await streamCoachRun(async () => 'token', local.id)
-    expect(result).toMatchObject({ partialExplanation: 'nuevo', snapshotSequence: 2, status: 'completed' })
+    expect(result).toMatchObject({ kind: 'terminal', run: { partialExplanation: 'nuevo', snapshotSequence: 2, status: 'completed' } })
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls[0]?.[0]).toBe('https://coach.example/v1/coach/runs/remote-stream/events')
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ 'Last-Event-ID': '0' })
@@ -177,10 +199,29 @@ describe('coach submission failures', () => {
     fetchMock.mockResolvedValueOnce(new Response(terminal, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }))
     vi.stubGlobal('fetch', fetchMock)
     const result = await streamCoachRun(async () => 'token', local.id, undefined, undefined, { maxReconnects: 1, sleep: async () => undefined })
-    expect(result).toMatchObject({ status: 'completed', snapshotSequence: failure === 'eof' ? 2 : 1, partialExplanation: 'final' })
+    expect(result).toMatchObject({ kind: 'terminal', run: { status: 'completed', snapshotSequence: failure === 'eof' ? 2 : 1, partialExplanation: 'final' } })
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls.every((call) => call[1]?.method === undefined)).toBe(true)
     expect(fetchMock.mock.calls[1]?.[1]?.headers).toMatchObject({ 'Last-Event-ID': failure === 'eof' ? '1' : '0' })
+  })
+
+  it.each([404, 405, 415] as const)('falls back to polling when SSE is unavailable with HTTP %s', async (status) => {
+    vi.stubEnv('VITE_ENABLE_COACH_STREAMING', 'true')
+    const local = await startCoachRun(async () => null, 'Hola')
+    await db.coachRuns.update(local.id, { remoteRunId: 'remote-sse-unavailable', status: 'running' })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status })))
+    const result = await streamCoachRun(async () => 'token', local.id)
+    expect(result).toMatchObject({ kind: 'polling', run: { id: local.id, status: 'running' } })
+    expect(await db.coachRuns.get(local.id)).not.toHaveProperty('error')
+  })
+
+  it('returns a polling fallback when the SSE response has no body', async () => {
+    vi.stubEnv('VITE_ENABLE_COACH_STREAMING', 'true')
+    const local = await startCoachRun(async () => null, 'Hola')
+    await db.coachRuns.update(local.id, { remoteRunId: 'remote-sse-no-body', status: 'running' })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })))
+    const result = await streamCoachRun(async () => 'token', local.id, undefined, undefined, { maxReconnects: 0, sleep: async () => undefined })
+    expect(result).toMatchObject({ kind: 'polling', run: { id: local.id, status: 'running' } })
   })
   it('an explicit retry does not require the uncertain run to be a completed conversation turn', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Network error')))

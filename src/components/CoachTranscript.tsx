@@ -11,6 +11,7 @@ export function CoachTranscript({ conversationId, messages, runs, onLoadOlder, h
   const ordered = [...messages].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0) || a.createdAt - b.createdAt || a.id.localeCompare(b.id))
   const runById = new Map(runs.map((run) => [run.id, run]))
   const livePartials = runs.filter((run) => (run.status === 'queued' || run.status === 'running') && run.partialExplanation)
+  const livePartialSignature = livePartials.map((run) => `${run.id}:${run.snapshotSequence ?? 0}:${run.partialExplanation}`).join('|')
 
   useLayoutEffect(() => {
     const node = viewportRef.current
@@ -25,7 +26,7 @@ export function CoachTranscript({ conversationId, messages, runs, onLoadOlder, h
     if (previousHeight.current && !wasNearBottom.current) node.scrollTop += node.scrollHeight - previousHeight.current
     else if (wasNearBottom.current) node.scrollTop = node.scrollHeight
     previousHeight.current = node.scrollHeight
-  }, [conversationId, messages.length])
+  }, [conversationId, messages.length, livePartialSignature])
 
   useEffect(() => { setShowLatest(false) }, [conversationId])
 

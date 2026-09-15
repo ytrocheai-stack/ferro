@@ -195,18 +195,24 @@ function waitForStreamRetry(milliseconds: number, signal?: AbortSignal): Promise
   })
 }
 
+/** Fetches and buffers the complete body before releasing the timeout lease. */
 export async function fetchCoach(url: string, init: RequestInit = {}, timeoutMs = COACH_CLIENT_TIMEOUT_MS, signal?: AbortSignal): Promise<Response> {
   const controller = new AbortController()
   const callerSignal = signal ?? init.signal ?? undefined
   const abortFromCaller = () => controller.abort()
   if (callerSignal?.aborted) controller.abort()
   else callerSignal?.addEventListener('abort', abortFromCaller, { once: true })
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let timedOut = false
+  let rejectTimeout!: (error: Error) => void
+  const timeout = new Promise<never>((_, reject) => { rejectTimeout = reject })
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); rejectTimeout(messageError('coach-call-timeout')) }, timeoutMs)
   try {
-    return await fetch(url, { ...init, signal: controller.signal })
+    const response = await Promise.race([fetch(url, { ...init, signal: controller.signal }), timeout])
+    const text = await Promise.race([response.text(), timeout])
+    return new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers })
   } catch (cause) {
     if (callerSignal?.aborted) throw cause
-    if (controller.signal.aborted) throw messageError('coach-call-timeout')
+    if (timedOut || controller.signal.aborted) throw messageError('coach-call-timeout')
     throw cause
   } finally {
     clearTimeout(timer)
@@ -319,14 +325,14 @@ export function isRetryableCoachError(error: string | undefined): boolean {
   return Boolean(error && new Set([
     'legacy-imported', 'unknown-outcome', 'uncertain-outcome', 'coach-call-timeout', 'provider-timeout',
     'agent-deadline-exceeded', 'coach-global-deadline-exceeded', 'provider-rate-limited',
-    'provider-server-error', 'server-error', 'workflow-create-failed', 'workflow-not-configured',
+    'provider-server-error', 'provider-circuit-open', 'coach-providers-unavailable', 'server-error', 'workflow-create-failed', 'workflow-not-configured',
   ]).has(error))
 }
 
 export function isRecoverableCoachError(error: string | undefined): boolean {
   return Boolean(error && new Set([
     'coach-auth-required', 'coach-forbidden', 'coach-conflict', 'coach-call-timeout',
-    'provider-rate-limited', 'provider-server-error', 'server-error', 'unknown-outcome', 'uncertain-outcome',
+    'provider-rate-limited', 'provider-server-error', 'provider-circuit-open', 'coach-providers-unavailable', 'server-error', 'unknown-outcome', 'uncertain-outcome',
   ]).has(error))
 }
 
@@ -467,13 +473,24 @@ function sseRecords(buffer: string): { records: string[]; rest: string } {
 }
 
 /** Cliente de reconexión opt-in: nunca crea un run ni sustituye el polling existente. */
-export async function streamCoachRun(getToken: () => Promise<string | null>, runId: string, signal?: AbortSignal, onSnapshot?: (run: CoachRunRecord) => void | Promise<void>, options: CoachStreamOptions = {}): Promise<CoachRunRecord | undefined> {
+export type CoachStreamResult =
+  | { kind: 'terminal'; run: CoachRunRecord }
+  | { kind: 'cancelled'; run: CoachRunRecord }
+  | { kind: 'polling'; run: CoachRunRecord }
+
+function streamResult(run: CoachRunRecord): CoachStreamResult {
+  if (run.status === 'cancelled') return { kind: 'cancelled', run }
+  if (run.status === 'completed' || run.status === 'failed') return { kind: 'terminal', run }
+  return { kind: 'polling', run }
+}
+
+export async function streamCoachRun(getToken: () => Promise<string | null>, runId: string, signal?: AbortSignal, onSnapshot?: (run: CoachRunRecord) => void | Promise<void>, options: CoachStreamOptions = {}): Promise<CoachStreamResult | undefined> {
   const local = await db.coachRuns.get(runId)
   const url = workerUrl()
   const remoteRunId = local ? remoteId(local) : undefined
-  if (!local || !remoteRunId || !url || !navigator.onLine || !isCoachStreamingEnabled()) return local
+  if (!local || !remoteRunId || !url || !navigator.onLine || !isCoachStreamingEnabled()) return local ? streamResult(local) : undefined
   const token = await getToken()
-  if (!token) return local
+  if (!token) return streamResult(local)
   const sleep = options.sleep ?? waitForStreamRetry
   const maxReconnects = options.maxReconnects ?? COACH_STREAM_MAX_RECONNECTS
   let reconnects = 0
@@ -482,7 +499,7 @@ export async function streamCoachRun(getToken: () => Promise<string | null>, run
     if (signal?.aborted) throw streamAbortError()
     const latest = await db.coachRuns.get(runId)
     if (latest) current = latest
-    if (!activeRun(current)) return current
+    if (!activeRun(current)) return streamResult(current)
     const cursor = current.snapshotSequence ?? 0
     let shouldReconnect: boolean
     try {
@@ -490,12 +507,19 @@ export async function streamCoachRun(getToken: () => Promise<string | null>, run
         headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream', 'Last-Event-ID': String(cursor) }, signal,
       })
       if (!response.ok) {
-        if (response.status === 401 || response.status === 403 || response.status === 409) return persistTransportError(runId, coachStatusError(response, await response.text()))
+        if (response.status === 404 || response.status === 405 || response.status === 415) return { kind: 'polling', run: current }
+        if (response.status === 401 || response.status === 403 || response.status === 409) {
+          const persisted = await persistTransportError(runId, coachStatusError(response, await response.text()))
+          return streamResult(persisted ?? current)
+        }
         shouldReconnect = response.status === 408 || response.status >= 500
-        if (!shouldReconnect) return persistTransportError(runId, coachStatusError(response, await response.text()))
+        if (!shouldReconnect) {
+          const persisted = await persistTransportError(runId, coachStatusError(response, await response.text()))
+          return streamResult(persisted ?? current)
+        }
       } else {
         const reader = response.body?.getReader()
-        if (!reader) shouldReconnect = true
+        if (!reader) return { kind: 'polling', run: current }
         else {
           const decoder = new TextDecoder()
           let buffer = ''
@@ -519,7 +543,8 @@ export async function streamCoachRun(getToken: () => Promise<string | null>, run
       if (signal?.aborted || (cause instanceof Error && cause.name === 'AbortError')) throw cause
       shouldReconnect = true
     }
-    if (!shouldReconnect || !activeRun(current) || reconnects >= maxReconnects) return current
+    if (!shouldReconnect || !activeRun(current)) return streamResult(current)
+    if (reconnects >= maxReconnects) return { kind: 'polling', run: current }
     const delay = COACH_STREAM_BACKOFF_MS[Math.min(reconnects, COACH_STREAM_BACKOFF_MS.length - 1)]
     reconnects += 1
     await sleep(delay, signal)
@@ -593,6 +618,7 @@ export async function cancelCoachRun(getToken: () => Promise<string | null>, run
 export async function retryCoachRun(getToken: () => Promise<string | null>, runId: string): Promise<CoachRunRecord> {
   const previous = await db.coachRuns.get(runId)
   if (!previous || previous.ownerId !== getCoachAccountId() || !isRetryableCoachError(previous.error)) throw new Error('Esta ejecución no tiene un fallo recuperable para reintentar')
+  if (remoteId(previous)) return (await refreshCoachRun(getToken, runId)) ?? previous
   await db.coachRuns.update(runId, { status: 'queued', legacy: false, error: undefined, endedAt: undefined, updatedAt: Date.now() })
   return dispatchRun(getToken, runId)
 }

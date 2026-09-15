@@ -1,10 +1,11 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CoachPage from './CoachPage'
 import { useBottomDock } from '../components/BottomDock'
-import { refreshCoachRun, startCoachRun, streamCoachRun } from '../lib/coachClient'
+import { refreshCoachRun, retryCoachRun, startCoachRun, streamCoachRun } from '../lib/coachClient'
+import { getCoachDraft, setCoachDraft } from '../lib/coachConversations'
 import { db } from '../db/db'
 
 const fixture = vi.hoisted(() => ({
@@ -13,13 +14,14 @@ const fixture = vi.hoisted(() => ({
   runs: [] as unknown[],
   draft: '',
   streamingEnabled: false,
+  retryable: false,
 }))
 
 vi.mock('@clerk/react', () => ({ useAuth: () => ({ getToken: vi.fn(), isSignedIn: true }) }))
 vi.mock('../components/BottomDock', () => ({ useBottomDock: vi.fn() }))
 vi.mock('../lib/coachAccount', () => ({ getCoachAccountId: () => 'owner-1' }))
 vi.mock('../lib/coachConsent', () => ({ getCoachConsent: () => ({ enabled: true }), getCoachConversationId: () => 'conversation-1', setCoachConversationId: vi.fn() }))
-vi.mock('../lib/coachClient', () => ({ startCoachRun: vi.fn(), refreshCoachRun: vi.fn(), streamCoachRun: vi.fn(), isCoachStreamingEnabled: () => fixture.streamingEnabled, isRetryableCoachError: () => false, applyCoachChangeSet: vi.fn() }))
+vi.mock('../lib/coachClient', () => ({ startCoachRun: vi.fn(), refreshCoachRun: vi.fn(), retryCoachRun: vi.fn(), streamCoachRun: vi.fn(), isCoachStreamingEnabled: () => fixture.streamingEnabled, isRetryableCoachError: () => fixture.retryable, applyCoachChangeSet: vi.fn() }))
 vi.mock('../lib/coachConversations', () => ({
   ensureCoachConversation: vi.fn(async () => fixture.conversations[0]),
   createCoachConversation: vi.fn(async () => ({ id: 'conversation-2', ownerId: 'owner-1', title: 'Nueva conversación', createdAt: 2, updatedAt: 2, nextSequence: 1 })),
@@ -30,7 +32,7 @@ vi.mock('../db/db', () => { const collection = (rows: unknown[], key?: string) =
 describe('CoachPage T6', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    fixture.messages.length = 0; fixture.runs.length = 0; fixture.draft = ''; fixture.streamingEnabled = false
+    fixture.messages.length = 0; fixture.runs.length = 0; fixture.draft = ''; fixture.streamingEnabled = false; fixture.retryable = false
     const target = document.createElement('div'); document.body.append(target)
     vi.mocked(useBottomDock).mockReturnValue({ coachPortalTarget: target } as ReturnType<typeof useBottomDock>)
   })
@@ -54,6 +56,19 @@ describe('CoachPage T6', () => {
     render(<MemoryRouter><CoachPage /></MemoryRouter>)
     expect(await screen.findByDisplayValue('borrador hidratado')).toBeInTheDocument()
     expect(await screen.findByText('Completado')).toBeInTheDocument()
+  })
+
+  it('does not overwrite text entered while conversation hydration is still pending', async () => {
+    let resolveDraft!: (value: string) => void
+    vi.mocked(getCoachDraft).mockImplementationOnce(() => new Promise((resolve) => { resolveDraft = resolve }))
+    const user = userEvent.setup()
+    render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    const editor = await screen.findByRole('textbox', { name: 'Mensaje para el coach' })
+    await waitFor(() => expect(resolveDraft).toBeTypeOf('function'))
+    await user.type(editor, 'escrito antes de terminar la carga')
+    await act(async () => { resolveDraft('borrador anterior') })
+    expect(await screen.findByDisplayValue('escrito antes de terminar la carga')).toBeInTheDocument()
+    expect(setCoachDraft).toHaveBeenCalledWith('owner-1', 'conversation-1', 'escrito antes de terminar la carga')
   })
 
   it('abre el historial móvil con el componente de conversaciones real', async () => {
@@ -93,10 +108,22 @@ describe('CoachPage T6', () => {
     fixture.streamingEnabled = true
     const run = { id: 'run-stream', remoteRunId: 'remote-stream', ownerId: 'owner-1', conversationId: 'conversation-1', eventId: 'event-stream', contextVersion: 'ctx', status: 'running', partialExplanation: 'parcial', request: { event: { payload: { message: 'pregunta' } } }, createdAt: 1, updatedAt: 2 }
     fixture.runs.push(run)
-    vi.mocked(streamCoachRun).mockImplementation(async (_getToken, _runId, _signal, onSnapshot) => { await onSnapshot?.({ ...run, partialExplanation: 'nuevo parcial' } as never); return { ...run, status: 'completed', partialExplanation: 'respuesta final' } as never })
+    vi.mocked(streamCoachRun).mockImplementation(async (_getToken, _runId, _signal, onSnapshot) => { await onSnapshot?.({ ...run, partialExplanation: 'nuevo parcial' } as never); return { kind: 'terminal', run: { ...run, status: 'completed', partialExplanation: 'respuesta final' } } as never })
     render(<MemoryRouter><CoachPage /></MemoryRouter>)
     await waitFor(() => expect(streamCoachRun).toHaveBeenCalledWith(expect.any(Function), 'run-stream', expect.any(AbortSignal), expect.any(Function)))
     expect(startCoachRun).not.toHaveBeenCalled()
+  })
+
+  it('connects Reintentar to a new idempotent dispatch when the run has no remote ID', async () => {
+    fixture.retryable = true
+    const failedRun = { id: 'run-retry', ownerId: 'owner-1', conversationId: 'conversation-1', eventId: 'event-retry', contextVersion: 'ctx', status: 'failed', error: 'unknown-outcome', request: { event: { payload: { message: 'pregunta' } } }, createdAt: 1, updatedAt: 2 }
+    fixture.runs.push(failedRun)
+    vi.mocked(retryCoachRun).mockResolvedValue({ ...failedRun, status: 'queued' } as never)
+    const user = userEvent.setup()
+    render(<MemoryRouter><CoachPage /></MemoryRouter>)
+    await user.click(await screen.findByRole('button', { name: 'Reintentar' }))
+    await waitFor(() => expect(retryCoachRun).toHaveBeenCalledWith(expect.any(Function), 'run-retry'))
+    expect(refreshCoachRun).not.toHaveBeenCalled()
   })
 
   it('pausa el polling con la página oculta y limita la consulta de runs a la conversación', async () => {

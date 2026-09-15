@@ -7,7 +7,7 @@ import { db } from '../db/db'
 import type { CoachConversation, CoachMessage, CoachRunRecord } from '../db/types'
 import { getCoachAccountId } from '../lib/coachAccount'
 import { getCoachConsent, getCoachConversationId, setCoachConversationId } from '../lib/coachConsent'
-import { applyCoachChangeSet, isCoachStreamingEnabled, isRetryableCoachError, refreshCoachRun, startCoachRun, streamCoachRun } from '../lib/coachClient'
+import { applyCoachChangeSet, isCoachStreamingEnabled, isRetryableCoachError, refreshCoachRun, retryCoachRun, startCoachRun, streamCoachRun } from '../lib/coachClient'
 import { ensureCoachConversation, createCoachConversation, deleteCoachConversation, getCoachDraft, renameCoachConversation, setCoachDraft, flushCoachDraft } from '../lib/coachConversations'
 import { PageHeader } from '../components/PageHeader'
 import { CoachComposer } from '../components/CoachComposer'
@@ -64,6 +64,7 @@ export default function CoachPage() {
   const [editingTitle, setEditingTitle] = useState<CoachConversation>()
   const [titleDraft, setTitleDraft] = useState('')
   const [actionError, setActionError] = useState<string>()
+  const [streamPollingIds, setStreamPollingIds] = useState<Set<string>>(() => new Set())
   const revision = useRef(0)
   const draftRef = useRef('')
   const selectedIdRef = useRef<string>()
@@ -136,10 +137,20 @@ export default function CoachPage() {
       setRuns((current) => current.map((item) => item.id === next.id ? next : item))
     }
     let latest: CoachRunRecord | undefined
+    let streamOutcome: Awaited<ReturnType<typeof streamCoachRun>> = undefined
     try {
-      latest = await streamCoachRun(getTokenRef.current, run.id, controller.signal, update)
+      streamOutcome = await streamCoachRun(getTokenRef.current, run.id, controller.signal, update)
+      latest = streamOutcome?.run
       if (latest) update(latest)
-      if (latest && (latest.status === 'completed' || latest.status === 'failed' || latest.status === 'cancelled')) {
+      if (streamOutcome?.kind === 'polling') {
+        setStreamPollingIds((current) => current.has(run.id) ? current : new Set(current).add(run.id))
+      } else if (streamOutcome) {
+        setStreamPollingIds((current) => {
+          if (!current.has(run.id)) return current
+          const next = new Set(current); next.delete(run.id); return next
+        })
+      }
+      if (latest && (streamOutcome?.kind === 'terminal' || streamOutcome?.kind === 'cancelled')) {
         // El terminal SSE solo sustituye el parcial; el JSON normal materializa la burbuja una vez.
         const reconciled = await refreshCoachRun(getTokenRef.current, run.id)
         if (reconciled) update(reconciled)
@@ -153,7 +164,7 @@ export default function CoachPage() {
       streamControllers.current.delete(run.id)
     }
     const stillActive = latest && (latest.status === 'queued' || latest.status === 'running')
-    if (!controller.signal.aborted && document.visibilityState === 'visible' && stillActive && navigator.onLine && isCoachStreamingEnabled() && !streamTimers.current.has(run.id)) {
+    if (!controller.signal.aborted && streamOutcome?.kind !== 'polling' && document.visibilityState === 'visible' && stillActive && navigator.onLine && isCoachStreamingEnabled() && !streamTimers.current.has(run.id)) {
       const attempt = streamReconnectAttempts.current.get(run.id) ?? 0
       streamReconnectAttempts.current.set(run.id, attempt + 1)
       const delay = Math.min(250 * (2 ** Math.min(attempt, 4)), 4_000)
@@ -171,13 +182,19 @@ export default function CoachPage() {
     setMessages([])
     setHasOlder(false)
     const generation = conversationGeneration.current
+    const hydrationRevision = revision.current
     let current = true
     void Promise.all([loadMessages(selectedId), db.coachRuns.where('ownerId').equals(ownerId).toArray(), getCoachDraft(ownerId, selectedId)]).then(([, nextRuns, savedDraft]) => {
       if (!current || generation !== conversationGeneration.current || selectedIdRef.current !== selectedId || getCoachAccountId() !== ownerId) return
       const ownedRuns = nextRuns.filter((run) => run.ownerId === ownerId)
       setRuns(ownedRuns)
-      draftRef.current = savedDraft
-      setDraft(savedDraft)
+      if (revision.current === hydrationRevision) {
+        draftRef.current = savedDraft
+        setDraft(savedDraft)
+      } else {
+        setCoachDraft(ownerId, selectedId, draftRef.current)
+        void flushCoachDraft(ownerId, selectedId)
+      }
       if (isCoachStreamingEnabled()) ownedRuns.filter((run) => run.status === 'queued' || run.status === 'running').forEach((run) => { void streamRun(run) })
     })
     return () => { current = false }
@@ -185,7 +202,8 @@ export default function CoachPage() {
 
   useEffect(() => {
     if (!ownerId || !selectedId) return
-    if (isCoachStreamingEnabled()) return
+    const streaming = isCoachStreamingEnabled()
+    if (streaming && streamPollingIds.size === 0) return
     let timer: number | undefined
     let disposed = false
     let pollInFlight = false
@@ -199,7 +217,7 @@ export default function CoachPage() {
         const previousSelectedRuns = new Map(runsRef.current.filter((run) => run.ownerId === ownerId && run.conversationId === selectedId).map((run) => [run.id, run]))
         const ownedRuns = nextRuns.filter((run) => run.ownerId === ownerId)
         const refreshedRuns = await Promise.all(ownedRuns.map(async (run) => {
-          if (run.remoteRunId && isActiveRun(run)) {
+          if (run.remoteRunId && isActiveRun(run) && (!streaming || streamPollingIds.has(run.id))) {
             try { return await refreshCoachRun(getTokenRef.current, run.id, controller.signal) ?? run } catch (cause) {
               if (isAbortError(cause)) throw cause
               /* El siguiente ciclo reintentará la consulta. */
@@ -209,6 +227,10 @@ export default function CoachPage() {
         }))
         if (!controller.signal.aborted && selectedIdRef.current === selectedId && getCoachAccountId() === ownerId && document.visibilityState === 'visible') {
           const terminalTransition = refreshedRuns.some((run) => isTerminalRun(run) && (!previousSelectedRuns.has(run.id) || isActiveRun(previousSelectedRuns.get(run.id)!)))
+          const terminalFallbacks = refreshedRuns.filter((run) => isTerminalRun(run)).map((run) => run.id)
+          if (terminalFallbacks.length) setStreamPollingIds((current) => {
+            const next = new Set(current); terminalFallbacks.forEach((id) => next.delete(id)); return next
+          })
           setRuns((current) => {
             const merged = new Map(current.filter((run) => !(run.ownerId === ownerId && run.conversationId === selectedId)).map((run) => [run.id, run]))
             refreshedRuns.forEach((run) => merged.set(run.id, run))
@@ -233,7 +255,7 @@ export default function CoachPage() {
     start()
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => { disposed = true; stop(); document.removeEventListener('visibilitychange', onVisibilityChange) }
-  }, [loadMessages, ownerId, selectedId])
+  }, [loadMessages, ownerId, selectedId, streamPollingIds])
 
   useEffect(() => {
     if (!isCoachStreamingEnabled() || !ownerId) return
@@ -320,10 +342,16 @@ export default function CoachPage() {
     } catch (cause) { setActionError(errorLabel(cause instanceof Error ? cause.message : undefined)) } finally { setBusy(false) }
   }
 
-  const refresh = async (run: CoachRunRecord) => {
-    const next = await refreshCoachRun(getToken, run.id)
-    if (next) setRuns((current) => current.map((item) => item.id === next.id ? next : item))
-    if (selectedId) await loadMessages(selectedId, 'refresh')
+  const retry = async (run: CoachRunRecord) => {
+    setBusy(true)
+    setActionError(undefined)
+    try {
+      const next = await retryCoachRun(getToken, run.id)
+      setRuns((current) => [next, ...current.filter((item) => item.id !== next.id)])
+      if (isActiveRun(next) && isCoachStreamingEnabled()) void streamRun(next)
+      else if (selectedId) await loadMessages(selectedId, 'refresh')
+    } catch (cause) { setActionError(errorLabel(cause instanceof Error ? cause.message : undefined)) }
+    finally { setBusy(false) }
   }
 
   const applyProposal = async (run: CoachRunRecord) => {
@@ -346,7 +374,7 @@ export default function CoachPage() {
       <section className="coach-conversation" aria-labelledby="coach-conversation-title" role="region">
         <div className="coach-conversation__header"><div className="min-w-0"><h2 id="coach-conversation-title" className="truncate text-lg font-bold">{selected?.title ?? 'Nuevo chat'}</h2><p className="text-xs text-muted" role="status" aria-label={status} aria-live="polite" aria-atomic="true">{status}</p></div><button className="btn btn-primary coach-new-desktop min-h-10 px-3 text-sm" type="button" onClick={() => void newConversation()}>Nuevo chat</button></div>
         {actionError && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{actionError}</p>}
-        {latestRun?.error && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{pendingCancellation(latestRun) ? 'Cancelación pendiente: aún no se ha confirmado el estado remoto.' : errorLabel(latestRun.error)}{isRetryableCoachError(latestRun.error) && <button className="ml-2 underline" type="button" onClick={() => void refresh(latestRun)}>Reintentar</button>}</p>}
+        {latestRun?.error && <p role="alert" className="mt-3 rounded-xl bg-surface-2 p-3 text-sm">{pendingCancellation(latestRun) ? 'Cancelación pendiente: aún no se ha confirmado el estado remoto.' : errorLabel(latestRun.error)}{isRetryableCoachError(latestRun.error) && <button className="ml-2 underline" type="button" onClick={() => void retry(latestRun)}>Reintentar</button>}</p>}
         {latestRun && isRenderableCoachProposal(latestRun) && <section className="card mt-3 p-3" aria-label="Propuesta del coach"><p className="text-sm font-semibold">Propuesta validada y lista para revisar</p><p className="mt-1 text-sm text-muted">{latestRun.decision?.explanation}</p><button className="btn btn-primary mt-3 w-full" type="button" disabled={applying || Boolean(latestRun.appliedAt)} onClick={() => setConfirmApply(latestRun)}>{latestRun.appliedAt ? 'Aplicado' : applying ? 'Aplicando…' : 'Confirmar y aplicar'}</button></section>}
         <CoachTranscript conversationId={selectedId} messages={messages} runs={selectedRuns} hasOlder={hasOlder} loadingOlder={loadingOlder} onLoadOlder={() => { if (!selectedId || loadingOlder) return; setLoadingOlder(true); void loadMessages(selectedId, 'older').finally(() => setLoadingOlder(false)) }} />
       </section>
