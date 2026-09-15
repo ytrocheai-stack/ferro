@@ -98,7 +98,8 @@ export class SafeDecisionExplanationParser {
   private usage?: StreamUsage
   private done = false
   private truncated = false
-  constructor(private readonly onExplanation?: (text: string) => void) {}
+  private readonly onExplanation?: (text: string) => void
+  constructor(onExplanation?: (text: string) => void) { this.onExplanation = onExplanation }
 
   push(chunk: string): void {
     if (this.done) return
