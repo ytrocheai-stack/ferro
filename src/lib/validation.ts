@@ -244,6 +244,8 @@ const coachRunSchema = z.object({
   cancelRequestedAt: finite.optional(),
   lastError: z.string().optional(),
   usage: z.object({ inputTokens: z.number().int().nonnegative().optional(), outputTokens: z.number().int().nonnegative().optional() }).strict().optional(),
+  snapshotSequence: z.number().int().positive().optional(),
+  partialExplanation: z.string().optional(),
   createdAt: finite,
   updatedAt: finite,
   startedAt: finite.optional(),
@@ -320,9 +322,17 @@ const candidateRecordSchema = z.object({
   confidence: z.enum(['low', 'medium', 'high']), warnings: z.array(z.string()), citations: z.array(z.string()).optional(), explanation: z.string(),
 }).strict()
 
+/** v8/v9 sustituyeron algunos IDs locales por IDs remotos sin reparar los mensajes. */
+function resolveHistoricalRun<Run extends { id: string; ownerId: string; eventId: string }>(runs: Map<string, Run>, id: string, ownerId: string): Run | undefined {
+  const direct = runs.get(id)
+  if (direct) return direct
+  const candidates = [...runs.values()].filter((run) => run.ownerId === ownerId && !run.id.startsWith('coach-local-') && id === `coach-local-${run.eventId}`)
+  return candidates.length === 1 ? candidates[0] : undefined
+}
+
 export const backupSchema = z.object({
   app: z.literal('ferro'),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11)]),
   exportedAt: z.string(),
   settings: settingsSchema.optional(),
   nutritionGoals: nutritionGoalsSchema.optional(),
@@ -418,7 +428,13 @@ export const backupSchema = z.object({
   for (const record of [...(backup.coachRuns ?? []), ...(backup.coachMessages ?? []), ...(backup.coachProfiles ?? []), ...(backup.coachConsents ?? []), ...(backup.coachConversations ?? []), ...(backup.coachDrafts ?? [])]) owners.add(record.ownerId)
   if (owners.size > 1) ctx.addIssue({ code: 'custom', path: ['coach'], message: 'Todos los registros Coach deben pertenecer al mismo propietario' })
   for (const [index, message] of (backup.coachMessages ?? []).entries()) {
-    const run = runs.get(message.runId)
+    const run = backup.version < 11 ? resolveHistoricalRun(runs, message.runId, message.ownerId) : runs.get(message.runId)
+    if (backup.version === 11) {
+      for (const field of ['conversationId', 'sequence', 'deliveryState'] as const) {
+        if (message[field] === undefined) ctx.addIssue({ code: 'custom', path: ['coachMessages', index, field], message: `Falta ${field} en v11` })
+      }
+      if (run && message.conversationId !== run.conversationId) ctx.addIssue({ code: 'custom', path: ['coachMessages', index, 'conversationId'], message: 'La conversación del mensaje no coincide con la del run' })
+    }
     if (!run || run.ownerId !== message.ownerId) ctx.addIssue({ code: 'custom', path: ['coachMessages', index, 'runId'], message: 'Referencia a run inválida' })
     if (run && message.contextVersion !== run.contextVersion) ctx.addIssue({ code: 'custom', path: ['coachMessages', index, 'contextVersion'], message: 'Contexto de mensaje distinto al run' })
     if (message.conversationId) {
@@ -427,11 +443,16 @@ export const backupSchema = z.object({
     }
   }
   for (const [index, run] of (backup.coachRuns ?? []).entries()) {
-    if (run.request.event.accountId !== run.ownerId || run.request.event.id !== run.eventId || (backup.version === 10 && (run.request.event.contextVersion !== run.contextVersion || run.request.context.version !== run.contextVersion))) ctx.addIssue({ code: 'custom', path: ['coachRuns', index], message: 'Owner, evento o contexto inconsistente' })
+    if (backup.version === 11) {
+      for (const field of ['conversationId', 'reconciliationState'] as const) {
+        if (run[field] === undefined) ctx.addIssue({ code: 'custom', path: ['coachRuns', index, field], message: `Falta ${field} en v11` })
+      }
+    }
+    if (run.request.event.accountId !== run.ownerId || run.request.event.id !== run.eventId || (backup.version >= 10 && (run.request.event.contextVersion !== run.contextVersion || run.request.context.version !== run.contextVersion))) ctx.addIssue({ code: 'custom', path: ['coachRuns', index], message: 'Owner, evento o contexto inconsistente' })
     if (run.id.startsWith('coach-local-') && run.id !== `coach-local-${run.eventId}`) ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'id'], message: 'ID canónico de run inválido' })
-    if (backup.version === 10 && run.request.event.conversationId !== run.conversationId) ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'conversationId'], message: 'La conversación del evento no coincide con la del run' })
+    if ((backup.version === 11 || (run.conversationId && run.request.event.conversationId)) && run.request.event.conversationId !== run.conversationId) ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'conversationId'], message: 'La conversación del evento no coincide con la del run' })
     if (run.createdAt > run.updatedAt || (run.startedAt !== undefined && run.startedAt < run.createdAt) || (run.endedAt !== undefined && run.endedAt < (run.startedAt ?? run.createdAt)) || (run.appliedAt !== undefined && run.appliedAt < (run.endedAt ?? run.startedAt ?? run.createdAt))) ctx.addIssue({ code: 'custom', path: ['coachRuns', index], message: 'Invariante temporal del run inválida' })
-    if (backup.version === 10 && ['completed', 'failed', 'cancelled'].includes(run.status) && run.endedAt === undefined) ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'endedAt'], message: 'Un run terminal necesita endedAt' })
+    if (backup.version === 11 && ['completed', 'failed', 'cancelled'].includes(run.status) && run.endedAt === undefined) ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'endedAt'], message: 'Un run terminal necesita endedAt' })
     if (run.dispatchToken && (run.dispatchLeaseExpiresAt === undefined || ['completed', 'failed', 'cancelled'].includes(run.status) || run.remoteRunId !== undefined)) ctx.addIssue({ code: 'custom', path: ['coachRuns', index], message: 'Lease de dispatch inválido' })
     if (run.dispatchLeaseExpiresAt !== undefined && !run.dispatchToken) ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'dispatchLeaseExpiresAt'], message: 'El lease necesita dispatchToken' })
     if (run.remoteRunId && run.dispatchToken) ctx.addIssue({ code: 'custom', path: ['coachRuns', index], message: 'Un run remoto no puede conservar un dispatchToken' })
@@ -441,12 +462,12 @@ export const backupSchema = z.object({
       const conversation = conversations.get(run.conversationId)
       if (!conversation || conversation.ownerId !== run.ownerId) ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'conversationId'], message: 'Referencia a conversación inválida' })
     }
-    if (run.messageId && (!messages.get(run.messageId) || messages.get(run.messageId)?.ownerId !== run.ownerId)) ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'messageId'], message: 'Referencia a mensaje inválida' })
+    if (run.messageId && (!messages.get(run.messageId) || messages.get(run.messageId)?.ownerId !== run.ownerId || (backup.version === 11 && messages.get(run.messageId)?.runId !== run.id))) ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'messageId'], message: 'Referencia a mensaje inválida' })
     for (const snapshotMessage of run.request.context.snapshot.conversation) {
       const persisted = messages.get(snapshotMessage.id)
-      if (backup.version === 10 && !persisted) {
+      if (backup.version >= 10 && !persisted) {
         ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'request', 'context', 'snapshot', 'conversation'], message: 'El snapshot referencia un mensaje inexistente' })
-      } else if (persisted && (persisted.ownerId !== run.ownerId || persisted.conversationId !== run.conversationId || persisted.role !== snapshotMessage.role || persisted.content !== snapshotMessage.content || persisted.contextVersion !== snapshotMessage.contextVersion || (snapshotMessage.runId !== undefined && persisted.runId !== snapshotMessage.runId))) {
+      } else if (persisted && (persisted.ownerId !== run.ownerId || ((backup.version === 11 || (persisted.conversationId && run.conversationId)) && persisted.conversationId !== run.conversationId) || persisted.role !== snapshotMessage.role || persisted.content !== snapshotMessage.content || persisted.contextVersion !== snapshotMessage.contextVersion || (snapshotMessage.runId !== undefined && persisted.runId !== snapshotMessage.runId))) {
         ctx.addIssue({ code: 'custom', path: ['coachRuns', index, 'request', 'context', 'snapshot', 'conversation'], message: 'El snapshot no corresponde a los mensajes de su conversación' })
       }
     }
@@ -467,12 +488,10 @@ export const backupSchema = z.object({
     if (conversation.createdAt > conversation.updatedAt) ctx.addIssue({ code: 'custom', path: ['coachConversations'], message: 'Fechas de conversación inválidas' })
     const sequences = (backup.coachMessages ?? []).filter((message) => message.conversationId === conversation.id && message.ownerId === conversation.ownerId).map((message) => message.sequence).filter((sequence): sequence is number => sequence !== undefined)
     const conversationMessages = (backup.coachMessages ?? []).filter((message) => message.conversationId === conversation.id && message.ownerId === conversation.ownerId)
-    if (conversationMessages.some((message) => message.id.startsWith('coach-message-') && message.id !== `coach-message-${message.runId}`) || conversationMessages.some((message) => message.id.startsWith('coach-assistant-') && message.id !== `coach-assistant-${message.runId}`)) ctx.addIssue({ code: 'custom', path: ['coachConversations'], message: 'ID canónico de mensaje inválido' })
-    if (backup.version === 10 && conversationMessages.some((message) => message.sequence === undefined)) ctx.addIssue({ code: 'custom', path: ['coachConversations'], message: 'Falta la secuencia de un mensaje' })
-    if (sequences.some((sequence) => sequence >= conversation.nextSequence) || new Set(sequences).size !== sequences.length) ctx.addIssue({ code: 'custom', path: ['coachConversations'], message: 'Secuencia de conversación imposible' })
+    if (backup.version === 11 && conversationMessages.some((message) => message.sequence === undefined)) ctx.addIssue({ code: 'custom', path: ['coachConversations'], message: 'Falta la secuencia de un mensaje' })
+    if (backup.version === 11 && (sequences.some((sequence) => sequence >= conversation.nextSequence) || new Set(sequences).size !== sequences.length)) ctx.addIssue({ code: 'custom', path: ['coachConversations'], message: 'Secuencia de conversación imposible' })
     const expectedSequences = Array.from({ length: sequences.length }, (_, index) => index + 1)
-    if (backup.version === 10 && (sequences.sort((a, b) => a - b).some((sequence, index) => sequence !== expectedSequences[index]) || conversation.nextSequence !== sequences.length + 1)) ctx.addIssue({ code: 'custom', path: ['coachConversations'], message: 'Las secuencias deben empezar en 1 y no tener huecos' })
-    if (backup.version !== 10 && sequences.length > 0 && Math.max(...sequences) + 1 !== conversation.nextSequence) ctx.addIssue({ code: 'custom', path: ['coachConversations'], message: 'nextSequence no corresponde a los mensajes' })
+    if (backup.version === 11 && (sequences.sort((a, b) => a - b).some((sequence, index) => sequence !== expectedSequences[index]) || conversation.nextSequence !== sequences.length + 1)) ctx.addIssue({ code: 'custom', path: ['coachConversations'], message: 'Las secuencias deben empezar en 1 y no tener huecos' })
   }
 })
 
@@ -494,62 +513,67 @@ export type ValidBackup = z.infer<typeof backupSchema>
 type BackupMessage = NonNullable<ValidBackup['coachMessages']>[number]
 
 function normalizeVersion(value: ValidBackup, repairLegacyShape: boolean): ValidBackup {
-  const runs = (value.coachRuns ?? []).map((run) => ({
-    ...run,
-    ...(repairLegacyShape && !run.conversationId && run.request.event.conversationId ? { conversationId: run.request.event.conversationId } : {}),
-    legacy: true,
-    dispatchToken: undefined,
-    dispatchLeaseExpiresAt: undefined,
-    reconciliationState: run.reconciliationState ?? (run.remoteRunId ? 'reconciled' : 'uncertain'),
-    ...(['queued', 'running'].includes(run.status) && !run.error ? { error: 'legacy-imported' } : {}),
-    ...(repairLegacyShape && ['completed', 'failed', 'cancelled'].includes(run.status) && run.endedAt === undefined ? { endedAt: run.updatedAt } : {}),
-  }))
+  const conversations = (value.coachConversations ?? []).map((conversation) => ({ ...conversation }))
+  const conversationById = new Map(conversations.map((conversation) => [conversation.id, conversation]))
+  const runs = (value.coachRuns ?? []).map((run) => {
+    const conversationId = run.conversationId ?? run.request.event.conversationId ?? `coach-local-${run.eventId}`
+    if (repairLegacyShape && !conversationById.has(conversationId)) {
+      const conversation = { id: conversationId, ownerId: run.ownerId, title: 'Historial anterior', createdAt: run.createdAt, updatedAt: run.updatedAt, nextSequence: 1 }
+      conversations.push(conversation)
+      conversationById.set(conversationId, conversation)
+    }
+    return {
+      ...run,
+      ...(repairLegacyShape ? { conversationId, request: { ...run.request, event: { ...run.request.event, conversationId } } } : {}),
+      legacy: true,
+      dispatchToken: undefined,
+      dispatchLeaseExpiresAt: undefined,
+      reconciliationState: run.reconciliationState ?? (run.remoteRunId ? 'reconciled' : 'uncertain'),
+      ...(['queued', 'running'].includes(run.status) && !run.error ? { error: 'legacy-imported' } : {}),
+      ...(repairLegacyShape && ['completed', 'failed', 'cancelled'].includes(run.status) && run.endedAt === undefined ? { endedAt: Math.min(run.updatedAt, run.appliedAt ?? run.updatedAt) } : {}),
+    }
+  })
   const runById = new Map(runs.map((run) => [run.id, run]))
-  const messages = [...(value.coachMessages ?? [])]
+  if (repairLegacyShape) {
+    for (const run of runs) {
+      run.request = { ...run.request, context: { ...run.request.context, snapshot: {
+        ...run.request.context.snapshot,
+        conversation: (run.request.context.snapshot?.conversation ?? []).map((message) => {
+          const referenced = message.runId ? resolveHistoricalRun(runById, message.runId, run.ownerId) : undefined
+          return referenced ? { ...message, runId: referenced.id } : message
+        }),
+      } } }
+    }
+  }
   const grouped = new Map<string, BackupMessage[]>()
-  for (const message of messages) {
-    const conversationId = message.conversationId ?? runById.get(message.runId)?.conversationId
+  const messages = (value.coachMessages ?? []).map((message) => {
+    const run = repairLegacyShape ? resolveHistoricalRun(runById, message.runId, message.ownerId) : runById.get(message.runId)
+    const conversationId = message.conversationId ?? run?.conversationId
+    const normalized = repairLegacyShape ? { ...message, runId: run?.id ?? message.runId, conversationId, deliveryState: message.deliveryState ?? 'delivered' as const } : { ...message }
     if (conversationId) {
-      const normalized = conversationId === message.conversationId ? message : { ...message, conversationId }
       const list = grouped.get(conversationId) ?? []
       list.push(normalized)
       grouped.set(conversationId, list)
     }
-  }
-  const normalizedMessages = repairLegacyShape
-    ? messages.map((message) => {
-      const conversationId = message.conversationId ?? runById.get(message.runId)?.conversationId
-      const list = conversationId ? grouped.get(conversationId) ?? [] : []
-      const ordered = [...list].sort((a, b) => (a.sequence ?? Number.MAX_SAFE_INTEGER) - (b.sequence ?? Number.MAX_SAFE_INTEGER) || a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-      const sequence = ordered.findIndex((candidate) => candidate.id === message.id) + 1
-      return { ...message, ...(conversationId ? { conversationId } : {}), ...(sequence > 0 ? { sequence } : {}) }
-    })
-    : messages
-  const conversations = (value.coachConversations ?? []).map((conversation) => {
-    const count = normalizedMessages.filter((message) => message.conversationId === conversation.id && message.ownerId === conversation.ownerId).length
-    return { ...conversation, ...(repairLegacyShape ? { nextSequence: count + 1 } : {}) }
+    return normalized
   })
+  if (repairLegacyShape) {
+    for (const conversation of conversations) {
+      const ordered = (grouped.get(conversation.id) ?? []).sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      ordered.forEach((message, index) => { message.sequence = index + 1 })
+      conversation.nextSequence = ordered.length + 1
+    }
+  }
   return {
     ...value,
-    version: 10,
+    version: 11,
     folders: value.folders ?? [], measurements: value.measurements ?? [], foods: value.foods ?? [], dishes: value.dishes ?? [], foodLog: value.foodLog ?? [],
     importBatches: value.importBatches ?? [], externalRefs: value.externalRefs ?? [], adaptationProposals: value.adaptationProposals ?? [], adaptationJobs: value.adaptationJobs ?? [], routineRevisionSnapshots: value.routineRevisionSnapshots ?? [], adaptationEventJobs: value.adaptationEventJobs ?? [],
-    coachRuns: runs, coachMessages: normalizedMessages, coachProfiles: value.coachProfiles ?? [], coachConsents: value.coachConsents ?? [], coachConversations: conversations, coachDrafts: value.coachDrafts ?? [],
+    coachRuns: runs, coachMessages: messages, coachProfiles: value.coachProfiles ?? [], coachConsents: (value.coachConsents ?? []).map((consent) => ({ ...consent, enabled: false })), coachConversations: conversations, coachDrafts: value.coachDrafts ?? [],
   }
 }
 
-/** Normaliza cada formato histórico a un contrato interno v10, sin borrar registros. */
+/** Normaliza los formatos 1–10 a v11; todos los imports quedan sin autorización remota. */
 export function normalizeBackup(value: ValidBackup): ValidBackup {
-  switch (value.version) {
-    case 1: return normalizeVersion(value, true)
-    case 2: return normalizeVersion(value, true)
-    case 3: return normalizeVersion(value, true)
-    case 4: return normalizeVersion(value, true)
-    case 5: return normalizeVersion(value, true)
-    case 6: return normalizeVersion(value, true)
-    case 7: return normalizeVersion(value, true)
-    case 8: return normalizeVersion(value, true)
-    case 9: return normalizeVersion(value, true)
-    case 10: return normalizeVersion(value, false)
-  }
+  return normalizeVersion(value, value.version < 11)
 }

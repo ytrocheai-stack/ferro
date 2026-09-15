@@ -579,7 +579,7 @@ describe('coach IndexedDB persistence and reconciliation', () => {
   })
 })
 
-describe('coach additive v10 migration', () => {
+describe('coach additive v11 migration', () => {
   it('preserves legacy IDs, messages, metadata and unrelated stores while repairing dangling references', async () => {
     const name = 'coach-t2-v9-upgrade'
     const legacy = new Dexie(name)
@@ -600,8 +600,8 @@ describe('coach additive v10 migration', () => {
       await legacy.table('routines').put(routine())
       legacy.close()
       await upgraded.open()
-      expect(upgraded.verno).toBe(10)
-      expect(await upgraded.coachRuns.toArray()).toEqual([{ ...remote, remoteRunId: remote.id }])
+      expect(upgraded.verno).toBe(11)
+      expect(await upgraded.coachRuns.toArray()).toEqual([{ ...remote, remoteRunId: remote.id, conversationId: orphanId, endedAt: remote.updatedAt, request: { ...remote.request, event: { ...remote.request.event, conversationId: orphanId } } }])
       expect(await upgraded.coachMessages.get(userMessage.id)).toMatchObject({ ...userMessage, runId: remote.id, conversationId: 'coach-local-event-coach-apply', sequence: 1, deliveryState: 'delivered' })
       expect(await upgraded.coachMessages.get(assistant.id)).toMatchObject({ ...assistant, conversationId: 'coach-local-event-coach-apply', sequence: expect.any(Number), deliveryState: 'delivered' })
       expect(await upgraded.coachMessages.get('another-owner')).toMatchObject({ runId: orphanId })

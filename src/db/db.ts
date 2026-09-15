@@ -1,4 +1,4 @@
-import Dexie, { type Table } from 'dexie'
+import Dexie, { type Table, type Transaction } from 'dexie'
 import type {
   Workout,
   Routine,
@@ -283,69 +283,129 @@ export class FerroDB extends Dexie {
       coachConsents: 'id, ownerId, deviceId, version, enabled, revision, updatedAt',
       coachConversations: 'id, ownerId, updatedAt, [ownerId+updatedAt]',
       coachDrafts: 'id, ownerId, conversationId, updatedAt, [ownerId+conversationId]',
-    }).upgrade(async (tx) => {
-      const runs = await tx.table<CoachRunRecord>('coachRuns').toArray()
-      const conversations = tx.table<CoachConversation>('coachConversations')
-      const messages = tx.table<CoachMessage>('coachMessages')
-      const created = new Map<string, CoachConversation>()
-      const runMap = new Map<string, CoachRunRecord>()
-      const ensureConversation = async (ownerId: string, id: string, title = 'Nueva conversación') => {
-        let resolvedId = id
-        let existing = await conversations.get(resolvedId)
-        let suffix = 0
-        while (existing && existing.ownerId !== ownerId) {
-          suffix += 1
-          resolvedId = `${ownerId}:${id}${suffix === 1 ? '' : `:${suffix}`}`
-          existing = await conversations.get(resolvedId)
-        }
-        const key = `${ownerId}:${resolvedId}`
-        const cached = created.get(key)
-        if (cached) return cached
-        if (existing?.ownerId === ownerId) { created.set(key, existing); return existing }
-        const now = Date.now()
-        const next = { id: resolvedId, ownerId, title, createdAt: now, updatedAt: now, nextSequence: 1 } satisfies CoachConversation
-        await conversations.put(next); created.set(key, next); return next
+    }).upgrade(repairCoachPersistence)
+    // v11: repara también instalaciones que ya ejecutaron la migración v10 defectuosa.
+    this.version(11).stores({
+      workouts: 'id, startedAt, routineId, routineRevision',
+      routines: 'id, sortOrder, folderId, revision, coachReviewed, scheduledAt, retiredAt',
+      customExercises: 'id',
+      folders: 'id, sortOrder',
+      measurements: 'id, date, kind, [kind+date]',
+      photos: 'id, date',
+      foods: 'id, name, source, usedAt, offCode, usdaFdcId',
+      dishes: 'id, name',
+      foodLog: 'id, date, [date+meal]',
+      importBatches: 'id, source, createdAt, status',
+      externalRefs: '&key, source, entity, localId, batchId',
+      adaptationProposals: 'id, analysisId, baseRoutineId, baseRoutineRevision, status, createdAt, candidateId, occurrenceId, supersedesProposalId, ownerId, workoutId, requestId',
+      adaptationJobs: 'id, workoutId, status, createdAt, nextRetryAt, updatedAt, ownerId, requestId, leaseExpiresAt',
+      adaptationEventJobs: 'id, analysisId, status, createdAt, nextRetryAt, ownerId',
+      routineRevisionSnapshots: 'id, routineId, revision, createdAt, analysisId',
+      coachRuns: 'id, ownerId, eventId, conversationId, status, createdAt, updatedAt, contextVersion, remoteRunId, [ownerId+eventId]',
+      coachMessages: 'id, ownerId, runId, conversationId, createdAt, [runId+createdAt], [conversationId+sequence]',
+      coachProfiles: 'id, ownerId, revision, updatedAt',
+      coachConsents: 'id, ownerId, deviceId, version, enabled, revision, updatedAt',
+      coachConversations: 'id, ownerId, updatedAt, [ownerId+updatedAt]',
+      coachDrafts: 'id, ownerId, conversationId, updatedAt, [ownerId+conversationId]',
+    }).upgrade(repairCoachPersistence)
+  }
+}
+
+/** Reparación aditiva y atómica: conserva identidades, contenido y fechas existentes. */
+async function repairCoachPersistence(tx: Transaction): Promise<void> {
+  const runs = await tx.table<CoachRunRecord>('coachRuns').toArray()
+  const conversations = tx.table<CoachConversation>('coachConversations')
+  const messages = tx.table<CoachMessage>('coachMessages')
+  const created = new Map<string, CoachConversation>()
+  const originalConversationIds = new Set((await conversations.toArray()).map((conversation) => conversation.id))
+  const runMap = new Map<string, CoachRunRecord>()
+  const ensureConversation = async (ownerId: string, id: string, createdAt: number, updatedAt: number, title = 'Nueva conversación') => {
+    let resolvedId = id
+    let existing = await conversations.get(resolvedId)
+    let suffix = 0
+    while (existing && existing.ownerId !== ownerId) {
+      suffix += 1
+      resolvedId = `${ownerId}:${id}${suffix === 1 ? '' : `:${suffix}`}`
+      existing = await conversations.get(resolvedId)
+    }
+    const key = `${ownerId}:${resolvedId}`
+    const cached = created.get(key)
+    if (cached) return cached
+    if (existing?.ownerId === ownerId) {
+      const reset = { ...existing, nextSequence: 1 }
+      created.set(key, reset)
+      return reset
+    }
+    const next = { id: resolvedId, ownerId, title, createdAt, updatedAt, nextSequence: 1 } satisfies CoachConversation
+    await conversations.put(next); created.set(key, next); return next
+  }
+  const localIds = new Set(runs.map((run) => run.id))
+  const repairRunId = (id: string, ownerId: string): string => {
+    if (localIds.has(id)) return id
+    const matches = runs.filter((run) => run.ownerId === ownerId && !run.id.startsWith('coach-local-') && id === `coach-local-${run.eventId}`)
+    return matches.length === 1 ? matches[0].id : id
+  }
+  for (const run of runs) {
+    if (!run.id.startsWith('coach-local-')) {
+      // v8/v9 dejaban el mensaje del usuario apuntando al ID local eliminado.
+      // Repara solo la referencia, sin borrar burbujas ni modificar timestamps.
+      const oldId = `coach-local-${run.eventId}`
+      if (repairRunId(oldId, run.ownerId) === run.id) {
+        await tx.table<CoachMessage>('coachMessages').where('runId').equals(oldId)
+          .filter((message) => message.ownerId === run.ownerId)
+          .modify({ runId: run.id })
       }
-      const localIds = new Set(runs.map((run) => run.id))
-      for (const run of runs) {
-        if (!run.remoteRunId && !run.id.startsWith('coach-local-')) {
-          await tx.table<CoachRunRecord>('coachRuns').put({ ...run, remoteRunId: run.id })
-          // v8/v9 dejaban el mensaje del usuario apuntando al ID local eliminado.
-          // Repara solo la referencia, sin borrar burbujas ni modificar timestamps.
-          const oldId = `coach-local-${run.eventId}`
-          if (!localIds.has(oldId)) {
-            await tx.table<CoachMessage>('coachMessages').where('runId').equals(oldId)
-              .filter((message) => message.ownerId === run.ownerId)
-              .modify({ runId: run.id })
-          }
-        }
-        const explicitConversationId = run.request?.event?.conversationId
-        const requestedConversationId = explicitConversationId || `coach-local-${run.eventId}`
-        const conversation = await ensureConversation(run.ownerId, requestedConversationId)
-        const conversationId = conversation.id
-        const repairedRun = { ...run, remoteRunId: run.remoteRunId ?? (!run.id.startsWith('coach-local-') ? run.id : undefined), ...(explicitConversationId ? { conversationId, reconciliationState: run.reconciliationState ?? 'reconciled' } : {}) }
-        if (repairedRun.remoteRunId !== run.remoteRunId || (explicitConversationId && run.conversationId !== conversationId)) await tx.table<CoachRunRecord>('coachRuns').put(repairedRun)
-        runMap.set(run.id, repairedRun)
-      }
-      const legacy = new Map<string, CoachConversation>()
-      const ordered = (await messages.toArray()).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-      for (const message of ordered) {
-        const run = runMap.get(message.runId)
-        let conversationId = message.conversationId ?? run?.conversationId ?? (run ? `coach-local-${run.eventId}` : undefined)
-        if (!conversationId) {
-          let fallback = legacy.get(message.ownerId)
-          if (!fallback) { fallback = await ensureConversation(message.ownerId, `coach-history-${message.ownerId}`, 'Historial anterior'); legacy.set(message.ownerId, fallback) }
-          conversationId = fallback.id
-        }
-        const conversation = await ensureConversation(message.ownerId, conversationId)
-        conversationId = conversation.id
-        const sequence = message.sequence ?? conversation.nextSequence
-        await messages.put({ ...message, conversationId, sequence, deliveryState: message.deliveryState ?? 'delivered' })
-        const updatedConversation = { ...conversation, nextSequence: Math.max(conversation.nextSequence, sequence + 1), updatedAt: Math.max(conversation.updatedAt, message.createdAt) }
-        await conversations.put(updatedConversation)
-        created.set(`${message.ownerId}:${conversation.id}`, updatedConversation)
-      }
-    })
+    }
+    const explicitConversationId = run.request?.event?.conversationId
+    const requestedConversationId = run.conversationId || explicitConversationId || `coach-local-${run.eventId}`
+    const conversation = await ensureConversation(run.ownerId, requestedConversationId, run.createdAt, run.updatedAt)
+    const conversationId = conversation.id
+    await conversations.put(conversation)
+    const snapshot = run.request.context?.snapshot
+    const request = {
+      ...run.request,
+      event: { ...run.request.event, conversationId },
+      ...(snapshot?.conversation ? { context: { ...run.request.context, snapshot: {
+        ...snapshot,
+        conversation: snapshot.conversation.map((message) => message.runId ? { ...message, runId: repairRunId(message.runId, run.ownerId) } : message),
+      } } } : {}),
+    }
+    const repairedRun = {
+      ...run,
+      remoteRunId: run.remoteRunId ?? (!run.id.startsWith('coach-local-') ? run.id : undefined),
+      conversationId,
+      reconciliationState: run.reconciliationState ?? 'reconciled',
+      request,
+      ...(['completed', 'failed', 'cancelled'].includes(run.status) && run.endedAt === undefined ? { endedAt: Math.min(run.updatedAt, run.appliedAt ?? run.updatedAt) } : {}),
+    }
+    await tx.table<CoachRunRecord>('coachRuns').put(repairedRun)
+    runMap.set(run.id, repairedRun)
+  }
+  const legacy = new Map<string, CoachConversation>()
+  const ordered = (await messages.toArray()).sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  for (const message of ordered) {
+    const run = runMap.get(message.runId)
+    let conversationId = (run?.ownerId === message.ownerId ? run.conversationId : undefined) ?? message.conversationId
+    if (!conversationId) {
+      let fallback = legacy.get(message.ownerId)
+      if (!fallback) { fallback = await ensureConversation(message.ownerId, `coach-history-${message.ownerId}`, message.createdAt, message.createdAt, 'Historial anterior'); legacy.set(message.ownerId, fallback) }
+      conversationId = fallback.id
+    }
+    const conversation = await ensureConversation(message.ownerId, conversationId, message.createdAt, message.createdAt)
+    conversationId = conversation.id
+    const sequence = conversation.nextSequence
+    await messages.put({ ...message, conversationId, sequence, deliveryState: message.deliveryState ?? 'delivered' })
+    const updatedConversation = {
+      ...conversation,
+      nextSequence: sequence + 1,
+      ...(!originalConversationIds.has(conversation.id) ? { createdAt: Math.min(conversation.createdAt, message.createdAt), updatedAt: Math.max(conversation.updatedAt, message.createdAt) } : {}),
+    }
+    await conversations.put(updatedConversation)
+    created.set(`${message.ownerId}:${conversation.id}`, updatedConversation)
+  }
+  // Incluye conversaciones vacías que no pasan por el bucle de mensajes.
+  for (const conversation of await conversations.toArray()) {
+    if (!created.has(`${conversation.ownerId}:${conversation.id}`)) await conversations.put({ ...conversation, nextSequence: 1 })
   }
 }
 

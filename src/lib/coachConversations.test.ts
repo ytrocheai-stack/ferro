@@ -124,7 +124,52 @@ describe('conversaciones locales del coach', () => {
   })
 })
 
-describe('migración v9 a v10 de conversaciones', () => {
+describe('migración v9/v10 a v11 de conversaciones', () => {
+  it.each([9, 10])('repara v%s sin conversación y renumera por fecha e ID sin perder datos', async (version) => {
+    const name = `coach-v11-${version}-${crypto.randomUUID()}`
+    const legacy = new Dexie(name)
+    legacy.version(version).stores({
+      coachRuns: 'id, ownerId, eventId, status, createdAt, updatedAt, contextVersion',
+      coachMessages: 'id, ownerId, runId, createdAt, [runId+createdAt]',
+      foods: 'id, name, source, usedAt, offCode, usdaFdcId',
+      ...(version === 10 ? { coachConversations: 'id, ownerId, updatedAt, [ownerId+updatedAt]', coachDrafts: 'id, ownerId, conversationId, updatedAt, [ownerId+conversationId]' } : {}),
+    })
+    await legacy.open()
+    const run = { id: 'remote-run', ownerId: 'owner-a', eventId: 'event', contextVersion: 'ctx', status: 'completed', request: { event: { id: 'event', accountId: 'owner-a', deviceId: 'd' } }, createdAt: 5, updatedAt: 30 }
+    const messages = [
+      { id: 'z', createdAt: 10, sequence: 7 },
+      { id: 'a', createdAt: 10, sequence: 7 },
+      { id: 'c', createdAt: 20, sequence: 20 },
+    ].map((item) => ({ ...item, ownerId: 'owner-a', runId: version === 9 ? 'coach-local-event' : run.id, role: 'user', content: `contenido ${item.id}`, contextVersion: 'ctx' }))
+    await legacy.table('coachRuns').bulkPut([run, { ...run, id: 'coach-local-empty', eventId: 'empty', request: { event: { id: 'empty', accountId: 'owner-a', deviceId: 'd' } } }])
+    await legacy.table('coachMessages').bulkPut(messages)
+    const food = { id: 'custom-food', name: 'Alimento', source: 'custom', protein: 10 }
+    await legacy.table('foods').put(food)
+    if (version === 10) await legacy.table('coachConversations').put({ id: 'coach-local-event', ownerId: 'owner-a', title: 'Conservada', createdAt: 2, updatedAt: 50, nextSequence: 40 })
+    legacy.close()
+    const upgraded = new FerroDB(name)
+    try {
+      await upgraded.open()
+      expect(await upgraded.coachRuns.get(run.id)).toMatchObject({ ...run, conversationId: 'coach-local-event', remoteRunId: run.id, reconciliationState: 'reconciled' })
+      expect(await upgraded.coachRuns.get('coach-local-empty')).toMatchObject({ conversationId: 'coach-local-empty' })
+      expect(await upgraded.coachConversations.get('coach-local-empty')).toMatchObject({ nextSequence: 1 })
+      for (const [index, id] of ['a', 'z', 'c'].entries()) {
+        const original = messages.find((message) => message.id === id)!
+        expect(await upgraded.coachMessages.get(id)).toEqual({ ...original, runId: run.id, conversationId: 'coach-local-event', sequence: index + 1, deliveryState: 'delivered' })
+      }
+      expect(await upgraded.coachConversations.get('coach-local-event')).toMatchObject({ nextSequence: 4, ...(version === 10 ? { title: 'Conservada', createdAt: 2, updatedAt: 50 } : {}) })
+      expect(await upgraded.foods.get(food.id)).toEqual(food)
+      const beforeReload = await upgraded.coachMessages.toArray()
+      upgraded.close()
+      await upgraded.open()
+      expect(await upgraded.coachMessages.toArray()).toEqual(beforeReload)
+      expect(upgraded.verno).toBe(11)
+    } finally {
+      upgraded.close()
+      await Dexie.delete(name)
+    }
+  })
+
   it('agrupa referencias huérfanas por propietario sin borrar mensajes', async () => {
     const name = `t4-migration-${Date.now()}`
     const legacy = new Dexie(name)
@@ -149,5 +194,31 @@ describe('migración v9 a v10 de conversaciones', () => {
     expect(await reopened.coachMessages.get('known-b')).toMatchObject({ sequence: 2 })
     expect(await reopened.coachConversations.get('conv-a')).toMatchObject({ nextSequence: 3 })
     reopened.close(); await Dexie.delete(name)
+  })
+
+  it('conserva fechas de conversaciones existentes y separa colisiones de owner durante v11', async () => {
+    const name = `coach-owner-migration-${crypto.randomUUID()}`
+    const old = new Dexie(name)
+    old.version(10).stores({ coachRuns: 'id, ownerId, eventId', coachMessages: 'id, ownerId, runId', coachConversations: 'id, ownerId' })
+    const conversation = { id: 'shared', ownerId: 'owner-a', title: 'Original', createdAt: 1, updatedAt: 2, nextSequence: 50 }
+    await old.open()
+    await old.table('coachConversations').put(conversation)
+    for (const ownerId of ['owner-a', 'owner-b']) {
+      const runId = `coach-local-${ownerId}`
+      await old.table('coachRuns').put({ id: runId, ownerId, eventId: ownerId, conversationId: 'shared', request: { event: { conversationId: 'shared' } }, createdAt: 3, updatedAt: 10 })
+      await old.table('coachMessages').put({ id: ownerId, ownerId, runId, conversationId: 'shared', content: ownerId, createdAt: 10 })
+    }
+    old.close()
+    const upgraded = new FerroDB(name)
+    try {
+      await upgraded.open()
+      expect(await upgraded.coachConversations.get('shared')).toEqual({ ...conversation, nextSequence: 2 })
+      const other = await upgraded.coachRuns.get('coach-local-owner-b')
+      expect(other?.conversationId).not.toBe('shared')
+      expect(await upgraded.coachMessages.get('owner-b')).toMatchObject({ conversationId: other?.conversationId, sequence: 1, content: 'owner-b', createdAt: 10 })
+    } finally {
+      upgraded.close()
+      await Dexie.delete(name)
+    }
   })
 })

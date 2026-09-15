@@ -34,7 +34,7 @@ import { getCoachConsent, getCoachDeviceId, readCoachConsentRecord } from './coa
 
 interface BackupFile {
   app: 'ferro'
-  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
   exportedAt: string
   settings: SettingsValues
   nutritionGoals?: NutritionGoals
@@ -86,7 +86,7 @@ export async function exportBackup(): Promise<void> {
     ]))
   const payload: BackupFile = {
     app: 'ferro',
-    version: 10,
+    version: 11,
     exportedAt: new Date().toISOString(),
     settings: { ...useSettings.getState() },
     nutritionGoals: { ...useNutrition.getState().goals },
@@ -190,6 +190,7 @@ export async function importBackup(file: File): Promise<ImportResult> {
   }
   const problem = validateBackup(parsed)
   if (problem) throw new Error(`El backup está dañado (${problem}); no se ha modificado nada`)
+  // La validación puede transformar strings (trim); restaurar el contenido original.
   const data = normalizeBackup(parsed as ValidBackup) as BackupFile
   const normalizedProblem = validateBackup(data)
   if (normalizedProblem) throw new Error(`El backup está dañado tras normalizar (${normalizedProblem}); no se ha modificado nada`)
@@ -204,18 +205,19 @@ export async function importBackup(file: File): Promise<ImportResult> {
   ])
   if (coachOwners.size > 0 && !activeOwner) throw new Error('Se requiere una cuenta activa para importar datos del Coach; no se ha modificado nada')
   if (activeOwner && [...coachOwners].some((ownerId) => ownerId !== activeOwner)) throw new Error('El backup pertenece a otra cuenta; no se ha modificado nada')
-  const preservedConsents = await db.coachConsents.toArray()
-  if (activeOwner) {
-    const currentDeviceId = getCoachDeviceId()
-    const localConsent = getCoachConsent(activeOwner)
-    const storedConsent = await readCoachConsentRecord(activeOwner, currentDeviceId)
-    if (localConsent && !storedConsent) preservedConsents.push({ id: `${activeOwner}:${currentDeviceId}`, ownerId: activeOwner, deviceId: currentDeviceId, version: localConsent.version, enabled: true, revision: localConsent.acceptedAt, acceptedAt: localConsent.acceptedAt, updatedAt: localConsent.acceptedAt })
-  }
-
   await db.transaction(
     'rw',
     [db.workouts, db.routines, db.customExercises, db.folders, db.measurements, db.foods, db.dishes, db.foodLog, db.importBatches, db.externalRefs, db.adaptationProposals, db.adaptationJobs, db.routineRevisionSnapshots, db.adaptationEventJobs, db.coachRuns, db.coachMessages, db.coachProfiles, db.coachConsents, db.coachConversations, db.coachDrafts],
     async () => {
+      // Leer dentro de la misma transacción evita restaurar un consentimiento
+      // obsoleto si otra pestaña lo revoca mientras se valida el archivo.
+      const preservedConsents = await db.coachConsents.toArray()
+      if (activeOwner) {
+        const currentDeviceId = getCoachDeviceId()
+        const localConsent = getCoachConsent(activeOwner)
+        const storedConsent = await readCoachConsentRecord(activeOwner, currentDeviceId)
+        if (localConsent && !storedConsent) preservedConsents.push({ id: `${activeOwner}:${currentDeviceId}`, ownerId: activeOwner, deviceId: currentDeviceId, version: localConsent.version, enabled: true, revision: localConsent.acceptedAt, acceptedAt: localConsent.acceptedAt, updatedAt: localConsent.acceptedAt })
+      }
       await Promise.all([
         db.workouts.clear(),
         db.routines.clear(),
@@ -256,7 +258,10 @@ export async function importBackup(file: File): Promise<ImportResult> {
         db.coachRuns.bulkPut(data.coachRuns ?? []),
         db.coachMessages.bulkPut(data.coachMessages ?? []),
         db.coachProfiles.bulkPut(data.coachProfiles ?? []),
-        db.coachConsents.bulkPut(preservedConsents),
+        db.coachConsents.bulkPut([...new Map([
+          ...(data.coachConsents ?? []).map((consent) => [consent.id, { ...consent, enabled: false }] as const),
+          ...preservedConsents.map((consent) => [consent.id, consent] as const),
+        ]).values()]),
         db.coachConversations.bulkPut(data.coachConversations ?? []),
         db.coachDrafts.bulkPut(data.coachDrafts ?? []),
       ])
