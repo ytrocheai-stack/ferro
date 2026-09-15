@@ -1118,7 +1118,7 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
     }
     const providerOrder = parseCoachProviderOrder(env.COACH_PROVIDER_ORDER)
     const router = new CoachGenerationRouter({ db, runId, order: providerOrder, providers, models, enabled: enabledProviders, now: clock, fingerprintKey: env.PSEUDONYMIZATION_KEY ?? env.CLERK_JWT_KEY, allowStreaming: env.ENVIRONMENT !== 'production' && enabled(env.ENABLE_COACH_STREAMING), onStreamExplanation: text => { streamedExplanation = text } })
-    if (!providerOrder.some(provider => enabledProviders[provider] && providers[provider])) failure = 'coach-provider-unavailable'
+    if (!providerOrder.some(provider => enabledProviders[provider] && providers[provider])) failure = 'coach-providers-unavailable'
     else {
       const population = request.context.snapshot.profile.populationConfirmed ? request.context.snapshot.profile.population : []
       const initial = await step('coach-run-tools-initial', async () => {

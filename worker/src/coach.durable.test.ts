@@ -98,8 +98,16 @@ describe('coach durable execution on SQLite', () => {
       generationProviders: { gemini: { generate: async () => { throw new ProviderError('Gemini caído', 503, 'server-error') } } },
       generation: { generate: async () => { throw new ProviderError('NVIDIA caído', 503, 'server-error') } },
     }, f.steps)
-    expect(f.sql.prepare('SELECT status, decision_json FROM coach_runs').get()).toEqual({ status: 'failed', decision_json: null })
+    expect(f.sql.prepare('SELECT status, error_code, decision_json FROM coach_runs').get()).toEqual({ status: 'failed', error_code: 'provider-server-error', decision_json: null })
     expect(f.sql.prepare("SELECT status, text, decision_json FROM coach_run_snapshots WHERE run_id = 'run' ORDER BY sequence DESC LIMIT 1").get()).toMatchObject({ status: 'failed', text: '', decision_json: null })
+  })
+  it('persiste indisponibilidad recuperable sin decisión cuando ambos proveedores están apagados', async () => {
+    const f = fixture()
+    f.env.ENABLE_GEMINI = 'false'
+    f.env.ENABLE_NVIDIA = 'false'
+    await executeCoachRun(f.env, 'run', { now: () => 100 }, f.steps)
+    expect(f.sql.prepare('SELECT status, error_code, decision_json FROM coach_runs').get()).toEqual({ status: 'failed', error_code: 'coach-providers-unavailable', decision_json: null })
+    expect(f.sql.prepare("SELECT status, text FROM coach_run_snapshots WHERE run_id = 'run' ORDER BY sequence DESC LIMIT 1").get()).toMatchObject({ status: 'failed', text: '' })
   })
   it('desactiva streaming de providers en producción aunque la bandera esté activa', async () => {
     const f = fixture()
