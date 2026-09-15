@@ -269,6 +269,28 @@ async function restoreImportDatabase(snapshot: ImportDatabaseSnapshot): Promise<
 
 const noOpPersistStorage = { getItem: () => null, setItem: () => undefined, removeItem: () => undefined }
 
+const SETTINGS_STORAGE_KEY = 'ferro-settings'
+const NUTRITION_STORAGE_KEY = 'ferro-nutrition-goals'
+
+interface RawLocalStateSnapshot {
+  settings: string | null
+  nutritionGoals: string | null
+}
+
+function snapshotRawLocalState(): RawLocalStateSnapshot {
+  return {
+    settings: localStorage.getItem(SETTINGS_STORAGE_KEY),
+    nutritionGoals: localStorage.getItem(NUTRITION_STORAGE_KEY),
+  }
+}
+
+function restoreRawLocalState(snapshot: RawLocalStateSnapshot): void {
+  if (snapshot.settings === null) localStorage.removeItem(SETTINGS_STORAGE_KEY)
+  else localStorage.setItem(SETTINGS_STORAGE_KEY, snapshot.settings)
+  if (snapshot.nutritionGoals === null) localStorage.removeItem(NUTRITION_STORAGE_KEY)
+  else localStorage.setItem(NUTRITION_STORAGE_KEY, snapshot.nutritionGoals)
+}
+
 function restoreLocalState(snapshot: { settings: ReturnType<typeof useSettings.getState>; nutrition: ReturnType<typeof useNutrition.getState> }): void {
   const settingsStorage = useSettings.persist.getOptions().storage
   useSettings.persist.setOptions({ storage: noOpPersistStorage })
@@ -368,6 +390,7 @@ export async function importBackup(file: File): Promise<ImportResult> {
   if (activeOwner && [...coachOwners].some((ownerId) => ownerId !== activeOwner)) throw new Error('El backup pertenece a otra cuenta; no se ha modificado nada')
   const databaseSnapshot = await snapshotImportDatabase()
   const localStateSnapshot = { settings: useSettings.getState(), nutrition: useNutrition.getState() }
+  const rawLocalStateSnapshot = snapshotRawLocalState()
   await db.transaction(
     'rw',
     importTables,
@@ -450,7 +473,11 @@ export async function importBackup(file: File): Promise<ImportResult> {
     try {
       await restoreImportDatabase(databaseSnapshot)
     } finally {
-      restoreLocalState(localStateSnapshot)
+      try {
+        restoreLocalState(localStateSnapshot)
+      } finally {
+        restoreRawLocalState(rawLocalStateSnapshot)
+      }
     }
     throw error
   }

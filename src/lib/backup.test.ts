@@ -339,6 +339,46 @@ describe('validación de respaldos', () => {
     }
   })
 
+  it('restaura las claves crudas de localStorage si falla la segunda persistencia local', async () => {
+    setCoachAccountId('owner-a')
+    const original = { ...base.workouts[0], name: 'Original' }
+    await db.workouts.put(original)
+    const settingsRawBefore = JSON.stringify({ state: { theme: 'light' }, version: 0 })
+    const nutritionRawBefore = JSON.stringify({ state: { goals: { kcal: 2400 } }, version: 0 })
+    localStorage.setItem('ferro-settings', settingsRawBefore)
+    localStorage.setItem('ferro-nutrition-goals', nutritionRawBefore)
+    const settingsBefore = useSettings.getState()
+    const nutritionBefore = useNutrition.getState()
+    const settingsStorage = useSettings.persist.getOptions().storage
+    const nutritionStorage = useNutrition.persist.getOptions().storage
+    let writes = 0
+    const firstSucceedsSecondFails = {
+      getItem: () => null,
+      setItem: (key: string, value: unknown) => {
+        writes += 1
+        if (writes === 2) throw new DOMException('sin espacio', 'QuotaExceededError')
+        localStorage.setItem(key, JSON.stringify(value))
+      },
+      removeItem: (key: string) => localStorage.removeItem(key),
+    }
+    useSettings.persist.setOptions({ storage: firstSucceedsSecondFails })
+    useNutrition.persist.setOptions({ storage: firstSucceedsSecondFails })
+    const backup = { ...base, version: 11 as const, ...coachRecords, settings: { theme: 'dark' }, nutritionGoals: { kcal: nutritionBefore.goals.kcal + 1 } }
+
+    try {
+      await expect(importBackup(new File([JSON.stringify(backup)], 'quota-raw-local-state.json'))).rejects.toMatchObject({ name: 'QuotaExceededError' })
+      expect(writes).toBe(2)
+      expect(await db.workouts.toArray()).toEqual([original])
+      expect(useSettings.getState()).toEqual(settingsBefore)
+      expect(useNutrition.getState()).toEqual(nutritionBefore)
+      expect(localStorage.getItem('ferro-settings')).toBe(settingsRawBefore)
+      expect(localStorage.getItem('ferro-nutrition-goals')).toBe(nutritionRawBefore)
+    } finally {
+      useSettings.persist.setOptions({ storage: settingsStorage })
+      useNutrition.persist.setOptions({ storage: nutritionStorage })
+    }
+  })
+
   it('hace prevalecer el consentimiento vigente de localStorage sobre una fila disabled importada', async () => {
     setCoachAccountId('owner-a')
     const current = { ...coachRecords.coachConsents[0], enabled: false, revision: 9, updatedAt: 9 }
