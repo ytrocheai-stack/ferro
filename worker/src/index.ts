@@ -12,6 +12,7 @@ import { buildVectorizeFilter } from '../../packages/corpus-retrieval/src/index'
 import { corpusMetadataKey, corpusNamespace, vectorPhysicalId } from './rag'
 import { acquireProviderCircuit, recordProviderFailure, recordProviderSuccess } from './providers/circuit'
 import { GeminiGenerationProvider, GEMINI_MODEL } from './providers/gemini'
+import { logProviderHttpFailure } from './providers/diagnostics'
 import type { ProviderName } from './providers/types'
 
 export interface D1Result { success?: boolean; results?: Record<string, unknown>[]; meta?: { changes?: number } }
@@ -399,6 +400,7 @@ async function providerFetchJson<T>(fetcher: typeof fetch, url: string, init: Re
 }
 
 async function providerHttpError(response: Response, requestGate?: RequestGate): Promise<ProviderError> {
+  await logProviderHttpFailure('nvidia', response)
   const retryAfterMs = retryAfterMilliseconds(response.headers.get('Retry-After'))
   if (response.status === 429 && retryAfterMs !== undefined) await requestGate?.defer?.(retryAfterMs)
   return new ProviderError(`Proveedor respondió ${response.status}`, response.status, response.status === 429 ? 'rate-limit' : response.status >= 500 ? 'server-error' : undefined, retryAfterMs)
@@ -936,6 +938,7 @@ export class CoachGenerationRouter {
       return { ...result, provider, model }
     } catch (cause) {
       const error = signal?.aborted ? new ProviderError('Solicitud cancelada', undefined, 'cancelled') : providerErrorFrom(cause)
+      console.warn('coach-provider-failure', { provider, code: error.code ?? 'provider-error', status: error.status })
       await finishCoachAttempt(this.options.db, reservation.row.id, { status: providerAttemptStatus(error), errorCode: error.code ?? 'provider-error', retryAfterMs: error.retryAfterMs }, this.clock())
       if (error.code !== 'cancelled') await recordProviderFailure(this.options.db, provider, this.clock(), error.retryAfterMs ?? 0, undefined, leaseId)
       throw error

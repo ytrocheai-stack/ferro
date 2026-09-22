@@ -1,6 +1,7 @@
 import { agentWireJsonSchema, agentWireResponseSchema } from '../../../packages/adaptation-core/src/agent'
 import { ProviderError, type GenerationProvider, type GenerationResult } from '../index'
 import { retryAfterMilliseconds, type GeminiQuotaReservation } from './quota'
+import { logProviderHttpFailure } from './diagnostics'
 
 export const GEMINI_MODEL = 'gemini-3.5-flash-lite' as const
 export function geminiGenerateContentUrl(model: string): string {
@@ -214,7 +215,10 @@ export class GeminiGenerationProvider implements GenerationProvider {
           if (cause instanceof ProviderError) throw cause
           throw new ProviderError('Gemini no está disponible temporalmente', undefined, 'server-error')
         }
-        if (!response.ok) throw httpError(response)
+        if (!response.ok) {
+          await logProviderHttpFailure('gemini', response)
+          throw httpError(response)
+        }
         try {
           return await response.json() as GeminiResponse
         } catch {
