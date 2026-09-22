@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { logProviderHttpFailure } from './diagnostics'
 
 describe('diagnóstico privado de proveedores', () => {
+  it('clasifica errores de esquema en texto plano sin copiar el cuerpo', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await logProviderHttpFailure('gemini', new Response('Response schema is too complex private-key', { status: 400 }))
+      expect(warn.mock.calls).toEqual([['provider-http-failure', { provider: 'gemini', status: 400, reason: 'schema-complexity' }]])
+    } finally { warn.mockRestore() }
+  })
   it('distingue una clave rechazada sin exponerla', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
