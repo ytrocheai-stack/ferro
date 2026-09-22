@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { logProviderHttpFailure } from './diagnostics'
 
 describe('diagnóstico privado de proveedores', () => {
+  it('distingue una clave rechazada sin exponerla', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await logProviderHttpFailure('gemini', Response.json({ error: { message: 'API key not valid. Please pass a valid API key. private-key' } }, { status: 400 }))
+      expect(warn.mock.calls).toEqual([['provider-http-failure', { provider: 'gemini', status: 400, reason: 'api-key-invalid' }]])
+    } finally { warn.mockRestore() }
+  })
   it('clasifica el rechazo de esquema sin registrar cuerpo, claves ni prompt', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {

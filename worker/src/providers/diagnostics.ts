@@ -5,7 +5,8 @@ export async function logProviderHttpFailure(provider: 'gemini' | 'nvidia', resp
     const payload: unknown = await response.json()
     const message = (payload as { error?: { message?: unknown } } | null)?.error?.message
     if (typeof message === 'string') {
-      if (/too many states|schema.*(?:too complex|too large|too deep)/i.test(message)) reason = 'schema-complexity'
+      if (/API key.*(?:not valid|invalid|expired)|API_KEY_INVALID/i.test(message)) reason = 'api-key-invalid'
+      else if (/too many states|schema.*(?:too complex|too large|too deep)/i.test(message)) reason = 'schema-complexity'
       else if (/schema/i.test(message)) reason = 'schema-invalid'
       else if (/model.*(?:not found|not supported|does not exist)/i.test(message)) reason = 'model-unavailable'
     }
