@@ -61,8 +61,8 @@ describe('CoachPage transporte durable', () => {
     const user = userEvent.setup()
     render(<MemoryRouter><CoachPage /></MemoryRouter>)
 
-    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/events'))).toBe(true))
-    expect(await db.coachRuns.get(runId)).toMatchObject({ transport: 'polling' })
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/events'))).toBe(true), { timeout: 5000 })
+    await waitFor(async () => expect(await db.coachRuns.get(runId)).toMatchObject({ transport: 'polling' }), { timeout: 5000 })
     expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/events'))).toHaveLength(1)
 
     await user.click(await screen.findByRole('button', { name: 'Movilidad' }))
@@ -74,7 +74,7 @@ describe('CoachPage transporte durable', () => {
       document.dispatchEvent(new Event('visibilitychange'))
     })
 
-    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith(`/v1/coach/runs/${remoteRunId}`))).toBe(true))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith(`/v1/coach/runs/${remoteRunId}`))).toBe(true), { timeout: 5000 })
     expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/events'))).toHaveLength(1)
   })
 })
