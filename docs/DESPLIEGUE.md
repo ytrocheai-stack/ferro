@@ -1,23 +1,20 @@
 # Despliegue de NextRep
 
-> Preparación 2026-09-15: por petición del propietario, Gemini cambia a
-> `gemini-3.5-flash-lite`. AI Studio muestra el proyecto **YT autoclips** en nivel
-> gratuito, con **15 RPM, 250.000 tokens de entrada/minuto y 500 RPD**; los valores
-> están en `wrangler.production.toml`. D1 remoto ya tiene `0014`–`0018`, verificado
-> después de respaldar y aplicar las tres migraciones pendientes. La publicación
-> y los canarios siguen pendientes de guardar `GEMINI_API_KEY` y completar los
-> accesos autenticados. Véase [la bitácora](RELEASE-2026-09-15.md).
+> Estado de la beta privada: AI Studio mostró para **YT autoclips** el nivel gratuito
+> de Gemini 3.5 Flash Lite con **15 RPM, 250.000 tokens de entrada/minuto y 500 RPD**.
+> `GEMINI_API_KEY` ya está guardada en Wrangler y D1 remoto tiene `0014`–`0018`.
+> La [bitácora inicial](RELEASE-2026-09-15.md) conserva el historial de preparación;
+> la validación de GLM y de la segunda cuenta se registra en la bitácora de cierre.
 
 ## Beta privada — Gemini preferido y NVIDIA fallback
 
 La configuración declarativa fija `gemini-3.5-flash-lite` como proveedor preferido y
-`deepseek-ai/deepseek-v4-flash-0731` como fallback NVIDIA. El orden es `gemini,nvidia`,
+`z-ai/glm-5.3-flash` como fallback NVIDIA. El orden es `gemini,nvidia`,
 NVIDIA se coordina a 40 RPM, `ENABLE_COACH_STREAMING=false` y el consentimiento requerido
 es `coach-context-v3-gemini-nvidia`. Desarrollo conserva los proveedores apagados.
 
 No se usa Luna desde la PWA. Esta guía no autoriza despliegues ni llamadas reales por sí sola;
-las claves y cuotas efectivas de Gemini siguen siendo requisitos remotos que deben verificarse
-fuera del repositorio antes de activar el Worker.
+las cuotas y claves efectivas se comprueban en el entorno remoto antes de cada activación.
 
 La ejecución de este paso puede usar Luna como agente dentro de Codex; eso no es
 evidencia de que la PWA tenga acceso a Luna. Las comprobaciones de T0 son locales y

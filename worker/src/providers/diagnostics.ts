@@ -1,11 +1,13 @@
 /** Solo se registran categorías cerradas; nunca texto remoto, prompts ni cabeceras. */
 export async function logProviderHttpFailure(provider: 'gemini' | 'nvidia', response: Response): Promise<void> {
   let reason = 'unclassified'
+  let fields: string[] = []
   try {
     // Algunos gateways devuelven texto o sobres distintos al JSON del proveedor.
     // El contenido solo se compara con patrones fijos y nunca se registra.
     const message = await response.text()
     if (typeof message === 'string') {
+      fields = ['responseJsonSchema', 'response_json_schema', 'maxOutputTokens', 'candidateCount', 'systemInstruction', 'anyOf', 'oneOf', 'additionalProperties', '$ref', 'maxItems', 'minItems', 'minLength', 'thinking', 'generateContent', 'INVALID_ARGUMENT', 'FAILED_PRECONDITION'].filter(field => message.includes(field))
       if (/API key.*(?:not valid|invalid|expired)|API_KEY_INVALID/i.test(message)) reason = 'api-key-invalid'
       else if (/too many states|schema.*(?:too complex|too large|too deep)/i.test(message)) reason = 'schema-complexity'
       else if (/schema/i.test(message)) reason = 'schema-invalid'
@@ -17,5 +19,5 @@ export async function logProviderHttpFailure(provider: 'gemini' | 'nvidia', resp
       else if (/token|payload.*limit|request.*large/i.test(message)) reason = 'request-limit'
     }
   } catch { /* Un cuerpo ilegible no aporta un diagnóstico seguro. */ }
-  console.warn('provider-http-failure', { provider, status: response.status, reason })
+  console.warn('provider-http-failure', { provider, status: response.status, reason, ...(fields.length ? { fields } : {}) })
 }

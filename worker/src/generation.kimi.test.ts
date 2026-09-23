@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { NvidiaGenerationProvider, selectEvidence, VectorizeRetriever, type D1Database, type RequestGate } from './index'
 import { corpusMetadataKey, vectorPhysicalId } from '../../packages/corpus-identity/src/index.mjs'
 import { buildAgentInstructions } from '../../packages/adaptation-core/src/agent'
+import { GLM_FLASH_MODEL } from '../../packages/corpus-pipeline/src/generation'
 
 describe('Kimi generation transport', () => {
   it('sends coach behavior as a system message separate from user data', async () => {
@@ -66,6 +67,15 @@ describe('Kimi generation transport', () => {
     setTimeout(() => controller.abort(), 10)
     await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
     expect(cancelled).toBe(true)
+  })
+  it('envía GLM 5.3 Flash sin streaming y con razonamiento breve', async () => {
+    let body: Record<string, unknown> = {}
+    const provider = new NvidiaGenerationProvider('test', async (_url, init) => {
+      body = JSON.parse(String(init?.body))
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{"ok":true}' } }], usage: { prompt_tokens: 5, completion_tokens: 7 } })
+    })
+    await expect(provider.generate('canario ficticio', GLM_FLASH_MODEL)).resolves.toEqual({ content: '{"ok":true}', usage: { inputTokens: 5, outputTokens: 7 } })
+    expect(body).toMatchObject({ model: GLM_FLASH_MODEL, max_tokens: 4000, temperature: 0.5, reasoning_effort: 'low', chat_template_kwargs: { clear_thinking: true }, stream: false })
   })
 
   it('preserva Retry-After y difiere durablemente un 429 del camino streaming', async () => {

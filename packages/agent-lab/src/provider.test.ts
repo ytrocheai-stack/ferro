@@ -116,19 +116,21 @@ describe('H1/H7: decisión por modelo y límites antes de facturar', () => {
     expect(body).toMatchObject({ model: 'deepseek-ai/deepseek-v4-flash-0731', max_tokens: 123 })
     expect(result.usage).toEqual({ inputTokens: 30, outputTokens: 20 })
   })
-  it('reanuda una respuesta Flash confirmada sin repetir la llamada', async () => {
+  it.each(['deepseek-ai/deepseek-v4-flash-0731', 'z-ai/glm-5.3-flash'] as const)('reanuda una respuesta Flash confirmada sin repetir la llamada: %s', async model => {
     const directory = mkdtempSync(join(tmpdir(), 'nextrep-lab-provider-cache-'))
     const authorization = {
       accessVerified: true as const, budgetVerified: true as const, maxAdditionalCost: 0 as const,
       verifiedAt: new Date().toISOString(), reviewer: 'capacity-reviewer', evidence: 'quota snapshot',
-      model: 'deepseek-ai/deepseek-v4-flash-0731' as const, embeddingModel: 'nvidia/nemotron-3-embed-1b' as const,
+      model, embeddingModel: 'nvidia/nemotron-3-embed-1b' as const,
       maxCalls: 2, maxInputTokens: 10_000, maxOutputTokens: 2_000, timeoutMs: 10_000,
       maxTotalCalls: 2, maxTotalInputTokens: 20_000, maxTotalOutputTokens: 4_000,
     }
     let calls = 0
+    let body: Record<string, unknown> = {}
     const fetcher: typeof fetch = async (_url, init) => {
       calls++
-      expect(JSON.parse(init?.body as string).messages[0].content).toContain('No inventes citas')
+      body = JSON.parse(init?.body as string)
+      expect((body.messages as Array<{ content: string }>)[0].content).toContain('No inventes citas')
       return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(maintain) } }], usage: { prompt_tokens: 30, completion_tokens: 20 } }))
     }
     const first = createResumableFlashProvider({ apiKey: 'fictitious-key', authorization, directory, fetcher })
@@ -138,5 +140,6 @@ describe('H1/H7: decisión por modelo y límites antes de facturar', () => {
     const resumedResult = await second.generate(request)
     expect(resumedResult).toEqual(firstResult)
     expect(calls).toBe(1)
+    if (model === 'z-ai/glm-5.3-flash') expect(body).toMatchObject({ model, temperature: 0.5, reasoning_effort: 'low', chat_template_kwargs: { clear_thinking: true } })
   })
 })

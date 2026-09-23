@@ -1,4 +1,4 @@
-import { COACH_MODELS, DEEPSEEK_FLASH_MODEL, generationCapabilities, generationParameters, KIMI_MODEL } from '../../packages/corpus-pipeline/src/generation'
+import { COACH_MODELS, DEEPSEEK_FLASH_MODEL, GLM_FLASH_MODEL, generationCapabilities, generationParameters, KIMI_MODEL } from '../../packages/corpus-pipeline/src/generation'
 import { deferNvidiaRequest, reconcileGeminiInputTokens, reserveGeminiSerializedRequest, reserveNvidiaRequest, retryAfterMilliseconds, waitForNvidiaRequest, type GeminiQuotaReservation } from './providers/quota'
 import { enrichWithSourceSummaries } from '../../packages/corpus-retrieval/src/summary-context.mjs'
 import { verifyToken } from '@clerk/backend'
@@ -108,7 +108,7 @@ function enabled(value: string | undefined, fallback = false): boolean { return 
 function betaEnabled(env: Env): boolean { return enabled(env.ENABLE_BETA, env.ENVIRONMENT !== 'production') }
 export const COACH_CONSENT_VERSION = 'coach-context-v3-gemini-nvidia'
 const PRIVATE_PROVIDER_ORDER: ProviderName[] = ['gemini', 'nvidia']
-const PRIVATE_NVIDIA_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
+const PRIVATE_NVIDIA_MODEL = GLM_FLASH_MODEL
 const PRIVATE_NVIDIA_RPM = 40
 const PRIVATE_ALLOWLIST = ['user_3ITDXf8hPt81kAjzS3Dw8U77qfE', 'user_3JLkakQ34GXgGQhWGAWSfrLW3TB']
 
@@ -163,8 +163,9 @@ export function coachReadinessConfiguration(env: Env): ReadinessConfiguration {
     providerOrder.join(',') === PRIVATE_PROVIDER_ORDER.join(',') &&
     models.gemini === GEMINI_MODEL &&
     models.nvidia === PRIVATE_NVIDIA_MODEL &&
+    models.flash === PRIVATE_NVIDIA_MODEL &&
     quotas.nvidia.requestsPerMinute === PRIVATE_NVIDIA_RPM &&
-    flags.gemini && flags.nvidia && !flags.coachStreaming &&
+    flags.flash && flags.gemini && flags.nvidia && !flags.coachStreaming &&
     consentVersion === COACH_CONSENT_VERSION &&
     allowlistIds.join(',') === PRIVATE_ALLOWLIST.join(',')
   )
@@ -246,10 +247,10 @@ function productionConfigError(env: Env): string | undefined {
   if (enabled(env.ENABLE_BETA) && !env.COACH_WORKFLOW) return 'Workflow del coach no configurado'
   const configuration = coachReadinessConfiguration(env)
   if (configuration.providerOrder.join(',') !== PRIVATE_PROVIDER_ORDER.join(',')) return 'Orden de proveedores privado incompleto'
-  if (configuration.models.gemini !== GEMINI_MODEL || configuration.models.nvidia !== PRIVATE_NVIDIA_MODEL) return 'Modelos privados incompletos'
+  if (configuration.models.gemini !== GEMINI_MODEL || configuration.models.nvidia !== PRIVATE_NVIDIA_MODEL || configuration.models.flash !== PRIVATE_NVIDIA_MODEL) return 'Modelos privados incompletos'
   if (configuration.quotas.nvidia.requestsPerMinute !== PRIVATE_NVIDIA_RPM) return 'Cuota NVIDIA no configurada a 40 RPM'
   if (configuration.consent.requiredVersion !== COACH_CONSENT_VERSION) return 'Consentimiento privado desactualizado'
-  if (!configuration.flags.gemini || !configuration.flags.nvidia || configuration.flags.coachStreaming) return 'Flags privadas incompletas o streaming activo'
+  if (!configuration.flags.flash || !configuration.flags.gemini || !configuration.flags.nvidia || configuration.flags.coachStreaming) return 'Flags privadas incompletas o streaming activo'
   if (configuration.allowlist.userIds.join(',') !== PRIVATE_ALLOWLIST.join(',')) return 'Allowlist privada incompleta'
   if (!configuration.credentialsConfigured.gemini || !configuration.credentialsConfigured.nvidia) return 'Credenciales de proveedores no configuradas'
   if (configuration.quotas.gemini.requestsPerMinute === null || configuration.quotas.gemini.inputTokensPerMinute === null || configuration.quotas.gemini.requestsPerDay === null) return 'Cuotas efectivas de Gemini no configuradas'
@@ -1113,7 +1114,7 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
     if (!providers.nvidia && env.NVIDIA_API_KEY) providers.nvidia = new NvidiaGenerationProvider(env.NVIDIA_API_KEY, fetch, undefined, providerRequestGate(env), instructions)
     const models: Record<ProviderName, string> = {
       gemini: env.GEMINI_MODEL ?? GEMINI_MODEL,
-      nvidia: env.NVIDIA_MODEL ?? env.FLASH_MODEL ?? DEEPSEEK_FLASH_MODEL,
+      nvidia: env.NVIDIA_MODEL ?? env.FLASH_MODEL ?? PRIVATE_NVIDIA_MODEL,
     }
     const enabledProviders: Record<ProviderName, boolean> = {
       gemini: enabled(env.ENABLE_GEMINI, Boolean(deps.generationProviders?.gemini)),

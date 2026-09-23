@@ -8,6 +8,7 @@ import { fingerprint } from './identity.ts'
 import { INSTRUCTION_VERSION, LAB_VERSION, MODEL_CONFIG_VERSION, TOOL_VERSION } from './types.ts'
 import type { AgentTrace, LabConfig, LabCorpus, LabDecision, LabEvidence, LabInput, LabRun } from './types.ts'
 import { FLASH_MODEL, KIMI_MODEL, generationParameters, ProviderSession } from '../../corpus-pipeline/src/runtime.ts'
+import { GLM_FLASH_MODEL } from '../../corpus-pipeline/src/generation.ts'
 import type { Authorization } from '../../corpus-pipeline/src/runtime.ts'
 
 export interface ModelRequest { prompt: string; maxOutputTokens: number; signal: AbortSignal; attemptKey?: string }
@@ -69,7 +70,7 @@ export function createFlashProvider(apiKey: string, model: string, fetcher: type
  * pending ledger entry remains a hard stop until it is reconciled.
  */
 export function createResumableFlashProvider(options: { apiKey: string; authorization: Authorization; directory: string; fetcher?: typeof fetch }): LabProvider {
-  if (![FLASH_MODEL, KIMI_MODEL].includes(options.authorization.model) || !options.authorization.embeddingModel) throw new Error('La autorización no corresponde a Flash y embeddings')
+  if (![FLASH_MODEL, KIMI_MODEL, GLM_FLASH_MODEL].includes(options.authorization.model) || !options.authorization.embeddingModel) throw new Error('La autorización no corresponde a Flash y embeddings')
   const session = new ProviderSession({ directory: options.directory, authorization: options.authorization, apiKey: options.apiKey, fetcher: options.fetcher })
   return {
     id: options.authorization.model,

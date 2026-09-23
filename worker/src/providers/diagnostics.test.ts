@@ -31,4 +31,12 @@ describe('diagnóstico privado de proveedores', () => {
       expect(warn.mock.calls).toEqual([['provider-http-failure', { provider: 'nvidia', status: 403, reason: 'unclassified' }]])
     } finally { warn.mockRestore() }
   })
+  it('registra solo nombres de campos permitidos al clasificar un rechazo', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await logProviderHttpFailure('gemini', new Response('INVALID_ARGUMENT responseJsonSchema secreto-privado', { status: 400 }))
+      expect(warn.mock.calls).toEqual([['provider-http-failure', { provider: 'gemini', status: 400, reason: 'schema-invalid', fields: ['responseJsonSchema', 'INVALID_ARGUMENT'] }]])
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('secreto-privado')
+    } finally { warn.mockRestore() }
+  })
 })

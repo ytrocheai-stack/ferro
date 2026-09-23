@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { corpusMetadataKey, vectorPhysicalId } from '../../packages/corpus-identity/src/index.mjs'
-import { accountGenerationAttempts, budgetUsageWithinLimit, handleRequest, mergeModelDecisions, normalizeEmbedding, normalizeGenerationUsage, reserveIdempotency, validateModelDecision, validateModelDecisionList, IsolateCircuitBreaker, routeGeneration, ProviderError, shouldStreamGeneration, withDeadline, VectorizeRetriever, type Env } from './index'
+import { accountGenerationAttempts, budgetUsageWithinLimit, coachReadinessConfiguration, handleRequest, mergeModelDecisions, normalizeEmbedding, normalizeGenerationUsage, reserveIdempotency, validateModelDecision, validateModelDecisionList, IsolateCircuitBreaker, routeGeneration, ProviderError, shouldStreamGeneration, withDeadline, VectorizeRetriever, type Env } from './index'
 import { evaluateCitationPrecision, evaluateRecallAt5, passesDimensionGate, SYNTHETIC_FIXTURES } from './evaluation'
 
 const env: Env = { CLERK_JWT_KEY: 'test-key', ALLOWED_CLERK_IDS: 'user_1' }
@@ -8,6 +8,21 @@ const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000
 const headers = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json' }
 
 describe('adaptation worker', () => {
+  it('acepta GLM como respaldo exacto de la configuración privada', () => {
+    const production: Env = {
+      CLERK_JWT_KEY: 'fake-clerk', ENVIRONMENT: 'production', COACH_PROVIDER_ORDER: 'gemini,nvidia',
+      GEMINI_MODEL: 'gemini-3.5-flash-lite', NVIDIA_MODEL: 'z-ai/glm-5.3-flash', FLASH_MODEL: 'z-ai/glm-5.3-flash',
+      NVIDIA_REQUESTS_PER_MINUTE: '40', GEMINI_REQUESTS_PER_MINUTE: '15', GEMINI_INPUT_TOKENS_PER_MINUTE: '250000', GEMINI_REQUESTS_PER_DAY: '500',
+      ENABLE_FLASH: 'true', ENABLE_GEMINI: 'true', ENABLE_NVIDIA: 'true', ENABLE_COACH_STREAMING: 'false',
+      REQUIRED_CONSENT_VERSION: 'coach-context-v3-gemini-nvidia',
+      ALLOWED_CLERK_IDS: 'user_3ITDXf8hPt81kAjzS3Dw8U77qfE,user_3JLkakQ34GXgGQhWGAWSfrLW3TB',
+      GEMINI_API_KEY: 'fake-gemini', NVIDIA_API_KEY: 'fake-nvidia',
+    }
+    expect(coachReadinessConfiguration(production)).toMatchObject({ complete: true, models: { nvidia: 'z-ai/glm-5.3-flash', flash: 'z-ai/glm-5.3-flash' } })
+    expect(coachReadinessConfiguration({ ...production, NVIDIA_MODEL: 'deepseek-ai/deepseek-v4-flash-0731' }).complete).toBe(false)
+    expect(coachReadinessConfiguration({ ...production, FLASH_MODEL: 'deepseek-ai/deepseek-v4-flash-0731' }).complete).toBe(false)
+    expect(coachReadinessConfiguration({ ...production, ENABLE_FLASH: 'false' }).complete).toBe(false)
+  })
   it('mantiene apagado el streaming del coach si la bandera no está explícita', () => {
     const provider = { generateStream: async () => ({ content: '{}' }) }
     expect(shouldStreamGeneration({}, 'moonshotai/kimi-k3', provider)).toBe(false)

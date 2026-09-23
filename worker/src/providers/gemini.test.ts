@@ -59,6 +59,10 @@ describe('Gemini 3.5 Flash Lite generation transport', () => {
     expect(schemaText).not.toContain('minLength')
     expect(schemaText).not.toContain('maxLength')
     expect(schemaText).not.toContain('exclusiveMinimum')
+    expect(schemaText).not.toContain('maxItems')
+    expect(schemaText).not.toContain('minItems')
+    expect(schemaText).not.toContain('"minimum"')
+    expect(schemaText).not.toContain('"maximum"')
     expect(schemaText).not.toContain('"const"')
     expect(schemaText).toContain('"enum":["tool"]')
     expect(schemaText).toContain('"enum":["decision"]')
@@ -118,6 +122,12 @@ describe('Gemini 3.5 Flash Lite generation transport', () => {
       candidates: [{ content: { parts: [{ text: '{"type":"decision","decision":{}}' }] }, finishReason: 'STOP' }],
     }))
 
+    await expect(provider.generate('prompt', GEMINI_MODEL)).rejects.toMatchObject({ code: 'invalid-response' })
+  })
+  it('conserva la validación Zod de límites retirados del esquema enviado', async () => {
+    const provider = new GeminiGenerationProvider(apiKey, async () => Response.json({
+      candidates: [{ content: { parts: [{ text: JSON.stringify({ type: 'decision', decision: { kind: 'maintain', explanation: 'Canario ficticio.', observations: Array.from({ length: 41 }, () => ({ text: 'Dato ficticio.', kind: 'observation', source: 'fixture' })), evidence: [] } }) }] }, finishReason: 'STOP' }],
+    }))
     await expect(provider.generate('prompt', GEMINI_MODEL)).rejects.toMatchObject({ code: 'invalid-response' })
   })
 

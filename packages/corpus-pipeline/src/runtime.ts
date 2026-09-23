@@ -8,7 +8,7 @@ import { deferRemoteRequest, reserveRemoteRequest } from './remote-request-gate.
 
 export const EMBEDDING_MODEL = 'nvidia/nemotron-3-embed-1b'
 export const FLASH_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
-import { KIMI_MODEL, generationParameters } from './generation.ts'
+import { DEEPSEEK_FLASH_MODEL, GLM_FLASH_MODEL, KIMI_MODEL, generationParameters } from './generation.ts'
 export { KIMI_MODEL, DEFAULT_GENERATION_MODEL, generationCapabilities, generationParameters } from './generation.ts'
 export const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export function readJson<T = unknown>(file: string): T { return JSON.parse(readFileSync(file, 'utf8')) as T }
@@ -29,7 +29,7 @@ const allocation = z.object({ calls: positive, inputTokens: positive, outputToke
 const authorizationSchema = z.object({
   accessVerified: z.literal(true), budgetVerified: z.literal(true), maxAdditionalCost: z.literal(0),
   verifiedAt: z.string(), reviewer: z.string().trim().min(1), evidence: z.string().trim().min(1),
-  model: z.enum([FLASH_MODEL, KIMI_MODEL]), embeddingModel: z.literal(EMBEDDING_MODEL),
+  model: z.enum([FLASH_MODEL, KIMI_MODEL, GLM_FLASH_MODEL]), embeddingModel: z.literal(EMBEDDING_MODEL),
   accountingMode: z.enum(['tokens', 'requests']).optional(), requestsPerMinute: positive.max(1000).optional(),
   maxCalls: positive, maxInputTokens: positive, maxOutputTokens: positive, timeoutMs: positive.max(300000),
   maxTotalCalls: positive, maxTotalInputTokens: positive, maxTotalOutputTokens: positive,
@@ -167,7 +167,7 @@ export class ProviderSession {
     const model = this.authorization.model
     const parameters = generationParameters(model, generationOptions)
     // Preserve legacy cache identities while binding Kimi's actual wire parameters.
-    const templateOptions = model === FLASH_MODEL ? (generationOptions ? { chat_template_kwargs: generationOptions } : {}) : parameters
+    const templateOptions = model === DEEPSEEK_FLASH_MODEL ? (generationOptions ? { chat_template_kwargs: generationOptions } : {}) : parameters
     let id = hash({ model, prompt, maxOutputTokens, attemptKey: attemptKey ?? crypto.randomUUID(), systemPrompt, ...templateOptions })
     let responsePath = path.join(this.directory, 'responses', `${id}.json`)
     let payload: { choices?: { finish_reason?: string; message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } }
