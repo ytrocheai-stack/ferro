@@ -7,6 +7,7 @@ import { useSettings } from '../stores/settings'
 import { exportBackup, importBackup, validateBackup } from './backup'
 import { setCoachAccountId } from './coachAccount'
 import { syncPendingCoachRuns } from './coachClient'
+import { COACH_CONSENT_VERSION } from './coachConsent'
 import { normalizeBackup, type ValidBackup } from './validation'
 
 const base = {
@@ -381,15 +382,15 @@ describe('validación de respaldos', () => {
 
   it('hace prevalecer el consentimiento vigente de localStorage sobre una fila disabled importada', async () => {
     setCoachAccountId('owner-a')
-    const current = { ...coachRecords.coachConsents[0], enabled: false, revision: 9, updatedAt: 9 }
+    const current = { ...coachRecords.coachConsents[0], version: COACH_CONSENT_VERSION, enabled: false, revision: 9, updatedAt: 9 }
     await db.coachConsents.put(current)
-    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v3-gemini-nvidia', acceptedAt: 9, enabled: true }]))
+    localStorage.setItem('ferro-coach-consent', JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: COACH_CONSENT_VERSION, acceptedAt: 9, enabled: true }]))
     const imported = { ...coachRecords.coachConsents[0], enabled: true, revision: 999, updatedAt: 999 }
 
     await importBackup(new File([JSON.stringify({ ...base, version: 11, ...coachRecords, coachConsents: [imported] })], 'consent-authority.json'))
 
     expect(await db.coachConsents.get(current.id)).toEqual({ ...current, enabled: true })
-    expect(localStorage.getItem('ferro-coach-consent')).toBe(JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: 'coach-context-v3-gemini-nvidia', acceptedAt: 9, enabled: true }]))
+    expect(localStorage.getItem('ferro-coach-consent')).toBe(JSON.stringify([{ userId: 'owner-a', deviceId: 'device-a', version: COACH_CONSENT_VERSION, acceptedAt: 9, enabled: true }]))
   })
 
   it.each([9, 10] as const)('reimporta el contenido de una base v%s migrada, incluidos los IDs de mensajes históricos', async (version) => {

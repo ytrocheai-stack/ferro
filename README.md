@@ -30,10 +30,11 @@ Consulta el [estado y criterios de apertura](docs/ADAPTACION-ENTRENAMIENTO.md) y
 Worker se verifican localmente; aún no cubren el recorrido remoto completo ni aprueban la apertura.
 El canario `.cache` es solo una referencia local fuera de Git.
 
-La configuración declarativa de la beta privada fija `gemini-3.5-flash-lite` como preferido y
-`deepseek-ai/deepseek-v4-flash-0731` como fallback NVIDIA, con streaming apagado y consentimiento
-`coach-context-v3-gemini-nvidia`. La PWA explica que el contexto puede llegar a Google Gemini o NVIDIA
-y que Google puede usar datos del nivel gratuito para mejorar sus productos. Las claves y las cuotas
+La configuración declarativa de la beta privada fija `gemini-3.5-flash-lite` como único modelo de
+generación; NVIDIA crea embeddings de consultas para la búsqueda RAG, pero no genera respuestas. El
+consentimiento vigente es `coach-context-v4-gemini-nvidia-embeddings`. La PWA explica que Google puede
+usar contenido enviado mediante el nivel gratuito para mejorar sus productos y que Cloudflare conserva
+temporalmente solicitudes validadas para procesar y consultar ejecuciones. Las claves y las cuotas
 efectivas de Gemini son requisitos remotos pendientes; no se guardan en el repositorio ni en el bundle.
 
 ### Laboratorio reproducible del agente

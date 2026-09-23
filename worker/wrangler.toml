@@ -30,7 +30,7 @@ ENABLE_PRO = "false"
 ENABLE_RERANKING = "false"
 ENABLE_PROVIDER_PROBE = "false"
 ENABLE_BETA = "false"
-REQUIRED_CONSENT_VERSION = "coach-context-v3-gemini-nvidia"
+REQUIRED_CONSENT_VERSION = "coach-context-v4-gemini-nvidia-embeddings"
 
 [[d1_databases]]
 binding = "DB"

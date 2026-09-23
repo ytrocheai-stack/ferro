@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { corpusMetadataKey, vectorPhysicalId } from '../../packages/corpus-identity/src/index.mjs'
-import { accountGenerationAttempts, budgetUsageWithinLimit, coachReadinessConfiguration, handleRequest, mergeModelDecisions, normalizeEmbedding, normalizeGenerationUsage, reserveIdempotency, validateModelDecision, validateModelDecisionList, IsolateCircuitBreaker, routeGeneration, ProviderError, shouldStreamGeneration, withDeadline, VectorizeRetriever, type Env } from './index'
+import { accountGenerationAttempts, budgetUsageWithinLimit, coachReadinessConfiguration, COACH_CONSENT_VERSION, handleRequest, mergeModelDecisions, normalizeEmbedding, normalizeGenerationUsage, reserveIdempotency, validateModelDecision, validateModelDecisionList, IsolateCircuitBreaker, routeGeneration, ProviderError, shouldStreamGeneration, withDeadline, VectorizeRetriever, type Env } from './index'
 import { evaluateCitationPrecision, evaluateRecallAt5, passesDimensionGate, SYNTHETIC_FIXTURES } from './evaluation'
 
 const env: Env = { CLERK_JWT_KEY: 'test-key', ALLOWED_CLERK_IDS: 'user_1' }
@@ -8,21 +8,74 @@ const deps = { verify: async () => ({ sub: 'user_1' }), now: () => 1_700_000_000
 const headers = { Origin: 'https://ytrocheai-stack.github.io', Authorization: 'Bearer token', 'Content-Type': 'application/json' }
 
 describe('adaptation worker', () => {
-  it('acepta GLM como respaldo exacto de la configuración privada', () => {
+  it('valida Gemini como único generador y NVIDIA solo para embeddings RAG', () => {
     const production: Env = {
-      CLERK_JWT_KEY: 'fake-clerk', ENVIRONMENT: 'production', COACH_PROVIDER_ORDER: 'gemini,nvidia',
+      CLERK_JWT_KEY: 'fake-clerk', ENVIRONMENT: 'production', COACH_PROVIDER_ORDER: 'gemini',
       GEMINI_MODEL: 'gemini-3.5-flash-lite', NVIDIA_MODEL: 'z-ai/glm-5.3-flash', FLASH_MODEL: 'z-ai/glm-5.3-flash',
       NVIDIA_REQUESTS_PER_MINUTE: '40', GEMINI_REQUESTS_PER_MINUTE: '15', GEMINI_INPUT_TOKENS_PER_MINUTE: '250000', GEMINI_REQUESTS_PER_DAY: '500',
-      ENABLE_FLASH: 'true', ENABLE_GEMINI: 'true', ENABLE_NVIDIA: 'true', ENABLE_COACH_STREAMING: 'false',
-      REQUIRED_CONSENT_VERSION: 'coach-context-v3-gemini-nvidia',
-      ALLOWED_CLERK_IDS: 'user_3ITDXf8hPt81kAjzS3Dw8U77qfE,user_3JLkakQ34GXgGQhWGAWSfrLW3TB',
+      EMBEDDING_MODEL: 'nvidia/nemotron-3-embed-1b',
+      ENABLE_BETA: 'false', ENABLE_EMBEDDINGS: 'true', ENABLE_FLASH: 'false', ENABLE_GEMINI: 'true', ENABLE_NVIDIA: 'false',
+      ENABLE_COACH_STREAMING: 'false', ENABLE_PRO: 'false', ENABLE_RERANKING: 'false', ENABLE_PROVIDER_PROBE: 'false',
+      REQUIRED_CONSENT_VERSION: COACH_CONSENT_VERSION,
+      ALLOWED_CLERK_IDS: 'user_only',
       GEMINI_API_KEY: 'fake-gemini', NVIDIA_API_KEY: 'fake-nvidia',
     }
-    expect(coachReadinessConfiguration(production)).toMatchObject({ complete: true, models: { nvidia: 'z-ai/glm-5.3-flash', flash: 'z-ai/glm-5.3-flash' } })
-    expect(coachReadinessConfiguration({ ...production, NVIDIA_MODEL: 'deepseek-ai/deepseek-v4-flash-0731' }).complete).toBe(false)
-    expect(coachReadinessConfiguration({ ...production, FLASH_MODEL: 'deepseek-ai/deepseek-v4-flash-0731' }).complete).toBe(false)
-    expect(coachReadinessConfiguration({ ...production, ENABLE_FLASH: 'false' }).complete).toBe(false)
+    expect(coachReadinessConfiguration(production)).toMatchObject({ complete: true, providerOrder: ['gemini'], flags: { beta: false, embeddings: true, flash: false, gemini: true, nvidia: false, coachStreaming: false, pro: false, reranking: false, providerProbe: false }, allowlist: { count: 1, userIds: ['user_only'] }, credentialsConfigured: { gemini: true, nvidia: true } })
+    expect(coachReadinessConfiguration({ ...production, ALLOWED_CLERK_IDS: 'user_one,user_two' }).complete).toBe(false)
+    for (const invalid of [
+      { COACH_PROVIDER_ORDER: 'gemini,nvidia' },
+      { ENABLE_NVIDIA: 'true' },
+      { ENABLE_FLASH: 'true' },
+      { ENABLE_BETA: 'true' },
+      { ENABLE_COACH_STREAMING: 'true' },
+      { ENABLE_PRO: 'true' },
+      { ENABLE_RERANKING: 'true' },
+      { ENABLE_PROVIDER_PROBE: 'true' },
+      { EMBEDDING_MODEL: 'other/embed-model' },
+    ]) expect(coachReadinessConfiguration({ ...production, ...invalid }).complete).toBe(false)
+    expect(coachReadinessConfiguration({ ...production, NVIDIA_API_KEY: undefined }).complete).toBe(false)
   })
+
+  it('autoriza una sola cuenta en la allowlist privada', async () => {
+    const allowedId = 'user_only'
+    const production: Env = {
+      CLERK_JWT_KEY: 'fake-clerk', ENVIRONMENT: 'production', COACH_PROVIDER_ORDER: 'gemini', ALLOWED_CLERK_IDS: allowedId,
+      GEMINI_MODEL: 'gemini-3.5-flash-lite', NVIDIA_REQUESTS_PER_MINUTE: '40', GEMINI_REQUESTS_PER_MINUTE: '15',
+      GEMINI_INPUT_TOKENS_PER_MINUTE: '250000', GEMINI_REQUESTS_PER_DAY: '500', REQUIRED_CONSENT_VERSION: COACH_CONSENT_VERSION,
+      ENABLE_BETA: 'false', ENABLE_EMBEDDINGS: 'true', ENABLE_FLASH: 'false', ENABLE_GEMINI: 'true', ENABLE_NVIDIA: 'false',
+      ENABLE_COACH_STREAMING: 'false', ENABLE_PRO: 'false', ENABLE_RERANKING: 'false', ENABLE_PROVIDER_PROBE: 'false',
+      GEMINI_API_KEY: 'fake-gemini', NVIDIA_API_KEY: 'fake-nvidia',
+    }
+    const allowed = await handleRequest(new Request('https://worker.test/readiness', { headers }), production, { ...deps, verify: async () => ({ sub: allowedId }) })
+    expect(allowed.status).toBe(503) // autenticado; las dependencias reales de readiness faltan en este fixture.
+    expect(await allowed.json()).toMatchObject({ configuration: { complete: true, allowlist: { count: 1, userIds: [allowedId] } } })
+    const denied = await handleRequest(new Request('https://worker.test/readiness', { headers }), production, { ...deps, verify: async () => ({ sub: 'user_second' }) })
+    expect(denied.status).toBe(403)
+  })
+
+  it('acepta beta privada en readiness y productionConfigError cuando ya existe Workflow', async () => {
+    const workflow = { create: async () => ({ id: 'run' }), get: () => ({ terminate: async () => undefined }) }
+    const production: Env = {
+      CLERK_JWT_KEY: 'fake-clerk', PSEUDONYMIZATION_KEY: 'fake-pseudonym', CLERK_AUTHORIZED_PARTIES: 'https://ytrocheai-stack.github.io',
+      ENVIRONMENT: 'production', DB: {} as never, COACH_WORKFLOW: workflow,
+      COACH_PROVIDER_ORDER: 'gemini', ALLOWED_CLERK_IDS: 'user_only',
+      RAG_EXPECTED_SOURCE_COUNT: '88', RAG_EXPECTED_CHUNK_COUNT: '2708',
+      GEMINI_MODEL: 'gemini-3.5-flash-lite', NVIDIA_REQUESTS_PER_MINUTE: '40', GEMINI_REQUESTS_PER_MINUTE: '15',
+      GEMINI_INPUT_TOKENS_PER_MINUTE: '250000', GEMINI_REQUESTS_PER_DAY: '500', REQUIRED_CONSENT_VERSION: COACH_CONSENT_VERSION,
+      ENABLE_BETA: 'true', ENABLE_EMBEDDINGS: 'true', ENABLE_FLASH: 'false', ENABLE_GEMINI: 'true', ENABLE_NVIDIA: 'false',
+      ENABLE_COACH_STREAMING: 'false', ENABLE_PRO: 'false', ENABLE_RERANKING: 'false', ENABLE_PROVIDER_PROBE: 'false',
+      GEMINI_API_KEY: 'fake-gemini', NVIDIA_API_KEY: 'fake-nvidia',
+    }
+    expect(coachReadinessConfiguration(production)).toMatchObject({ complete: true, flags: { beta: true } })
+    expect(coachReadinessConfiguration({ ...production, COACH_WORKFLOW: undefined }).complete).toBe(false)
+    const response = await handleRequest(new Request('https://worker.test/v1/providers/probe', {
+      method: 'POST',
+      headers: { ...headers, 'X-NextRep-Consent-Version': COACH_CONSENT_VERSION, 'X-NextRep-Device-Id': 'device-1' },
+    }), production, { ...deps, verify: async () => ({ sub: 'user_only' }) })
+    // 404 es la respuesta del probe apagado; 503 indicaría que productionConfigError rechazó beta=true.
+    expect(response.status).toBe(404)
+  })
+
   it('mantiene apagado el streaming del coach si la bandera no está explícita', () => {
     const provider = { generateStream: async () => ({ content: '{}' }) }
     expect(shouldStreamGeneration({}, 'moonshotai/kimi-k3', provider)).toBe(false)
@@ -186,6 +239,39 @@ describe('adaptation worker', () => {
     const response = await handleRequest(new Request('https://worker.test/readiness', { headers }), { ...env, DB: readyDb as never, VECTORIZE: { query: async () => ({ matches: [{ id: 'candidate' }] }) }, RAG_INDEX_VERSION: 'v1', RAG_EXPECTED_SOURCE_COUNT: '88', RAG_EXPECTED_CHUNK_COUNT: '2708' }, deps)
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ ok: true, checks: { d1: true, index: true, corpus: true } })
+  })
+
+  it('readiness expone y falla el error de configuración de producción aunque D1, corpus e índice respondan', async () => {
+    const readyDb = {
+      prepare(sql: string) {
+        return {
+          bind() { return this },
+          async first() { return sql.includes('SELECT 1') ? { ok: 1 } : { count: 2708, source_count: 88, unapproved: 0 } },
+        }
+      },
+      async batch() { return [] },
+    }
+    const production: Env = {
+      CLERK_JWT_KEY: 'fake-clerk', CLERK_AUTHORIZED_PARTIES: 'https://ytrocheai-stack.github.io',
+      ENVIRONMENT: 'production', DB: readyDb as never,
+      COACH_PROVIDER_ORDER: 'gemini', ALLOWED_CLERK_IDS: 'user_1', RAG_INDEX_VERSION: 'v1',
+      RAG_EXPECTED_SOURCE_COUNT: '88', RAG_EXPECTED_CHUNK_COUNT: '2708',
+      NVIDIA_REQUESTS_PER_MINUTE: '40', GEMINI_REQUESTS_PER_MINUTE: '15', GEMINI_INPUT_TOKENS_PER_MINUTE: '250000', GEMINI_REQUESTS_PER_DAY: '500',
+      ENABLE_BETA: 'false', ENABLE_EMBEDDINGS: 'true', ENABLE_FLASH: 'false', ENABLE_GEMINI: 'true', ENABLE_NVIDIA: 'false',
+      ENABLE_COACH_STREAMING: 'false', ENABLE_PRO: 'false', ENABLE_RERANKING: 'false', ENABLE_PROVIDER_PROBE: 'false',
+      REQUIRED_CONSENT_VERSION: COACH_CONSENT_VERSION, GEMINI_API_KEY: 'fake-gemini', NVIDIA_API_KEY: 'fake-nvidia',
+    }
+    const withIndex = { ...production, VECTORIZE: { query: async () => ({ matches: [{ id: 'candidate' }] }) } }
+    const readyResponse = await handleRequest(new Request('https://worker.test/readiness', { headers }), withIndex, deps)
+    expect(readyResponse.status).toBe(503)
+    expect(await readyResponse.json()).toMatchObject({
+      ok: false,
+      checks: { config: true, d1: true, index: true, corpus: true, productionConfig: false },
+      configurationError: 'PSEUDONYMIZATION_KEY no configurada',
+    })
+    const regularRequest = await handleRequest(new Request('https://worker.test/v1/providers/probe', { method: 'POST', headers }), withIndex, deps)
+    expect(regularRequest.status).toBe(503)
+    expect(await regularRequest.json()).toMatchObject({ error: 'PSEUDONYMIZATION_KEY no configurada' })
   })
 
   it('escalates a validated invalid Flash response only to Pro', async () => {

@@ -4,9 +4,12 @@
 
 La configuración por entorno es explícita: `worker/wrangler.toml` declara Gemini/NVIDIA
 con las flags apagadas para desarrollo, mientras `worker/wrangler.production.toml` fija
-`gemini-3.5-flash-lite` como preferido y `z-ai/glm-5.3-flash` como fallback,
-con 40 RPM NVIDIA, `coach-context-v3-gemini-nvidia` y streaming apagado. Pro,
-reranking y provider probe permanecen apagados. `gpt-5.6-luna` está documentado
+`gemini-3.5-flash-lite` como único proveedor de generación. NVIDIA queda para embeddings
+de consultas RAG con 40 RPM; requiere `NVIDIA_API_KEY` aunque su generación esté apagada.
+La configuración usa `coach-context-v4-gemini-nvidia-embeddings`, con beta y streaming
+apagados. El allowlist del TOML conserva dos IDs hasta confirmar cuál corresponde a Yehoshua;
+la validación exige exactamente una cuenta, por lo que producción seguirá sin readiness completa
+hasta resolverlo. Pro, reranking y provider probe permanecen apagados. `gpt-5.6-luna` está documentado
 para la API de Codex, pero no está verificado que esta PWA pueda acceder a él con la
 suscripción del usuario sin nuevas credenciales ni facturación de API. No se debe
 interpretar el uso de Luna como agente dentro de Codex como modelo del Worker.
@@ -38,7 +41,7 @@ incluyen consentimiento versionado y dispositivo.
 | `GET /readiness`, `GET /v1/readiness` | Autenticadas; prueban consultas D1, disponibilidad de Vectorize y corpus activo, y muestran configuración de proveedores sin claves |
 | `POST /v1/adaptations/analyze` | Auth, beta, consentimiento, presupuesto/reserva, candidatos y explicación opcional |
 | `POST /v1/adaptations/events` | Auth/beta y eventos operativos de aceptación; no persiste el payload del entrenamiento |
-| `POST /v1/coach/runs` | Auth, beta, consentimiento e idempotencia; crea una ejecución durable de DeepSeek Flash mediante Workflow |
+| `POST /v1/coach/runs` | Auth, beta, consentimiento e idempotencia; crea una ejecución durable del Coach mediante Gemini y Workflow |
 | `GET /v1/coach/runs/:id` | Consulta autenticada de una ejecución propia |
 | `POST /v1/coach/runs/:id/cancel` | Cancela una ejecución propia y termina su Workflow |
 | `POST /v1/coach/runs/:id` | Alias legado de cancelación; los clientes nuevos usan `/cancel` |

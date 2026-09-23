@@ -1,4 +1,4 @@
-export const COACH_CONSENT_VERSION = 'coach-context-v3-gemini-nvidia'
+export const COACH_CONSENT_VERSION = 'coach-context-v4-gemini-nvidia-embeddings'
 const CONSENT_KEY = 'ferro-coach-consent'
 const DEVICE_KEY = 'ferro-coach-device-id'
 const CONVERSATION_PREFIX = 'ferro-coach-conversation:'
