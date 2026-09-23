@@ -9,19 +9,22 @@ describe('carga local de credenciales', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'provider-env-'))
     const file = path.join(directory, '.env.providers.local')
     const previous = process.env.NVIDIA_API_KEY
+    const previousGemini = process.env.GEMINI_API_KEY
     const previousCloudflare = process.env.CLOUDFLARE_API_TOKEN
     const previousPublic = process.env.VITE_PROVIDER_TEST
     try {
       process.env.NVIDIA_API_KEY = '   '
+      process.env.GEMINI_API_KEY = '   '
       process.env.CLOUDFLARE_API_TOKEN = 'explicit-test-value'
       delete process.env.VITE_PROVIDER_TEST
-      writeFileSync(file, 'NVIDIA_API_KEY=local-test-value\nCLOUDFLARE_API_TOKEN=file-test-value\nVITE_PROVIDER_TEST=must-not-load\n')
+      writeFileSync(file, 'NVIDIA_API_KEY=local-test-value\nGEMINI_API_KEY=local-gemini-test-value\nCLOUDFLARE_API_TOKEN=file-test-value\nVITE_PROVIDER_TEST=must-not-load\n')
       loadLocalEnv(file)
       expect(process.env.NVIDIA_API_KEY).toBe('local-test-value')
+      expect(process.env.GEMINI_API_KEY).toBe('local-gemini-test-value')
       expect(process.env.CLOUDFLARE_API_TOKEN).toBe('explicit-test-value')
       expect(process.env.VITE_PROVIDER_TEST).toBeUndefined()
     } finally {
-      for (const [key, value] of Object.entries({ NVIDIA_API_KEY: previous, CLOUDFLARE_API_TOKEN: previousCloudflare, VITE_PROVIDER_TEST: previousPublic })) {
+      for (const [key, value] of Object.entries({ NVIDIA_API_KEY: previous, GEMINI_API_KEY: previousGemini, CLOUDFLARE_API_TOKEN: previousCloudflare, VITE_PROVIDER_TEST: previousPublic })) {
         if (value === undefined) delete process.env[key]
         else process.env[key] = value
       }

@@ -123,7 +123,7 @@ export interface ReadinessConfiguration {
   models: { gemini: string; nvidia: string; embedding: string; flash: string; pro: string }
   flags: { beta: boolean; embeddings: boolean; flash: boolean; gemini: boolean; nvidia: boolean; coachStreaming: boolean; pro: boolean; reranking: boolean; providerProbe: boolean }
   consent: { requiredVersion: string }
-  allowlist: { count: number; userIds: string[] }
+  allowlist: { count: number }
   credentialsConfigured: { gemini: boolean; nvidia: boolean }
   quotas: { gemini: { requestsPerMinute: number | null; inputTokensPerMinute: number | null; requestsPerDay: number | null }; nvidia: { requestsPerMinute: number } }
   complete: boolean
@@ -178,7 +178,7 @@ export function coachReadinessConfiguration(env: Env): ReadinessConfiguration {
     models,
     flags,
     consent: { requiredVersion: consentVersion },
-    allowlist: { count: allowlistIds.length, userIds: allowlistIds },
+    allowlist: { count: allowlistIds.length },
     credentialsConfigured: { gemini: Boolean(env.GEMINI_API_KEY), nvidia: Boolean(env.NVIDIA_API_KEY) },
     quotas,
     complete: productionShape && geminiComplete && nvidiaComplete,

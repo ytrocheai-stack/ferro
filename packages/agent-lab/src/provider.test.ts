@@ -2,20 +2,36 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { runProviderLab, createFlashProvider, createResumableFlashProvider } from './provider'
+import { runProviderLab, createGeminiLabProvider } from './provider'
 import { developmentScenarios } from './scenarios'
 import type { LabCorpus } from './types'
 import { runLab } from './orchestrator'
+import { GEMINI_GENERATION_MODEL, GEMINI_PROJECT_NAME, GEMINI_PROJECT_NUMBER, GEMINI_PROJECT_QUOTA } from '../../corpus-pipeline/src/gemini-session'
+import type { GeminiAuthorization } from '../../corpus-pipeline/src/gemini-session'
 
 const corpus: LabCorpus = { version: 'synthetic-v1', status: 'approved', sources: [{ id: 'source', title: 'Fixture', author: 'Fixture', url: 'https://example.com', license: 'fixture', approved: true }], chunks: [{ id: 'chunk', sourceId: 'source', text: 'carga entrenamiento progresión', location: 'fixture:1' }] }
 const input = () => structuredClone(developmentScenarios[0].input)
 const config = { providerAvailable: true, budgetVerified: true }
 const maintain = { type: 'decision', decision: { kind: 'maintain', explanation: 'La evidencia no justifica cambiar el plan.', observations: [], evidence: [] } }
+const geminiAuthorization = (): GeminiAuthorization => ({
+  provider: 'google-ai-studio', projectName: GEMINI_PROJECT_NAME, projectNumber: GEMINI_PROJECT_NUMBER,
+  accessVerified: true, budgetVerified: true, maxAdditionalCost: 0, verifiedAt: new Date().toISOString(),
+  reviewer: 'fixture-reviewer', evidence: 'fixture free-tier quota review', projectQuota: GEMINI_PROJECT_QUOTA,
+  model: GEMINI_GENERATION_MODEL, embeddingModel: 'nvidia/nemotron-3-embed-1b',
+  requestsPerMinute: 10, tokensPerMinute: 250_000, requestsPerDay: 100,
+  maxInputTokens: 50_000, maxOutputTokens: 2_000, timeoutMs: 10_000,
+  maxTotalCalls: 10, maxTotalInputTokens: 100_000, maxTotalOutputTokens: 10_000,
+  allocations: {
+    benchmark: { calls: 2, inputTokens: 1_000, outputTokens: 1_000 },
+    lab: { calls: 4, inputTokens: 50_000, outputTokens: 4_000 },
+    smoke: { calls: 2, inputTokens: 1_000, outputTokens: 1_000 },
+  },
+})
 
 describe('H1/H7: decisión por modelo y límites antes de facturar', () => {
   it('en modo solicitudes limita cada salida y los turnos sin agotar un saldo acumulado de tokens', async () => {
     let calls = 0
-    const provider = { id: 'fixture-kimi', kind: 'stub' as const, generate: async (request: { maxOutputTokens: number }) => {
+    const provider = { id: 'fixture-model', kind: 'stub' as const, generate: async (request: { maxOutputTokens: number }) => {
       expect(request.maxOutputTokens).toBe(1000)
       calls++
       return { content: JSON.stringify(calls === 1 ? { type: 'tool', name: 'metrics', arguments: {} } : maintain), usage: { inputTokens: 1000, outputTokens: 900 } }
@@ -24,14 +40,18 @@ describe('H1/H7: decisión por modelo y límites antes de facturar', () => {
     expect(result.decision.kind).toBe('maintain')
     expect(result.usage?.outputTokens).toBe(1800)
   })
-  it('permite Kimi explícito con parámetros compatibles en el adaptador del laboratorio', async () => {
-    let body: Record<string, unknown> = {}
-    const provider = createFlashProvider('test', 'moonshotai/kimi-k3', async (_url, init) => {
-      body = JSON.parse(String(init?.body))
-      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(maintain) } }] })
-    })
-    await provider.generate({ prompt: 'consulta', maxOutputTokens: 4000, signal: new AbortController().signal })
-    expect(body).toMatchObject({ model: 'moonshotai/kimi-k3', reasoning_effort: 'low', temperature: 1 })
+  it('aplica el tope de salida por turno mientras conserva un presupuesto acumulado del run', async () => {
+    const limits: number[] = []
+    let calls = 0
+    const provider = { id: 'fixture-gemini', kind: 'stub' as const, generate: async (request: { maxOutputTokens: number }) => {
+      limits.push(request.maxOutputTokens)
+      calls++
+      return { content: JSON.stringify(calls === 1 ? { type: 'tool', name: 'metrics', arguments: {} } : maintain), usage: { inputTokens: 100, outputTokens: 75 } }
+    } }
+    const result = await runProviderLab(input(), corpus, provider, { ...config, maxOutputTokensPerCall: 300, budget: { maxCalls: 2, maxOutputTokens: 1_500 } })
+    expect(result.decision.kind).toBe('maintain')
+    expect(limits).toEqual([300, 300])
+    expect(result.usage?.outputTokens).toBe(150)
   })
   it('usa decisión libre del proveedor con evidencia previa y herramientas', async () => {
     let calls = 0
@@ -106,40 +126,53 @@ describe('H1/H7: decisión por modelo y límites antes de facturar', () => {
       expect(result.decision.kind).toBe('unavailable')
     }
   })
-  it('el adaptador transmite el límite de salida y el modelo Flash fijado', async () => {
-    let body: Record<string, unknown> = {}
-    const provider = createFlashProvider('fictitious-key', 'deepseek-ai/deepseek-v4-flash-0731', async (_url, init) => {
-      body = JSON.parse(init!.body as string)
-      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(maintain) } }], usage: { prompt_tokens: 30, completion_tokens: 20 } }))
-    })
-    const result = await provider.generate({ prompt: '{}', maxOutputTokens: 123, signal: new AbortController().signal })
-    expect(body).toMatchObject({ model: 'deepseek-ai/deepseek-v4-flash-0731', max_tokens: 123 })
-    expect(result.usage).toEqual({ inputTokens: 30, outputTokens: 20 })
-  })
-  it.each(['deepseek-ai/deepseek-v4-flash-0731', 'z-ai/glm-5.3-flash'] as const)('reanuda una respuesta Flash confirmada sin repetir la llamada: %s', async model => {
+  it('fija Gemini generación, pasa las instrucciones y reanuda solo el resultado medido del ledger', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'nextrep-lab-provider-cache-'))
-    const authorization = {
-      accessVerified: true as const, budgetVerified: true as const, maxAdditionalCost: 0 as const,
-      verifiedAt: new Date().toISOString(), reviewer: 'capacity-reviewer', evidence: 'quota snapshot',
-      model, embeddingModel: 'nvidia/nemotron-3-embed-1b' as const,
-      maxCalls: 2, maxInputTokens: 10_000, maxOutputTokens: 2_000, timeoutMs: 10_000,
-      maxTotalCalls: 2, maxTotalInputTokens: 20_000, maxTotalOutputTokens: 4_000,
-    }
     let calls = 0
     let body: Record<string, unknown> = {}
-    const fetcher: typeof fetch = async (_url, init) => {
+    let requestedUrl = ''
+    const fetcher: typeof fetch = async (url, init) => {
       calls++
-      body = JSON.parse(init?.body as string)
-      expect((body.messages as Array<{ content: string }>)[0].content).toContain('No inventes citas')
-      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(maintain) } }], usage: { prompt_tokens: 30, completion_tokens: 20 } }))
+      requestedUrl = String(url)
+      body = JSON.parse(String(init?.body))
+      return Response.json({
+        candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(maintain) }] } }],
+        usageMetadata: { promptTokenCount: 30, candidatesTokenCount: 20, thoughtsTokenCount: 3, totalTokenCount: 53 },
+      })
     }
-    const first = createResumableFlashProvider({ apiKey: 'fictitious-key', authorization, directory, fetcher })
-    const second = createResumableFlashProvider({ apiKey: 'fictitious-key', authorization, directory, fetcher })
+    const first = createGeminiLabProvider({ apiKey: 'fictitious-key', authorization: geminiAuthorization(), directory, fetcher })
+    const second = createGeminiLabProvider({ apiKey: 'fictitious-key', authorization: geminiAuthorization(), directory, fetcher })
     const request = { prompt: '{"case":"same"}', maxOutputTokens: 123, signal: new AbortController().signal, attemptKey: 'stable-attempt' }
     const firstResult = await first.generate(request)
     const resumedResult = await second.generate(request)
     expect(resumedResult).toEqual(firstResult)
     expect(calls).toBe(1)
-    if (model === 'z-ai/glm-5.3-flash') expect(body).toMatchObject({ model, temperature: 0.5, reasoning_effort: 'low', chat_template_kwargs: { clear_thinking: true } })
+    expect(first.id).toBe(GEMINI_GENERATION_MODEL)
+    expect(requestedUrl).toContain(`/models/${GEMINI_GENERATION_MODEL}:generateContent`)
+    expect(body).toMatchObject({
+      systemInstruction: { parts: [{ text: expect.stringContaining('No inventes citas') }] },
+      generationConfig: { maxOutputTokens: 123, responseMimeType: 'application/json' },
+    })
+    expect(body.generationConfig).not.toHaveProperty('candidateCount')
+    expect(firstResult.usage).toEqual({ inputTokens: 30, outputTokens: 23 })
+  })
+  it('rechaza otra generación sin invocar un proveedor de respaldo', () => {
+    let calls = 0
+    const fetcher: typeof fetch = async () => { calls++; throw new Error('unexpected provider call') }
+    const wrongAuthorization = { ...geminiAuthorization(), model: 'moonshotai/kimi-k3' } as unknown as GeminiAuthorization
+    expect(() => createGeminiLabProvider({ authorization: wrongAuthorization, directory: mkdtempSync(join(tmpdir(), 'nextrep-lab-wrong-model-')), apiKey: 'fixture', fetcher })).toThrow(/gemini-3\.5-flash-lite/)
+    expect(calls).toBe(0)
+  })
+  it('requireCached detiene el laboratorio antes de cualquier llamada sin respuesta confirmada', async () => {
+    let calls = 0
+    const provider = createGeminiLabProvider({
+      authorization: geminiAuthorization(),
+      directory: mkdtempSync(join(tmpdir(), 'nextrep-lab-cache-required-')),
+      apiKey: 'fixture',
+      requireCached: true,
+      fetcher: async () => { calls++; throw new Error('unexpected live request') },
+    })
+    await expect(provider.generate({ prompt: '{}', maxOutputTokens: 50, signal: new AbortController().signal, attemptKey: 'cache-miss' })).rejects.toThrow(/respuesta cacheada medida/)
+    expect(calls).toBe(0)
   })
 })

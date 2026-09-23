@@ -31,7 +31,7 @@
     "icons": "node scripts/generate-icons.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:worker": "tsc -p worker/tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run && node --test scripts/corpus-gates.node.test.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:coach": "playwright test --config=playwright.coach.config.ts",

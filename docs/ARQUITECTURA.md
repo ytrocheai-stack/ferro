@@ -93,11 +93,11 @@ tokens estimados y ejecuciones concurrentes por cuenta/semana, liquida tokens re
 rechaza una respuesta que supere el límite; si no hay `usage`, cobra la estimación conservadora.
 
 Hay infraestructura declarada y el Worker remoto responde. `worker/wrangler.production.toml` configura
-la beta privada con Gemini preferido y NVIDIA como fallback; `worker/wrangler.toml` mantiene desarrollo
+Gemini como único generador y NVIDIA solo para embeddings; `worker/wrangler.toml` mantiene desarrollo
 apagado. Ambos apuntan al mismo Worker. El readiness autenticado expone modelos, orden, flags, consentimiento,
 allowlist por conteo y cuotas sin exponer claves ni valores secretos. Desarrollo
-mantiene flags apagadas y producción conserva Flash/embeddings/beta habilitados solo para la cuenta
-permitida, con Pro/reranking/probe apagados.
+mantiene flags apagadas. En producción `ENABLE_BETA=false` mantiene cerrado el coach, aunque las flags
+de Gemini y embeddings estén habilitadas; Flash, NVIDIA como generador, Pro, reranking y probe siguen apagados.
 El corpus sigue como propuesta, sin evaluación representativa; cada vector lleva su namespace y
 un ID físico versionado, las claves de filas están versionadas y `rollbackCorpusVersion` borra IDs mediante un adaptador
 explícito antes de eliminar D1.

@@ -7,9 +7,12 @@ import { validateLabInput, decisionViolations, safetyReason } from './validation
 import { fingerprint } from './identity.ts'
 import { INSTRUCTION_VERSION, LAB_VERSION, MODEL_CONFIG_VERSION, TOOL_VERSION } from './types.ts'
 import type { AgentTrace, LabConfig, LabCorpus, LabDecision, LabEvidence, LabInput, LabRun } from './types.ts'
-import { FLASH_MODEL, KIMI_MODEL, generationParameters, ProviderSession } from '../../corpus-pipeline/src/runtime.ts'
-import { GLM_FLASH_MODEL } from '../../corpus-pipeline/src/generation.ts'
-import type { Authorization } from '../../corpus-pipeline/src/runtime.ts'
+import {
+  GEMINI_GENERATION_MODEL,
+  GEMINI_PROJECT_LEDGER_DIRECTORY,
+  GeminiGenerationSession,
+} from '../../corpus-pipeline/src/gemini-session.ts'
+import type { GeminiAuthorization } from '../../corpus-pipeline/src/gemini-session.ts'
 
 export interface ModelRequest { prompt: string; maxOutputTokens: number; signal: AbortSignal; attemptKey?: string }
 export interface ModelResult { content: string; usage?: { inputTokens: number; outputTokens: number } }
@@ -48,42 +51,46 @@ export const PRIVATE_TRAINING_INSTRUCTIONS = TRAINING_INSTRUCTIONS
   .replace('en un laboratorio de datos ficticios', 'para una cuenta privada con datos consentidos')
   .replace('No apliques cambios, no accedas a datos reales, secretos, red o videos personales.', 'No apliques cambios automáticamente ni accedas a secretos, red o videos personales. Solo usa el contexto consentido que acompaña esta ejecución.')
 
-// El transporte sigue el endpoint NVIDIA ya utilizado por el Worker; no se invoca al importarlo.
-export function createFlashProvider(apiKey: string, model: string, fetcher: typeof fetch = fetch): LabProvider {
-  if (!apiKey || (model !== KIMI_MODEL && (!model.includes('flash') || model.includes('pro-')))) throw new Error('Se requiere una clave y un modelo Flash explícito')
-  return { id: model, kind: 'remote', async generate(request) {
-    const response = await fetcher('https://integrate.api.nvidia.com/v1/chat/completions', {
-      method: 'POST', signal: request.signal, headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages: [{ role: 'system', content: PRIVATE_TRAINING_INSTRUCTIONS }, { role: 'user', content: request.prompt }], ...generationParameters(model), max_tokens: request.maxOutputTokens, stream: false }),
-    })
-    if (!response.ok) throw Object.assign(new Error('Fallo del proveedor'), { status: response.status })
-    const result = await response.json() as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens: number; completion_tokens: number } }
-    const content = result.choices?.[0]?.message?.content
-    if (typeof content !== 'string') throw new Error('Respuesta de proveedor sin contenido')
-    return { content, ...(result.usage ? { usage: { inputTokens: result.usage.prompt_tokens, outputTokens: result.usage.completion_tokens } } : {}) }
-  } }
-}
-
-/**
- * Flash adapter with the same durable response ledger used by the corpus
- * pipeline. A confirmed response is returned from disk on resume, while a
- * pending ledger entry remains a hard stop until it is reconciled.
- */
-export function createResumableFlashProvider(options: { apiKey: string; authorization: Authorization; directory: string; fetcher?: typeof fetch }): LabProvider {
-  if (![FLASH_MODEL, KIMI_MODEL, GLM_FLASH_MODEL].includes(options.authorization.model) || !options.authorization.embeddingModel) throw new Error('La autorización no corresponde a Flash y embeddings')
-  const session = new ProviderSession({ directory: options.directory, authorization: options.authorization, apiKey: options.apiKey, fetcher: options.fetcher })
+/** Gemini is the sole text-generation provider for the formal agent lab. */
+export function createGeminiLabProvider(options: {
+  authorization: GeminiAuthorization
+  directory?: string
+  apiKey?: string
+  fetcher?: typeof fetch
+  requireCached?: boolean
+}): LabProvider {
+  if (options.authorization.model !== GEMINI_GENERATION_MODEL) throw new Error('El laboratorio requiere Gemini gemini-3.5-flash-lite para generar texto')
+  const session = new GeminiGenerationSession({
+    directory: options.directory ?? GEMINI_PROJECT_LEDGER_DIRECTORY,
+    authorization: options.authorization,
+    allocation: 'lab',
+    ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
+    ...(options.fetcher !== undefined ? { fetcher: options.fetcher } : {}),
+  })
   return {
-    id: options.authorization.model,
+    id: GEMINI_GENERATION_MODEL,
     kind: 'remote',
     async generate(request) {
       const attemptKey = request.attemptKey ?? fingerprint({ prompt: request.prompt, maxOutputTokens: request.maxOutputTokens })
-      return session.generate(request.prompt, request.maxOutputTokens, request.signal, attemptKey, PRIVATE_TRAINING_INSTRUCTIONS)
+      const result = await session.generate(request.prompt, {
+        maxOutputTokens: request.maxOutputTokens,
+        attemptKey,
+        systemPrompt: PRIVATE_TRAINING_INSTRUCTIONS,
+        signal: request.signal,
+        ...(options.requireCached !== undefined ? { requireCached: options.requireCached } : {}),
+      })
+      if (!Number.isSafeInteger(result.usage.inputTokens) || result.usage.inputTokens < 0 || !Number.isSafeInteger(result.usage.outputTokens) || result.usage.outputTokens < 0) {
+        throw new Error('Gemini devolvió uso no medido; no se acepta como respuesta del laboratorio')
+      }
+      return { content: result.content, usage: result.usage }
     },
   }
 }
 
 export interface ProviderRunOptions extends LabConfig {
   accountingMode?: 'tokens' | 'requests'
+  /** Hard response cap for each model turn; maxOutputTokens remains the run total. */
+  maxOutputTokensPerCall?: number
   signal?: AbortSignal
   /** Distinguishes repetitions while remaining stable across a resume. */
   runKey?: string
@@ -96,8 +103,9 @@ export interface ProviderRunOptions extends LabConfig {
 export async function runProviderLab(input: LabInput, corpus: LabCorpus, provider: LabProvider, config: ProviderRunOptions = {}): Promise<LabRun> {
   validateLabInput(input)
   const budget = { ...DEFAULT_BUDGET, maxInputTokens: 128_000, maxOutputTokens: 8_000, ...config.budget }
+  const maxOutputTokensPerCall = config.maxOutputTokensPerCall ?? budget.maxOutputTokens
   const versions = { labVersion: LAB_VERSION, instructionVersion: INSTRUCTION_VERSION, toolVersion: TOOL_VERSION, modelConfigVersion: MODEL_CONFIG_VERSION }
-  const runFingerprint = fingerprint({ input, corpus, versions, instructions: PRIVATE_TRAINING_INSTRUCTIONS, budget, ...(config.accountingMode ? { accountingMode: config.accountingMode } : {}), runKey: config.runKey ?? null, provider: { id: provider.id, kind: provider.kind } })
+  const runFingerprint = fingerprint({ input, corpus, versions, instructions: PRIVATE_TRAINING_INSTRUCTIONS, budget, maxOutputTokensPerCall, ...(config.accountingMode ? { accountingMode: config.accountingMode } : {}), runKey: config.runKey ?? null, provider: { id: provider.id, kind: provider.kind } })
   const usage = { inputTokens: 0, outputTokens: 0 }
   let calls = 0
   let uncertainCalls = 0
@@ -105,7 +113,7 @@ export async function runProviderLab(input: LabInput, corpus: LabCorpus, provide
   const finish = (decision: LabDecision): LabRun => ({ ...versions, scenarioId: input.event.id, decision, calls, uncertainCalls, usage, tokenEstimate: { input: usage.inputTokens, output: usage.outputTokens }, fingerprint: runFingerprint, providerId: provider.id, providerKind: provider.kind })
   const stop = (reason: string, kind: 'unavailable' | 'abstain' = 'unavailable'): LabRun => finish({ kind, explanation: reason, reason, observations: [], evidence: [], trace: traces, executionMode: 'provider', qualityEvidence: false })
   if (!config.providerAvailable || !config.budgetVerified) return stop('provider-access-or-budget-unverified')
-  if (!Object.values(budget).filter(v => typeof v === 'number').every(v => Number.isSafeInteger(v) && Number(v) > 0)) return stop('invalid-or-exhausted-budget')
+  if (!Object.values(budget).filter(v => typeof v === 'number').every(v => Number.isSafeInteger(v) && Number(v) > 0) || !Number.isSafeInteger(maxOutputTokensPerCall) || maxOutputTokensPerCall <= 0 || maxOutputTokensPerCall > budget.maxOutputTokens) return stop('invalid-or-exhausted-budget')
   if (config.signal?.aborted) return stop('cancelled')
   if (!input.context.isCurrent || !input.permissions.canReadHistory || !input.permissions.canReadGoals || !input.permissions.canReadCatalog || !input.permissions.canPropose || input.permissions.consentVersion !== input.context.version) return stop('context-or-permissions-invalid', 'abstain')
   const unsafeReason = safetyReason(input)
@@ -145,7 +153,8 @@ export async function runProviderLab(input: LabInput, corpus: LabCorpus, provide
       generate: async (prompt, signal, number) => {
         const inputTokens = new TextEncoder().encode(prompt + TRAINING_INSTRUCTIONS).length
         const requests = config.accountingMode === 'requests'
-        const outputTokens = budget.maxOutputTokens - (requests ? 0 : usage.outputTokens)
+        const remainingOutputTokens = budget.maxOutputTokens - (requests ? 0 : usage.outputTokens)
+        const outputTokens = Math.min(maxOutputTokensPerCall, remainingOutputTokens)
         if ((requests ? inputTokens : usage.inputTokens + inputTokens) > budget.maxInputTokens || outputTokens <= 0) throw new Error('budget-exhausted-before-call')
         await config.beforeAttempt?.({ fingerprint: runFingerprint, calls: number, inputTokens, outputTokens })
         if (signal.aborted || Date.now() >= started + budget.timeoutMs) throw new Error('cancelled-or-timeout')

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { canonicalJson, sha256Base64url } from '../packages/corpus-identity/src/index.mjs'
 import { scientificReviewReady } from '../packages/corpus-evaluation/src/scientific-review.mjs'
+import { CANDIDATE_FLAGS } from './corpus-status.mjs'
 
 const root = path.resolve(import.meta.dirname, '..')
 const args = process.argv.slice(2)
@@ -89,8 +90,7 @@ async function validateGatePreflight(paths, expectedCorpusVersion) {
   if (remote.schema !== 'hevy-remote-verification-v2' || remote.corpusVersion !== expectedCorpusVersion || remote.sources !== 88 || remote.chunks !== 2708 || remote.vectors512 !== 2708 || remote.vectors1024 !== 2708 || remote.queriesComplete !== true || remote.filtersMatchWorker !== true || remote.identityMismatches !== 0 || remote.excludedEvidence !== 0 || remote.legacyIndexVerified !== true) fail('el smoke requiere verificación remota completa del corpus candidato')
   if (review.schema !== 'hevy-independent-review-v1' || review.corpusVersion !== expectedCorpusVersion || review.responses !== 300 || review.reviewedResponses !== 300 || review.complete !== true || !Array.isArray(review.ragGates) || review.ragGates.length !== 6 || review.ragGates.some(gate => gate.passes !== true)) fail('el smoke requiere revisión independiente y gates RAG completos')
   if (lab.corpusVersion !== expectedCorpusVersion || lab.repetitions !== 3 || lab.acceptanceScenarios !== 28 || lab.safetyScenarios !== 10 || lab.passesGate !== true || lab.safetyPassesGate !== true) fail('el smoke requiere gates de aceptación y seguridad del laboratorio')
-  const disabled = { ENABLE_BETA: false, ENABLE_EMBEDDINGS: false, ENABLE_FLASH: false, ENABLE_PRO: false, ENABLE_RERANKING: false, ENABLE_PROVIDER_PROBE: false }
-  if (candidate.schema !== 'coach-release-candidate-v2' || candidate.status !== 'candidate' || candidate.corpusVersion !== expectedCorpusVersion || JSON.stringify(candidate.flags) !== JSON.stringify(disabled)) fail('el smoke requiere expediente de release candidato con todas las flags apagadas')
+  if (candidate.schema !== 'coach-release-candidate-v2' || candidate.status !== 'candidate' || candidate.corpusVersion !== expectedCorpusVersion || canonicalJson(candidate.flags) !== canonicalJson(CANDIDATE_FLAGS)) fail('el smoke requiere un candidato con ENABLE_BETA=false y las flags de Gemini y embeddings fijadas a la configuración base')
 }
 
 async function main() {

@@ -4,6 +4,7 @@ dev-dist
 .cache
 .playwright-cli
 test-results
+artifacts/
 .worktrees
 .superpowers
 
