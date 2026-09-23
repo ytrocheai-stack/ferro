@@ -190,7 +190,7 @@ export function validateEvaluationResults(results, reference, manifest) {
     for (const item of set) {
     const referenceQuery = queryById.get(item.queryId)
       const referenceClaims = new Map(referenceQuery.claims.map((claim) => [claim.claimId, claim]))
-      if (results.schema === 'generated-benchmark-v1') {
+      if (results.schema === 'generated-benchmark-v1' || results.schema === 'generated-benchmark-v2' || results.schema === 'generated-benchmark-v3' || results.schema === 'generated-benchmark-v4') {
         if (typeof item.responseText !== 'string' || !item.responseText.trim()) fail('respuesta generada vacía')
         const seen = new Set()
         for (const claim of asArray(item.claims, 'generated claims')) {
@@ -272,7 +272,9 @@ export function evaluateBenchmark(reference, manifest, results) {
   const validated = validateEvaluationResults(results, reference, manifest)
   const vectorRecall512 = recallFor(validated.retrieval, reference, 512, validated.matrix)
   const vectorRecall1024 = recallFor(validated.retrieval, reference, 1024, validated.matrix)
-  const generated = results.schema === 'generated-benchmark-v1'
+  const generated = results.schema === 'generated-benchmark-v1' || results.schema === 'generated-benchmark-v2' || results.schema === 'generated-benchmark-v3' || results.schema === 'generated-benchmark-v4'
+  const currentGeneratedIdentity = results.schema === 'generated-benchmark-v4' && results.responseSchemaVersion === 4
+  const evidenceIdentity = currentGeneratedIdentity ? 'current-generated' : generated ? 'legacy-generated' : 'retrieval-only'
   const expanded = generated && results.retrievalPolicy === SUMMARY_RETRIEVAL_POLICY
   const recall512 = expanded ? evaluateContextRecallAt5(validated.citations[512], reference, manifest) : vectorRecall512
   const recall1024 = expanded ? evaluateContextRecallAt5(validated.citations[1024], reference, manifest) : vectorRecall1024
@@ -281,7 +283,7 @@ export function evaluateBenchmark(reference, manifest, results) {
   const generationBlockers = [...(review512?.blockers ?? []), ...(review1024?.blockers ?? [])]
   const citationPrecision512 = review512?.precision ?? precisionFor(validated.citations[512], reference)
   const citationPrecision1024 = review1024?.precision ?? precisionFor(validated.citations[1024], reference)
-  const baseGate = generationBlockers.length === 0 && validated.ready && reference.status === 'approved' && recall512 >= 0.8 && citationPrecision512 >= 0.9
+  const baseGate = (!generated || currentGeneratedIdentity) && generationBlockers.length === 0 && validated.ready && reference.status === 'approved' && recall512 >= 0.8 && citationPrecision512 >= 0.9
   const dimensionGate1024 = baseGate && recall1024 - recall512 >= 0.03 && citationPrecision1024 >= citationPrecision512
   return {
     benchmarkVersion: reference.version,
@@ -291,13 +293,15 @@ export function evaluateBenchmark(reference, manifest, results) {
     recallAt5: { 512: recall512, 1024: recall1024 },
     retrievalMetric: expanded ? 'delivered-context-at-5' : 'vector-at-5',
     vectorRecallAt5: { 512: vectorRecall512, 1024: vectorRecall1024 },
-    citationPrecision: { 512: citationPrecision512, 1024: citationPrecision1024 },
-    baseGate,
+    citationPrecision: { 512: citationPrecision512, 1024: citationPrecision1024 },
+    evidenceIdentity,
+    currentGeneratedIdentity,
+    baseGate,
     dimensionGate1024,
     fingerprints: { manifest: sha256Base64url(canonicalJson(manifest)), reference: sha256Base64url(canonicalJson(reference)), results: sha256Base64url(canonicalJson(results)) },
     generationBlockers,
     retrievalGate: recall512 >= 0.8,
-    generationGate: generationBlockers.length === 0 && citationPrecision512 >= 0.9,
+    generationGate: currentGeneratedIdentity && generationBlockers.length === 0 && citationPrecision512 >= 0.9,
     errors: generationBlockers,
   }
 }

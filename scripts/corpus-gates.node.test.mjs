@@ -36,7 +36,7 @@ function fixture({ reviewerType = 'human', artifactTime = now - 3_600_000 } = {}
     scientificReview: { approved: true, reviewer: 'responsable', notes: 'Revisado', queryCount: 50, relevantReviewed: true, hardNegativesReviewed: true, claimsReviewed: true, populationApplicabilityReviewed: true, exclusionsCertified: true, reviewedAt: new Date(artifactTime).toISOString() },
   }
   const result = {
-    schema: 'generated-benchmark-v1', corpusVersion: CORPUS, benchmarkVersion: BENCHMARK,
+    schema: 'generated-benchmark-v4', responseSchemaVersion: 4, corpusVersion: CORPUS, benchmarkVersion: BENCHMARK,
     execution: 'remote-gemini-complete', generationModel: GEMINI, model: NVIDIA, repetitions: 3,
     formalRemoteResponsesRequired: 300, formalRemoteResponsesComplete: 300,
     authorization: { provider: 'google-ai-studio', accessVerified: true, budgetVerified: true, maxAdditionalCost: 0, model: GEMINI, embeddingModel: NVIDIA },
@@ -79,7 +79,7 @@ function fixture({ reviewerType = 'human', artifactTime = now - 3_600_000 } = {}
       ...item, prompt: 'prompt', requestIdentity: { ...item.requestIdentity, queryHash: 'query-hash', contextHash: 'context-hash', instructionsHash: 'instructions-hash', parametersHash: 'parameters-hash' },
     }
   }
-  const benchmarkCheckpoint = { schema: 'hevy-benchmark-checkpoint-v2', corpusVersion: CORPUS, benchmarkVersion: BENCHMARK, completed, updatedAt: new Date(artifactTime).toISOString() }
+  const benchmarkCheckpoint = { schema: 'hevy-benchmark-checkpoint-v5', corpusVersion: CORPUS, benchmarkVersion: BENCHMARK, completed, updatedAt: new Date(artifactTime).toISOString() }
   const labScenarioIds = Array.from({ length: 38 }, (_, scenario) => `scenario-${scenario}`)
   const labRuns = Array.from({ length: 3 }, (_, repetition) => Array.from({ length: 38 }, (_, scenario) => ({
     repetition, scenarioId: `scenario-${scenario}`, providerKind: 'remote', providerId: GEMINI, fingerprint: `${repetition}-${scenario}`, uncertainCalls: 0,
@@ -188,6 +188,21 @@ describe('gates de release Gemini', () => {
     kimi.fingerprints = { results: sha256Hex(canonicalJson(kimi)) }
     const rejected = benchmarkEvidence(f.manifest, f.reference, kimi, f.reviewReport, f.benchmarkCheckpoint, f.reviews, [], now)
     assert.equal(rejected.ok, false)
+  })
+
+  it('rechaza resultados y checkpoints de la generación anterior aunque tengan 300 respuestas', () => {
+    const f = fixture()
+    const oldResult = { ...f.result, schema: 'generated-benchmark-v3', responseSchemaVersion: 3 }
+    delete oldResult.fingerprints
+    oldResult.fingerprints = { results: sha256Hex(canonicalJson(oldResult)) }
+    const rejectedResult = benchmarkEvidence(f.manifest, f.reference, oldResult, f.reviewReport, f.benchmarkCheckpoint, f.reviews, [], now)
+    assert.equal(rejectedResult.ok, false)
+    assert.match(rejectedResult.errors.join(' '), /identidad de instrucciones antigua/)
+
+    const oldCheckpoint = { ...f.benchmarkCheckpoint, schema: 'hevy-benchmark-checkpoint-v4' }
+    const rejectedCheckpoint = benchmarkEvidence(f.manifest, f.reference, f.result, f.reviewReport, oldCheckpoint, f.reviews, [], now)
+    assert.equal(rejectedCheckpoint.ok, false)
+    assert.match(rejectedCheckpoint.errors.join(' '), /instrucciones antiguas/)
   })
 
   it('valida un canario autenticado y liga modelo, corpus, cuenta y run IDs a respuestas remotas', () => {

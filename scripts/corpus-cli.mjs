@@ -21,7 +21,7 @@ function fail(message) { throw new Error(`Corpus inválido: ${message}`) }
 function sha256Hex(value) { return createHash('sha256').update(value).digest('hex') }
 
 function validateGeneratedAuditTrail(results) {
-  if (results?.schema !== 'generated-benchmark-v1') return
+  if (!['generated-benchmark-v1', 'generated-benchmark-v2', 'generated-benchmark-v3', 'generated-benchmark-v4'].includes(results?.schema)) return
   if (results.repetitions !== 3 || !Array.isArray(results.runs) || results.runs.length !== 3) fail('la evaluación generada debe conservar exactamente tres repeticiones')
   const sets = [results.citations, ...results.runs.map(run => run.citations)]
   for (const set of sets) for (const dimension of ['512', '1024']) for (const item of set?.[dimension] ?? []) {

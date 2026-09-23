@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateBenchmark } from './index.mjs'
+import { evaluateBenchmark, responseFingerprint } from './index.mjs'
 
 function fixture() {
   const corpusVersion = 'fixture-corpus-v1'
@@ -24,6 +24,50 @@ describe('strict corpus evaluation', () => {
     expect(report).toMatchObject({ queries: 50, baseGate: true, dimensionGate1024: true, coverageComplete: true })
     expect(report.recallAt5[512]).toBeCloseTo(0.8)
     expect(report.recallAt5[1024]).toBeCloseTo(1)
+  })
+
+  it('conserva el análisis histórico de v3 pero no lo aprueba para los gates actuales', () => {
+    const value = fixture()
+    const results = value.results as typeof value.results & {
+      schema: string
+      responseSchemaVersion: number
+      reviews: Array<Record<string, unknown>>
+      citations: Record<512 | 1024, Array<{
+        queryId: string
+        claims: Array<{ claimId: string; text: string; citedIds: string[] }>
+        providerKind?: string
+        responseText?: string
+      }>>
+    }
+    results.schema = 'generated-benchmark-v3'
+    results.responseSchemaVersion = 3
+    results.reviews = []
+    for (const dimensions of [512, 1024] as const) {
+      for (const item of results.citations[dimensions]) {
+        item.providerKind = 'remote'
+        item.responseText = 'Respuesta histórica completa.'
+        results.reviews.push({
+          responseFingerprint: responseFingerprint(item, dimensions, results.corpusVersion, results.benchmarkVersion),
+          dimensions,
+          queryId: item.queryId,
+          reviewer: 'Revisor independiente',
+          notes: 'Revisión completa.',
+          allNewClaimsReviewed: true,
+          contextFaithful: true,
+          sportsCoherent: true,
+          applicable: true,
+          uncertaintyHandled: true,
+          claims: item.claims.map(claim => ({ claimId: claim.claimId, supportedChunkIds: [...claim.citedIds] })),
+        })
+      }
+    }
+
+    const report = evaluateBenchmark(value.reference, value.manifest, results) as { evidenceIdentity: string; currentGeneratedIdentity: boolean; baseGate: boolean; dimensionGate1024: boolean; generationGate: boolean; recallAt5: { 512: number; 1024: number }; citationPrecision: { 512: number; 1024: number }; generationBlockers: string[] }
+    expect(report).toMatchObject({ evidenceIdentity: 'legacy-generated', currentGeneratedIdentity: false, baseGate: false, dimensionGate1024: false, generationGate: false })
+    expect(report.recallAt5[512]).toBeCloseTo(0.8)
+    expect(report.recallAt5[1024]).toBeCloseTo(1)
+    expect(report.citationPrecision).toEqual({ 512: 1, 1024: 1 })
+    expect(report.generationBlockers).toEqual([])
   })
 
   it('rechaza una sola etiqueta autojustificada partiendo del fixture válido', () => {

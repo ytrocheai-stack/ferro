@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { agentWireJsonSchema, buildAgentInstructions, buildAgentPrompt, runAgentLoop, runAgentProtocol } from './agent'
+import { SCIENTIFIC_RESULTS_INTERPRETATION_INSTRUCTION } from './science-guidance'
 import { coachRunRequestSchema } from './contract'
 
 const request = coachRunRequestSchema.parse({
@@ -13,6 +14,14 @@ describe('shared coach agent protocol', () => {
     const privateMode = buildAgentInstructions('private-real')
     expect(fictional).toContain('laboratorio de datos ficticios')
     expect(privateMode).toContain('contexto consentido')
+    expect(privateMode).toContain(SCIENTIFIC_RESULTS_INTERPRETATION_INSTRUCTION)
+    expect(privateMode).toContain('Incluye estos matices en `responseText` del benchmark y `decision.explanation` del Coach')
+    expect(privateMode).toContain('los `claims` registran respaldo y no sustituyen la explicación')
+    expect(privateMode).toContain('En la primera frase de la conclusión')
+    expect(privateMode).toContain('organiza la comparación por desenlace')
+    expect(privateMode).toContain('Etiqueta las estimaciones globales y por subgrupo')
+    expect(privateMode).toContain('presenta mecanismos plausibles como hipótesis')
+    expect(privateMode).toContain('No conviertas ausencia de diferencia estadísticamente significativa en equivalencia')
     expect(fictional).toContain(JSON.stringify(agentWireJsonSchema))
     expect(buildAgentPrompt({ request, evidence: [], turns: [], mode: 'private-real' })).toContain('SNAPSHOT CONSENTIDO')
   })
