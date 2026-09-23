@@ -1,10 +1,12 @@
 # Despliegue de NextRep
 
-> Estado de la beta privada: AI Studio mostró para **YT autoclips** el nivel gratuito
+> Estado de la beta privada: **cerrada** (`ENABLE_BETA=false`) tras el timeout
+> del canario GLM. Véase la [bitácora del 2026-09-23](RELEASE-2026-09-23.md).
+> AI Studio mostró para **YT autoclips** el nivel gratuito
 > de Gemini 3.5 Flash Lite con **15 RPM, 250.000 tokens de entrada/minuto y 500 RPD**.
 > `GEMINI_API_KEY` ya está guardada en Wrangler y D1 remoto tiene `0014`–`0018`.
 > La [bitácora inicial](RELEASE-2026-09-15.md) conserva el historial de preparación;
-> la validación de GLM y de la segunda cuenta se registra en la bitácora de cierre.
+> la validación de GLM y de la segunda cuenta sigue pendiente en esa bitácora.
 
 ## Beta privada — Gemini preferido y NVIDIA fallback
 
