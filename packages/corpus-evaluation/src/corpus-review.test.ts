@@ -49,6 +49,7 @@ type Fixture = {
   reference: { version: string; corpusVersion: string; queries: Array<{ queryId: string; relevantChunkIds: string[] }> }
   results: {
     schema: string
+    responseSchemaVersion: number
     corpusVersion: string
     benchmarkVersion: string
     generationModel: string
@@ -109,7 +110,8 @@ function makeFixture({ badRecall = false, unsupported = false }: { badRecall?: b
     citations: { 512: buildDimension(512).map(item => ({ ...item, repetition })), 1024: buildDimension(1024).map(item => ({ ...item, repetition })) },
   }))
   const results: Fixture['results'] = {
-    schema: 'generated-benchmark-v1',
+    schema: 'generated-benchmark-v4',
+    responseSchemaVersion: 4,
     corpusVersion: manifest.corpusVersion,
     benchmarkVersion: reference.version,
     generationModel: GEMINI,
