@@ -16,7 +16,7 @@ NVIDIA_ACCOUNTING_MODE = "requests"
 ENVIRONMENT = "production"
 ALLOWED_ORIGINS = "https://ytrocheai-stack.github.io"
 CLERK_AUTHORIZED_PARTIES = "https://ytrocheai-stack.github.io"
-ALLOWED_CLERK_IDS = "user_3ITDXf8hPt81kAjzS3Dw8U77qfE,user_3JLkakQ34GXgGQhWGAWSfrLW3TB"
+ALLOWED_CLERK_IDS = "user_3ITDXf8hPt81kAjzS3Dw8U77qfE"
 COACH_PROVIDER_ORDER = "gemini"
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 # AI Studio, YT autoclips, Free tier, verificado el 2026-09-15.
