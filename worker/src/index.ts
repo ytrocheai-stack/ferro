@@ -106,11 +106,11 @@ const eventSchema = z.object({ analysisId: z.string().min(1).max(120), exerciseI
 
 function enabled(value: string | undefined, fallback = false): boolean { return value === undefined ? fallback : value === '1' || value.toLowerCase() === 'true' }
 function betaEnabled(env: Env): boolean { return enabled(env.ENABLE_BETA, env.ENVIRONMENT !== 'production') }
-export const COACH_CONSENT_VERSION = 'coach-context-v3-gemini-nvidia'
-const PRIVATE_PROVIDER_ORDER: ProviderName[] = ['gemini', 'nvidia']
+export const COACH_CONSENT_VERSION = 'coach-context-v4-gemini-nvidia-embeddings'
+const PRIVATE_PROVIDER_ORDER: ProviderName[] = ['gemini']
 const PRIVATE_NVIDIA_MODEL = GLM_FLASH_MODEL
+const PRIVATE_EMBEDDING_MODEL = 'nvidia/nemotron-3-embed-1b'
 const PRIVATE_NVIDIA_RPM = 40
-const PRIVATE_ALLOWLIST = ['user_3ITDXf8hPt81kAjzS3Dw8U77qfE', 'user_3JLkakQ34GXgGQhWGAWSfrLW3TB']
 
 function configuredPositiveInteger(value: string | undefined): number | null {
   const parsed = Number(value)
@@ -153,24 +153,25 @@ export function coachReadinessConfiguration(env: Env): ReadinessConfiguration {
   const models = {
     gemini: env.GEMINI_MODEL ?? GEMINI_MODEL,
     nvidia: env.NVIDIA_MODEL ?? env.FLASH_MODEL ?? PRIVATE_NVIDIA_MODEL,
-    embedding: env.EMBEDDING_MODEL ?? 'nvidia/nemotron-3-embed-1b',
+    embedding: env.EMBEDDING_MODEL ?? PRIVATE_EMBEDDING_MODEL,
     flash: env.FLASH_MODEL ?? KIMI_MODEL,
     pro: env.PRO_MODEL ?? 'deepseek-ai/deepseek-v4-pro-0813',
   }
   const consentVersion = env.REQUIRED_CONSENT_VERSION ?? COACH_CONSENT_VERSION
   const allowlistIds = configuredList(env.ALLOWED_CLERK_IDS)
   const productionShape = env.ENVIRONMENT !== 'production' || (
+    env.COACH_PROVIDER_ORDER === PRIVATE_PROVIDER_ORDER.join(',') &&
     providerOrder.join(',') === PRIVATE_PROVIDER_ORDER.join(',') &&
     models.gemini === GEMINI_MODEL &&
-    models.nvidia === PRIVATE_NVIDIA_MODEL &&
-    models.flash === PRIVATE_NVIDIA_MODEL &&
+    models.embedding === PRIVATE_EMBEDDING_MODEL &&
     quotas.nvidia.requestsPerMinute === PRIVATE_NVIDIA_RPM &&
-    flags.flash && flags.gemini && flags.nvidia && !flags.coachStreaming &&
+    (!flags.beta || Boolean(env.COACH_WORKFLOW)) && flags.embeddings && !flags.flash && flags.gemini && !flags.nvidia && !flags.coachStreaming && !flags.pro && !flags.reranking && !flags.providerProbe &&
     consentVersion === COACH_CONSENT_VERSION &&
-    allowlistIds.join(',') === PRIVATE_ALLOWLIST.join(',')
+    allowlistIds.length === 1
   )
   const geminiComplete = !flags.gemini || (Boolean(env.GEMINI_API_KEY) && quotas.gemini.requestsPerMinute !== null && quotas.gemini.inputTokensPerMinute !== null && quotas.gemini.requestsPerDay !== null)
-  const nvidiaComplete = !flags.nvidia || Boolean(env.NVIDIA_API_KEY)
+  // NVIDIA permanece desactivado para generar, pero es obligatorio para embeddings de consultas.
+  const nvidiaComplete = !(flags.nvidia || flags.embeddings) || Boolean(env.NVIDIA_API_KEY)
   return {
     environment: env.ENVIRONMENT ?? 'development',
     providerOrder,
@@ -246,12 +247,12 @@ function productionConfigError(env: Env): string | undefined {
   if (configuredExpectedCount(env.RAG_EXPECTED_SOURCE_COUNT) !== 88 || configuredExpectedCount(env.RAG_EXPECTED_CHUNK_COUNT) !== 2708) return 'Conteos esperados del corpus no configurados'
   if (enabled(env.ENABLE_BETA) && !env.COACH_WORKFLOW) return 'Workflow del coach no configurado'
   const configuration = coachReadinessConfiguration(env)
-  if (configuration.providerOrder.join(',') !== PRIVATE_PROVIDER_ORDER.join(',')) return 'Orden de proveedores privado incompleto'
-  if (configuration.models.gemini !== GEMINI_MODEL || configuration.models.nvidia !== PRIVATE_NVIDIA_MODEL || configuration.models.flash !== PRIVATE_NVIDIA_MODEL) return 'Modelos privados incompletos'
+  if (env.COACH_PROVIDER_ORDER !== PRIVATE_PROVIDER_ORDER.join(',') || configuration.providerOrder.join(',') !== PRIVATE_PROVIDER_ORDER.join(',')) return 'Orden de proveedores privado incompleto'
+  if (configuration.models.gemini !== GEMINI_MODEL || configuration.models.embedding !== PRIVATE_EMBEDDING_MODEL) return 'Modelos privados incompletos'
   if (configuration.quotas.nvidia.requestsPerMinute !== PRIVATE_NVIDIA_RPM) return 'Cuota NVIDIA no configurada a 40 RPM'
   if (configuration.consent.requiredVersion !== COACH_CONSENT_VERSION) return 'Consentimiento privado desactualizado'
-  if (!configuration.flags.flash || !configuration.flags.gemini || !configuration.flags.nvidia || configuration.flags.coachStreaming) return 'Flags privadas incompletas o streaming activo'
-  if (configuration.allowlist.userIds.join(',') !== PRIVATE_ALLOWLIST.join(',')) return 'Allowlist privada incompleta'
+  if (!configuration.flags.embeddings || configuration.flags.flash || !configuration.flags.gemini || configuration.flags.nvidia || configuration.flags.coachStreaming || configuration.flags.pro || configuration.flags.reranking || configuration.flags.providerProbe) return 'Flags privadas incompletas o generación NVIDIA activa'
+  if (configuration.allowlist.count !== 1) return 'El allowlist privado debe contener exactamente una cuenta'
   if (!configuration.credentialsConfigured.gemini || !configuration.credentialsConfigured.nvidia) return 'Credenciales de proveedores no configuradas'
   if (configuration.quotas.gemini.requestsPerMinute === null || configuration.quotas.gemini.inputTokensPerMinute === null || configuration.quotas.gemini.requestsPerDay === null) return 'Cuotas efectivas de Gemini no configuradas'
   return undefined
@@ -274,12 +275,31 @@ export function budgetUsageWithinLimit(inputTokens: number, outputTokens: number
 }
 export async function pruneTelemetry(db: D1Database | undefined, now: number): Promise<void> {
   if (!db) return
+  const expiredCoachRunCutoff = now - 7 * 24 * 60 * 60 * 1000
   await db.batch([
+    // Cierra reservas que sobrevivieron a un run terminal u huérfano. El trigger
+    // conserva el cargo agregado del presupuesto antes de borrar la lease.
+    db.prepare(`UPDATE coach_budget_leases SET settled = 1, input_tokens = input_estimate, output_tokens = output_estimate
+      WHERE settled = 0 AND (
+        run_id IN (SELECT id FROM coach_runs WHERE updated_at < ? AND status IN ('completed', 'failed', 'cancelled'))
+        OR NOT EXISTS (SELECT 1 FROM coach_runs WHERE coach_runs.id = coach_budget_leases.run_id)
+      )`).bind(expiredCoachRunCutoff),
     db.prepare('DELETE FROM adaptation_telemetry WHERE created_at < ?').bind(now - 30 * 24 * 60 * 60 * 1000),
     db.prepare('DELETE FROM adaptation_idempotency WHERE expires_at < ?').bind(now),
     db.prepare('DELETE FROM adaptation_budgets WHERE iso_week < ?').bind(isoWeekKey(now - 14 * 24 * 60 * 60 * 1000)),
     db.prepare('DELETE FROM adaptation_quotas WHERE iso_week < ?').bind(isoWeekKey(now - 14 * 24 * 60 * 60 * 1000)),
-    db.prepare("DELETE FROM coach_runs WHERE updated_at < ? AND status IN ('completed', 'failed', 'cancelled')").bind(now - 7 * 24 * 60 * 60 * 1000),
+    // Las tablas de ejecuciones no tienen FK con CASCADE. Limpia primero los
+    // hijos vencidos y los huérfanos existentes; nunca toca runs activos ni recientes.
+    db.prepare(`DELETE FROM coach_run_attempts WHERE run_id IN (
+      SELECT id FROM coach_runs WHERE updated_at < ? AND status IN ('completed', 'failed', 'cancelled')
+    ) OR NOT EXISTS (SELECT 1 FROM coach_runs WHERE coach_runs.id = coach_run_attempts.run_id)`).bind(expiredCoachRunCutoff),
+    db.prepare(`DELETE FROM coach_run_snapshots WHERE run_id IN (
+      SELECT id FROM coach_runs WHERE updated_at < ? AND status IN ('completed', 'failed', 'cancelled')
+    ) OR NOT EXISTS (SELECT 1 FROM coach_runs WHERE coach_runs.id = coach_run_snapshots.run_id)`).bind(expiredCoachRunCutoff),
+    db.prepare(`DELETE FROM coach_budget_leases WHERE run_id IN (
+      SELECT id FROM coach_runs WHERE updated_at < ? AND status IN ('completed', 'failed', 'cancelled')
+    ) OR NOT EXISTS (SELECT 1 FROM coach_runs WHERE coach_runs.id = coach_budget_leases.run_id)`).bind(expiredCoachRunCutoff),
+    db.prepare("DELETE FROM coach_runs WHERE updated_at < ? AND status IN ('completed', 'failed', 'cancelled')").bind(expiredCoachRunCutoff),
   ])
 }
 async function saveTelemetry(db: D1Database | undefined, event: { userHash: string; analysisId: string; type: string; now: number; model: string; policy: string; indexVersion: string; latencyMs?: number; inputTokens?: number; outputTokens?: number; inputMeasuredTokens?: number; outputMeasuredTokens?: number; inputEstimatedTokens?: number; outputEstimatedTokens?: number; usageIncomplete?: boolean; error?: string }): Promise<void> {
@@ -472,7 +492,8 @@ export class NvidiaGenerationProvider implements GenerationProvider {
 let isolateEmbedding: { env: Env; provider: NvidiaEmbeddingProvider } | undefined
 function defaultEmbeddingProvider(env: Env): EmbeddingProvider | undefined {
   if (!env.NVIDIA_API_KEY) return undefined
-  if (!isolateEmbedding || isolateEmbedding.env !== env) isolateEmbedding = { env, provider: new NvidiaEmbeddingProvider(env.NVIDIA_API_KEY, env.EMBEDDING_MODEL ?? 'nvidia/nemotron-3-embed-1b', fetch, undefined, providerRequestGate(env)) }
+  const model = env.ENVIRONMENT === 'production' ? PRIVATE_EMBEDDING_MODEL : env.EMBEDDING_MODEL ?? PRIVATE_EMBEDDING_MODEL
+  if (!isolateEmbedding || isolateEmbedding.env !== env) isolateEmbedding = { env, provider: new NvidiaEmbeddingProvider(env.NVIDIA_API_KEY, model, fetch, undefined, providerRequestGate(env)) }
   return isolateEmbedding.provider
 }
 
@@ -1109,18 +1130,21 @@ export async function executeCoachRun(env: Env, runId: string, deps: WorkerDepen
     const request = coachRunRequestSchema.parse(JSON.parse(row.request_json))
     const instructions = buildAgentInstructions('private-real', { includeContract: false })
     const providers: Partial<Record<ProviderName, GenerationProvider>> = { ...deps.generationProviders }
-    if (deps.generation && !providers.nvidia) providers.nvidia = deps.generation
+    if (deps.generation && !providers.nvidia && env.ENVIRONMENT !== 'production') providers.nvidia = deps.generation
     if (!providers.gemini && env.GEMINI_API_KEY) providers.gemini = new GeminiGenerationProvider(env.GEMINI_API_KEY, fetch, undefined, geminiRequestGate(env), instructions)
-    if (!providers.nvidia && env.NVIDIA_API_KEY) providers.nvidia = new NvidiaGenerationProvider(env.NVIDIA_API_KEY, fetch, undefined, providerRequestGate(env), instructions)
+    if (!providers.nvidia && env.NVIDIA_API_KEY && env.ENVIRONMENT !== 'production') providers.nvidia = new NvidiaGenerationProvider(env.NVIDIA_API_KEY, fetch, undefined, providerRequestGate(env), instructions)
     const models: Record<ProviderName, string> = {
-      gemini: env.GEMINI_MODEL ?? GEMINI_MODEL,
+      gemini: env.ENVIRONMENT === 'production' ? GEMINI_MODEL : env.GEMINI_MODEL ?? GEMINI_MODEL,
       nvidia: env.NVIDIA_MODEL ?? env.FLASH_MODEL ?? PRIVATE_NVIDIA_MODEL,
     }
     const enabledProviders: Record<ProviderName, boolean> = {
       gemini: enabled(env.ENABLE_GEMINI, Boolean(deps.generationProviders?.gemini)),
       nvidia: enabled(env.ENABLE_NVIDIA, Boolean(deps.generation || deps.generationProviders?.nvidia || env.NVIDIA_API_KEY) && (env.ENABLE_FLASH === undefined || enabled(env.ENABLE_FLASH))),
     }
-    const providerOrder = parseCoachProviderOrder(env.COACH_PROVIDER_ORDER)
+    // La ejecución durable también aplica el límite de proveedor. Los runs de
+    // producción jamás deben enviar generación a NVIDIA, aunque su orden o flag
+    // cambien accidentalmente mientras se reanuda un Workflow existente.
+    const providerOrder = env.ENVIRONMENT === 'production' ? PRIVATE_PROVIDER_ORDER : parseCoachProviderOrder(env.COACH_PROVIDER_ORDER)
     const router = new CoachGenerationRouter({ db, runId, order: providerOrder, providers, models, enabled: enabledProviders, now: clock, fingerprintKey: env.PSEUDONYMIZATION_KEY ?? env.CLERK_JWT_KEY, allowStreaming: env.ENVIRONMENT !== 'production' && enabled(env.ENABLE_COACH_STREAMING), onStreamExplanation: text => { streamedExplanation = text } })
     if (!providerOrder.some(provider => enabledProviders[provider] && providers[provider])) failure = 'coach-providers-unavailable'
     else {
@@ -1445,7 +1469,9 @@ export async function handleRequest(request: Request, env: Env, deps: WorkerDepe
   if (request.method === 'GET') {
     const checks = await readiness(env, env.DB, env.VECTORIZE, env.RAG_INDEX_VERSION, env.RAG_EXPECTED_SOURCE_COUNT, env.RAG_EXPECTED_CHUNK_COUNT)
     const configuration = coachReadinessConfiguration(env)
-    return json(request, { ok: Object.values(checks).every(Boolean), checks, policyVersion: 'v1', corpusVersion: env.RAG_INDEX_VERSION ?? 'none', configuration }, Object.values(checks).every(Boolean) ? 200 : 503, env)
+    const readinessChecks = { ...checks, productionConfig: configurationError === undefined }
+    const ok = Object.values(readinessChecks).every(Boolean)
+    return json(request, { ok, checks: readinessChecks, ...(configurationError ? { configurationError } : {}), policyVersion: 'v1', corpusVersion: env.RAG_INDEX_VERSION ?? 'none', configuration }, ok ? 200 : 503, env)
   }
   if (!betaEnabled(env)) return error(request, 403, 'La beta del coach está cerrada', env)
   const requiredConsent = env.REQUIRED_CONSENT_VERSION ?? COACH_CONSENT_VERSION

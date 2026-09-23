@@ -31,6 +31,7 @@ export default function Profile() {
       <section className="card mt-4 px-4 py-3" aria-labelledby="account-title">
         <SectionHeader title="Cuenta" />
         <div id="account-title" className="pt-3"><AuthControls /></div>
+        <AccountDiagnostic />
       </section>
       <AppearanceCard />
 
@@ -82,6 +83,16 @@ function DataDisclosure({ workoutsCount }: { workoutsCount: number }) {
   )
 }
 
+function AccountDiagnostic() {
+  const { userId } = useAuth()
+  return (
+    <details className="mt-3 border-t border-border pt-2 text-xs text-muted">
+      <summary className="cursor-pointer select-none">Diagnóstico de cuenta</summary>
+      <p className="pt-2">ID de usuario de Clerk: <code className="break-all">{userId ?? 'No disponible'}</code></p>
+    </details>
+  )
+}
+
 export function CoachProfileCard() {
   const { isSignedIn, userId } = useAuth()
   const stored = useLiveQuery(async () => userId ? await db.coachProfiles.get(userId) : undefined, [userId], undefined)
@@ -122,7 +133,13 @@ export function CoachProfileCard() {
 function CoachPrivacyCard() {
   const { isSignedIn } = useAuth()
   if (!isSignedIn || !import.meta.env.VITE_ADAPTATION_WORKER_URL) return null
-  return <div className="card mt-4 px-4 py-3 text-xs leading-relaxed text-muted"><div className="pb-1 text-sm font-bold text-text">Privacidad del coach adaptativo</div>Tus datos se guardan primero en este dispositivo. Con tu consentimiento, el contexto seleccionado (perfil, objetivos, restricciones, rutinas, conversación y hasta seis entrenamientos terminados) puede enviarse al backend privado en Cloudflare y a Google Gemini o NVIDIA para generar la respuesta. Google indica que el contenido del nivel gratuito puede utilizarse para mejorar sus productos. Para ejecutar y recuperar solicitudes, el backend guarda temporalmente la solicitud validada completa (request_json) y su respuesta. Las ejecuciones terminadas se depuran después de siete días y la telemetría operativa después de 30 días. No guardamos JWT ni credenciales; evita incluir información personal innecesaria en los mensajes.</div>
+  return (
+    <div className="card mt-4 px-4 py-3 text-xs leading-relaxed text-muted">
+      <div className="pb-1 text-sm font-bold text-text">Privacidad del coach adaptativo</div>
+      <p>Tus datos se guardan primero en este dispositivo. Con tu consentimiento, el contexto seleccionado (perfil, objetivos, restricciones, rutinas, conversación y hasta seis entrenamientos terminados) puede enviarse al backend privado de NextRep en Cloudflare. Google Gemini 3.5 Flash Lite es el único proveedor que genera las respuestas. Si la búsqueda RAG está disponible, NVIDIA recibe la consulta para crear el embedding usado al recuperar pasajes; NVIDIA no genera respuestas.</p>
+      <p className="mt-2">Google puede usar el contenido enviado mediante el nivel gratuito de Gemini para mejorar sus productos. Para procesar, reanudar y consultar solicitudes, Cloudflare conserva temporalmente la solicitud validada y la decisión/respuesta asociada. Las ejecuciones terminadas se eliminan después de siete días; la telemetría operativa se elimina después de 30 días. No guardamos JWT ni credenciales; evita incluir información personal innecesaria en los mensajes.</p>
+    </div>
+  )
 }
 
 function CoachBetaCard() {
@@ -140,19 +157,19 @@ function CoachBetaCard() {
     <section className="card mt-4 px-4 py-3" aria-labelledby="coach-beta-title">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 id="coach-beta-title" className="text-sm font-bold">Coach adaptativo · beta cerrada</h2>
-          <p className="pt-1 text-xs text-muted">El coach está apagado hasta que lo actives expresamente en esta cuenta y dispositivo.</p>
+          <h2 id="coach-beta-title" className="text-sm font-bold">Coach adaptativo · beta privada</h2>
+          <p className="pt-1 text-xs text-muted">El consentimiento es por cuenta y dispositivo; usar el coach también depende de que beta y backend estén habilitados.</p>
         </div>
         <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${consent ? 'bg-success/10 text-success' : 'bg-surface-2 text-muted'}`}>{consent ? 'Activo' : 'Apagado'}</span>
       </div>
       <div className="mt-3 space-y-1 text-xs text-muted">
         <p>{isSignedIn ? '✓ Sesión iniciada' : '• Inicia sesión para solicitar acceso'}</p>
-        <p>{consent ? '✓ Consentimiento vigente' : '• Falta aceptar el consentimiento de beta'}</p>
+        <p>{consent ? '✓ Consentimiento vigente' : '• Falta aceptar el consentimiento del coach'}</p>
         <p>{reviewed} rutina{reviewed === 1 ? '' : 's'} revisada{reviewed === 1 ? '' : 's'} · {pending} solicitud{pending === 1 ? '' : 'es'} pendiente{pending === 1 ? '' : 's'}</p>
       </div>
       {isSignedIn && userId && !consent && (
         <div className="mt-3 rounded-xl bg-surface-2 px-3 py-2.5 text-xs leading-relaxed text-muted">
-          Al activar, autorizas enviar tu perfil editable, objetivos, restricciones, rutinas, conversación y hasta seis entrenamientos recientes terminados al backend privado de NextRep en Cloudflare y a Google Gemini o NVIDIA para generar la respuesta. Google puede usar datos enviados mediante su nivel gratuito para mejorar sus productos. Los datos no se comparten con otras cuentas; puedes desactivar el coach cuando quieras. Versión de consentimiento: {COACH_CONSENT_VERSION}. Si cambia esta versión tendrás que aceptar de nuevo en este dispositivo.
+          Al activar, autorizas enviar tu perfil editable, objetivos, restricciones, rutinas, conversación y hasta seis entrenamientos recientes terminados al backend privado de NextRep en Cloudflare. Google Gemini 3.5 Flash Lite genera las respuestas. Si la búsqueda RAG está disponible, NVIDIA recibe la consulta para crear el embedding de búsqueda, pero no genera respuestas. Google puede usar el contenido enviado mediante su nivel gratuito para mejorar sus productos. Cloudflare conserva temporalmente la solicitud validada y la decisión/respuesta asociada para procesarla y consultarla; elimina las ejecuciones terminadas tras siete días. Los datos no se comparten con otras cuentas; puedes desactivar el coach cuando quieras. Versión de consentimiento: {COACH_CONSENT_VERSION}. Si cambia esta versión tendrás que aceptar de nuevo en este dispositivo.
           <button className="btn btn-primary mt-2 w-full py-2" type="button" onClick={async () => setConsent(await grantCoachConsent(userId))}>Aceptar y activar coach</button>
         </div>
       )}
