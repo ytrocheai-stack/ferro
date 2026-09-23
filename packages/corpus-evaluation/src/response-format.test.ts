@@ -21,6 +21,11 @@ describe('benchmark response validation', () => {
     expect(result.claims[0]).toMatchObject({ citedIds: [], rawCitedIds: ['invented'], invalidCitedIds: ['invented'] })
   })
 
+  it('does not convert a numbered citation into a chunk ID', () => {
+    const result = modelResponse('{"responseText":"Hecho","claims":[{"claimId":"c1","text":"Hecho","citedIds":["1"]}]}', new Set(['PMC13119994_0001']))
+    expect(result.claims[0]).toMatchObject({ citedIds: [], rawCitedIds: ['1'], invalidCitedIds: ['1'] })
+  })
+
   it('allows a nonempty abstention without claims', () => {
     expect(modelResponse('{"responseText":"La evidencia recuperada no permite responder.","claims":[]}', new Set()).parseError).toBe(false)
   })

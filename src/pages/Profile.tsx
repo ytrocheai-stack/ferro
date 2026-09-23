@@ -83,12 +83,129 @@ function DataDisclosure({ workoutsCount }: { workoutsCount: number }) {
   )
 }
 
-function AccountDiagnostic() {
-  const { userId } = useAuth()
+type ReadinessPayload = {
+  ok?: unknown
+  checks?: unknown
+  configuration?: unknown
+}
+
+type AccountReadiness = {
+  httpStatus: number
+  payload?: ReadinessPayload
+  unreadable?: boolean
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function readinessLabel(value: unknown): string {
+  return typeof value === 'boolean' ? (value ? 'Sí' : 'No') : 'No disponible'
+}
+
+function AccountReadinessSummary({ result }: { result: AccountReadiness }) {
+  const payload = result.payload
+  const config = isRecord(payload?.configuration) ? payload.configuration : undefined
+  const flags = isRecord(config?.flags) ? config.flags : undefined
+  const models = isRecord(config?.models) ? config.models : undefined
+  const allowlist = isRecord(config?.allowlist) ? config.allowlist : undefined
+  const headline = result.httpStatus === 401
+    ? 'El servidor rechazó la sesión'
+    : result.httpStatus === 403
+      ? 'La cuenta no tiene acceso al backend'
+      : result.unreadable
+        ? 'Respuesta recibida; contenido no legible'
+        : payload?.ok === true
+          ? 'Backend listo'
+          : payload?.ok === false
+            ? 'Backend requiere atención'
+            : 'Respuesta recibida'
+  const providerOrder = Array.isArray(config?.providerOrder)
+    ? config.providerOrder.filter((provider): provider is string => typeof provider === 'string').slice(0, 5)
+    : []
+  const orderedProviders = providerOrder.map((provider) => {
+    const model = models?.[provider]
+    return typeof model === 'string' ? `${provider} (${model})` : provider
+  })
+  const checks = isRecord(payload?.checks)
+    ? Object.entries(payload.checks).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean')
+    : []
+  const checkNames: Record<string, string> = {
+    config: 'Configuración', d1: 'Base de datos', index: 'Índice', corpus: 'Corpus', productionConfig: 'Configuración de producción',
+  }
+
+  return (
+    <div className="mt-2 rounded-xl bg-surface-2 px-3 py-2 text-xs leading-relaxed text-muted" role="status" aria-live="polite">
+      <p className="font-semibold text-text">HTTP {result.httpStatus} · {headline}</p>
+      {result.unreadable ? <p>No se pudo leer el diagnóstico devuelto por el backend.</p> : (
+        <>
+          <p>Configuración completa: {readinessLabel(config?.complete)} · Beta: {readinessLabel(flags?.beta)} · Proveedores/modelos: {orderedProviders.length ? orderedProviders.join(' → ') : 'No disponibles'} · Cuentas permitidas: {typeof allowlist?.count === 'number' ? allowlist.count : 'No disponible'}</p>
+          {checks.length > 0 && <p>Comprobaciones: {checks.map(([key, value]) => `${checkNames[key] ?? key}: ${readinessLabel(value)}`).join(' · ')}</p>}
+        </>
+      )}
+    </div>
+  )
+}
+
+export function AccountDiagnostic() {
+  const { userId, isSignedIn, getToken } = useAuth()
+  const [checking, setChecking] = useState(false)
+  const [result, setResult] = useState<AccountReadiness | null>(null)
+  const [message, setMessage] = useState('')
+  const workerUrl = (import.meta.env.VITE_ADAPTATION_WORKER_URL as string | undefined)?.replace(/\/$/, '')
+
+  const checkBackend = async () => {
+    setResult(null)
+    setMessage('')
+    if (!isSignedIn || !userId) {
+      setMessage('Inicia sesión en Clerk para comprobar el backend.')
+      return
+    }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setMessage('Sin conexión. Conéctate a internet e inténtalo de nuevo.')
+      return
+    }
+    if (!workerUrl) {
+      setMessage('El backend no está configurado en esta instalación.')
+      return
+    }
+
+    setChecking(true)
+    try {
+      const token = await getToken()
+      if (!token) {
+        setMessage('No se obtuvo una sesión de Clerk. Inicia sesión e inténtalo de nuevo.')
+        return
+      }
+      const response = await fetch(`${workerUrl}/readiness`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        cache: 'no-store',
+      })
+      let payload: ReadinessPayload | undefined
+      let unreadable = false
+      try {
+        const body: unknown = await response.json()
+        if (isRecord(body)) payload = body as ReadinessPayload
+        else unreadable = true
+      } catch {
+        unreadable = true
+      }
+      setResult({ httpStatus: response.status, payload, unreadable })
+    } catch {
+      setMessage('No se pudo conectar con el backend. Revisa tu conexión e inténtalo de nuevo.')
+    } finally {
+      setChecking(false)
+    }
+  }
+
   return (
     <details className="mt-3 border-t border-border pt-2 text-xs text-muted">
       <summary className="cursor-pointer select-none">Diagnóstico de cuenta</summary>
       <p className="pt-2">ID de usuario de Clerk: <code className="break-all">{userId ?? 'No disponible'}</code></p>
+      {workerUrl ? <><button className="btn btn-surface mt-2 py-1.5 text-xs" type="button" disabled={checking} onClick={() => void checkBackend()}>{checking ? 'Comprobando…' : 'Comprobar backend'}</button><p className="pt-1">La consulta no incluye entrenamientos, perfil ni datos locales.</p></> : <p className="pt-2">Backend no configurado.</p>}
+      {message && <p className="pt-2" role="status" aria-live="polite">{message}</p>}
+      {result && <AccountReadinessSummary result={result} />}
     </details>
   )
 }

@@ -20,7 +20,7 @@ describe('adaptation worker', () => {
       ALLOWED_CLERK_IDS: 'user_only',
       GEMINI_API_KEY: 'fake-gemini', NVIDIA_API_KEY: 'fake-nvidia',
     }
-    expect(coachReadinessConfiguration(production)).toMatchObject({ complete: true, providerOrder: ['gemini'], flags: { beta: false, embeddings: true, flash: false, gemini: true, nvidia: false, coachStreaming: false, pro: false, reranking: false, providerProbe: false }, allowlist: { count: 1, userIds: ['user_only'] }, credentialsConfigured: { gemini: true, nvidia: true } })
+    expect(coachReadinessConfiguration(production)).toMatchObject({ complete: true, providerOrder: ['gemini'], flags: { beta: false, embeddings: true, flash: false, gemini: true, nvidia: false, coachStreaming: false, pro: false, reranking: false, providerProbe: false }, allowlist: { count: 1 }, credentialsConfigured: { gemini: true, nvidia: true } })
     expect(coachReadinessConfiguration({ ...production, ALLOWED_CLERK_IDS: 'user_one,user_two' }).complete).toBe(false)
     for (const invalid of [
       { COACH_PROVIDER_ORDER: 'gemini,nvidia' },
@@ -48,7 +48,10 @@ describe('adaptation worker', () => {
     }
     const allowed = await handleRequest(new Request('https://worker.test/readiness', { headers }), production, { ...deps, verify: async () => ({ sub: allowedId }) })
     expect(allowed.status).toBe(503) // autenticado; las dependencias reales de readiness faltan en este fixture.
-    expect(await allowed.json()).toMatchObject({ configuration: { complete: true, allowlist: { count: 1, userIds: [allowedId] } } })
+    const serialized = await allowed.text()
+    expect(serialized).not.toContain(allowedId)
+    expect(serialized).not.toContain('userIds')
+    expect(JSON.parse(serialized)).toMatchObject({ configuration: { complete: true, allowlist: { count: 1 } } })
     const denied = await handleRequest(new Request('https://worker.test/readiness', { headers }), production, { ...deps, verify: async () => ({ sub: 'user_second' }) })
     expect(denied.status).toBe(403)
   })

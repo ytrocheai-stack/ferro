@@ -21,7 +21,7 @@ export function writeJson(file: string, value: unknown): void {
 }
 export function loadLocalEnv(file = fileURLToPath(new URL('../../../.env.providers.local', import.meta.url))): void {
   if (existsSync(file)) for (const [key, value] of Object.entries(parseEnv(readFileSync(file, 'utf8')))) {
-    if (['NVIDIA_API_KEY', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'].includes(key) && !process.env[key]?.trim()) process.env[key] = value
+    if (['NVIDIA_API_KEY', 'GEMINI_API_KEY', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'].includes(key) && !process.env[key]?.trim()) process.env[key] = value
   }
 }
 const positive = z.number().int().positive()

@@ -50,3 +50,19 @@ it('H7: renovar autorización temporal no invalida un resultado confirmado', asy
   expect(second).toEqual(first)
   expect(executions).toBe(1)
 })
+
+it('H7: un checkpoint con procedencia Kimi no se reanuda como Gemini', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'nextrep-lab-provider-identity-'))
+  const journal = new LabJournal(directory)
+  const run = async () => runLab(developmentScenarios[0].input, emptyLabCorpus)
+  await journal.execute('event', {
+    mode: 'provider',
+    providerId: 'moonshotai/kimi-k3',
+    authorization: { model: 'moonshotai/kimi-k3' },
+  }, run)
+  await expect(journal.execute('event', {
+    mode: 'provider',
+    providerId: 'gemini-3.5-flash-lite',
+    authorization: { provider: 'google-ai-studio', model: 'gemini-3.5-flash-lite', projectNumber: '233255822266' },
+  }, run)).rejects.toThrow(/identidad distinta/)
+})

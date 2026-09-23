@@ -1,5 +1,6 @@
 {
-  "schema": "coach-deployment-verification-v1",
+  "schema": "coach-deployment-verification-v3",
+  "deploymentMode": "private-evaluation",
   "environment": "production",
   "verifiedAt": "",
   "corpusVersion": "",
@@ -7,41 +8,82 @@
   "approvalFingerprint": "",
   "smokeFingerprint": "",
   "allowlistAccountId": "",
-  "allowlistCount": 2,
+  "allowlistCount": 1,
   "pwaVersion": "",
   "workerVersion": "",
   "pwaDeployedAt": "",
   "workerDeployedAt": "",
   "definitiveEnabledAt": "",
   "readinessOk": false,
+  "generation": { "provider": "gemini", "model": "gemini-3.5-flash-lite" },
+  "embeddings": { "provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b" },
+  "nvidiaProductionEntitlement": {
+    "schema": "nvidia-production-entitlement-v1",
+    "status": "unverified",
+    "product": "nvidia-nim",
+    "licenseType": "",
+    "model": "nvidia/nemotron-3-embed-1b",
+    "productionUseAuthorized": false,
+    "verifiedBy": "",
+    "evidence": "",
+    "verifiedAt": ""
+  },
   "temporaryActivation": {
     "approved": false,
     "startedAt": "",
     "endedAt": "",
     "allowlistAccountId": "",
-    "allowlistCount": 2,
+    "allowlistCount": 1,
     "flags": {
       "ENABLE_BETA": true,
       "ENABLE_EMBEDDINGS": true,
-      "ENABLE_FLASH": true,
+      "ENABLE_FLASH": false,
       "ENABLE_GEMINI": true,
-      "ENABLE_NVIDIA": true,
+      "ENABLE_NVIDIA": false,
       "ENABLE_COACH_STREAMING": false,
       "ENABLE_PRO": false,
       "ENABLE_RERANKING": false,
       "ENABLE_PROVIDER_PROBE": false
     }
   },
-  "rollback": {
-    "temporaryFlagsOff": false
+  "evaluationTrial": {
+    "schema": "coach-private-evaluation-trial-v1",
+    "status": "not-run",
+    "scope": "private-evaluation",
+    "maxDurationHours": 24,
+    "startedAt": "",
+    "expiresAt": "",
+    "closedAt": "",
+    "allowlistAccountId": "",
+    "allowlistCount": 1,
+    "activeFlags": {
+      "ENABLE_BETA": true,
+      "ENABLE_EMBEDDINGS": true,
+      "ENABLE_FLASH": false,
+      "ENABLE_GEMINI": true,
+      "ENABLE_NVIDIA": false,
+      "ENABLE_COACH_STREAMING": false,
+      "ENABLE_PRO": false,
+      "ENABLE_RERANKING": false,
+      "ENABLE_PROVIDER_PROBE": false
+    },
+    "closure": {
+      "mode": "operational-rollback-at-expiry",
+      "flagsOff": false,
+      "readinessRejected": false,
+      "noCoachRequestsAfterExpiry": false,
+      "completedAt": "",
+      "evidence": ""
+    }
   },
+  "rollback": { "temporaryFlagsOff": false },
   "canaryJourney": {
     "fromPages": false,
     "loginMfa": false,
     "consent": false,
     "analysis": false,
     "remoteRetrieval": false,
-    "flashGeneration": false,
+    "geminiGeneration": false,
     "citations": false,
     "proposal": false,
     "explicitApplication": false,
@@ -51,9 +93,11 @@
     "accountChangeRejected": false,
     "abstention": false,
     "offline": false,
-    "pwaUpdate": false,
-    "chromiumAndroid": false,
-    "webkitIphone": false
+    "pwaUpdate": false
+  },
+  "simulatedE2e": {
+    "chromiumAndroid": { "status": "not-run", "mode": "simulated-worker", "realWorkerVerified": false, "physicalDeviceVerified": false },
+    "webkitIphone": { "status": "not-run", "mode": "simulated-worker", "realWorkerVerified": false, "physicalDeviceVerified": false }
   },
   "requestGuards": {
     "originValidated": false,
@@ -65,10 +109,7 @@
     "invalidConsentRejected": false,
     "deviceMismatchRejected": false
   },
-  "accountIsolation": {
-    "allowlistSingleAccount": false,
-    "unauthorizedAccountRejected": false
-  },
+  "accountIsolation": { "allowlistSingleAccount": false, "allowlistAccountId": "", "unauthorizedAccountRejected": false },
   "flags": {
     "ENABLE_BETA": false,
     "ENABLE_EMBEDDINGS": false,
@@ -85,19 +126,7 @@
     "artificialTraffic": false,
     "startedAt": "",
     "endedAt": "",
-    "checks": {
-      "errors": false,
-      "reservations": false,
-      "consumption": false,
-      "abstentions": false,
-      "citations": false,
-      "cron": false
-    }
+    "checks": { "errors": false, "reservations": false, "consumption": false, "abstentions": false, "citations": false, "cron": false }
   },
-  "rollbackEvidence": {
-    "configurationRestorable": false,
-    "indexedDbPreserved": false,
-    "migrationsAdditive": false,
-    "candidateDeletionScoped": false
-  }
+  "rollbackEvidence": { "configurationRestorable": false, "indexedDbPreserved": false, "migrationsAdditive": false, "candidateDeletionScoped": false }
 }
