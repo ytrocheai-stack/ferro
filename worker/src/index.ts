@@ -18,7 +18,7 @@ import type { ProviderName } from './providers/types'
 export interface D1Result { success?: boolean; results?: Record<string, unknown>[]; meta?: { changes?: number } }
 export interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = Record<string, unknown>>(): Promise<T | null>; all<T = Record<string, unknown>>(): Promise<{ results: T[] }>; run(): Promise<D1Result> }
 export interface D1Database { prepare(query: string): D1Statement; batch(statements: D1Statement[]): Promise<D1Result[]> }
-export interface VectorizeIndex { query(vector: number[], options?: { topK?: number; returnMetadata?: boolean | 'all'; namespace?: string; filter?: Record<string, string | { $in: string[] }> }): Promise<{ matches?: VectorMatch[] }> }
+export interface VectorizeIndex { query(vector: number[], options?: { topK?: number; returnMetadata?: 'none' | 'indexed' | 'all'; namespace?: string; filter?: Record<string, string | { $in: string[] }> }): Promise<{ matches?: VectorMatch[] }> }
 export interface VectorMatch { id: string; score?: number; metadata?: Record<string, string>; contextRank?: number }
 type RetrievedChunk = { id: string; source: string; evidenceLevel: number; text: string; sourceId?: string; citation?: AnalysisSource; population?: string[]; populationReviewed?: boolean; populationScope?: string }
 
@@ -739,7 +739,7 @@ async function readiness(env: Env, db: D1Database | undefined, index: VectorizeI
   if (index) {
     try {
       if (!corpusVersion) throw new Error('Versión de corpus no configurada')
-      const probe = await index.query([1, ...new Array(511).fill(0)], { topK: 1, returnMetadata: false, namespace: corpusNamespace(corpusVersion, 512) })
+      const probe = await index.query([1, ...new Array(511).fill(0)], { topK: 1, returnMetadata: 'none', namespace: corpusNamespace(corpusVersion, 512) })
       indexAvailable = (probe.matches?.length ?? 0) > 0
     } catch { indexAvailable = false }
   }

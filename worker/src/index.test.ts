@@ -155,6 +155,7 @@ describe('adaptation worker', () => {
 
   it('no declara listo un índice que responde sin ningún fragmento', async () => {
     let probeVector: number[] = []
+    let probeMetadata: string | undefined
     const readyDb = {
       prepare(sql: string) {
         return {
@@ -164,11 +165,12 @@ describe('adaptation worker', () => {
       },
       async batch() { return [] },
     }
-    const response = await handleRequest(new Request('https://worker.test/readiness', { headers }), { ...env, DB: readyDb as never, VECTORIZE: { query: async (vector) => { probeVector = vector; return { matches: [] } } }, RAG_INDEX_VERSION: 'v1' }, deps)
+    const response = await handleRequest(new Request('https://worker.test/readiness', { headers }), { ...env, DB: readyDb as never, VECTORIZE: { query: async (vector, options) => { probeVector = vector; probeMetadata = options?.returnMetadata; return { matches: [] } } }, RAG_INDEX_VERSION: 'v1' }, deps)
     expect(response.status).toBe(503)
     expect(await response.json()).toMatchObject({ checks: { d1: true, corpus: true, index: false } })
     expect(probeVector).toHaveLength(512)
     expect(probeVector[0]).toBe(1)
+    expect(probeMetadata).toBe('none')
   })
 
   it('readiness exige los conteos exactos del corpus cuando producción los configura', async () => {
