@@ -31,8 +31,8 @@ EMBEDDING_MODEL = "nvidia/nemotron-3-embed-1b"
 RAG_INDEX_VERSION = "sha256:1d17531bbdcd614616bbf35bd0eb4a80e978a0af9c8fb50417be7d1201519c1f"
 RAG_EXPECTED_SOURCE_COUNT = "88"
 RAG_EXPECTED_CHUNK_COUNT = "2708"
-# Failover GLM agotó el deadline en el canario remoto del 2026-09-23; ver bitácora del release.
-ENABLE_BETA = "false"
+# Uso privado de Yehoshua autorizado el 2026-10-06, sin benchmarks.
+ENABLE_BETA = "true"
 ENABLE_EMBEDDINGS = "true"
 ENABLE_FLASH = "false"
 ENABLE_GEMINI = "true"

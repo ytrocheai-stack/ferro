@@ -1,9 +1,10 @@
 # Despliegue de NextRep
 
-> Estado verificado el 2026-09-23: beta **cerrada** (`ENABLE_BETA=false`). Pages sirve
-> `fdb936abdc91167e9194f61c9a7361ee7c29e6a8` (merge de PR #6) y el Worker desplegado es
-> `e7291b36-1511-4adc-8cf4-e28a81bf3ce1`. La [bitácora del release](RELEASE-2026-09-23.md)
-> registra las fuentes de verificación y conserva como historia la prueba previa de GLM.
+> Estado verificado el 2026-10-06: coach habilitado exclusivamente para Yehoshua
+> (`ENABLE_BETA=true`), por petición expresa de uso privado sin benchmarks.
+> Worker: `df7e8ac3-ea34-4e73-a6a8-01f36dbc79cc`. Pages verificado:
+> `8ee9ff6c6f269c7a4d25cbbab84f4330f77f3788`.
+> Ver [bitácora de activación](RELEASE-2026-10-06.md).
 
 ## Coach privado — estado publicado
 
@@ -12,11 +13,12 @@ solo para embeddings de consultas RAG; no es respaldo de generación. La allowli
 contiene únicamente la cuenta de Yehoshua (`user_3ITDXf8hPt81kAjzS3Dw8U77qfE`). El consentimiento
 requerido es `coach-context-v4-gemini-nvidia-embeddings`. En producción, `ENABLE_GEMINI=true`
 y `ENABLE_EMBEDDINGS=true`, mientras `ENABLE_NVIDIA=false`, `ENABLE_FLASH=false` y
-`ENABLE_BETA=false`; por ello no se ofrece generación del coach a usuarios.
+`ENABLE_BETA=true`; la generación está habilitada para esa única cuenta.
 
-Siguen pendientes los gates formales de benchmark/laboratorio y el canario real de una cuenta
-con esta configuración y consentimiento. Las pruebas locales o los canarios de versiones
-anteriores no los sustituyen. No abrir la beta ni cambiar sus flags hasta documentar esos gates.
+Los gates formales de benchmark/laboratorio siguen pendientes; no se ejecutaron ni se
+declaran aprobados. La petición expresa del 2026-10-06 autoriza este uso privado sin
+esperarlos y sustituye el requisito anterior de cierre para esta cuenta. La verificación
+del uso desde el navegador queda pendiente del inicio de sesión y consentimiento del usuario.
 
 No se usa Luna desde la PWA. Esta guía no autoriza despliegues ni llamadas reales por sí sola;
 las cuotas y claves efectivas se comprueban en el entorno remoto antes de cada activación.
